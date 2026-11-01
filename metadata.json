@@ -1,0 +1,6 @@
+{
+  "name": "QR Live Calc",
+  "description": "Real-time augmented reality QR code scanner that parses values, computes arithmetic expressions, and projects dynamic overlays onto detected codes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
