@@ -29,6 +29,7 @@ import com.example.ui.parseHexColor
 @Composable
 fun OverlayAppearanceSection(
     overlay: OverlayAppearance,
+    definedVariables: List<VariableDefinition> = emptyList(),
     onOverlayChanged: (OverlayAppearance) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -352,32 +353,108 @@ fun OverlayAppearanceSection(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+        }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+        // HUD Pills & Individual Visibility
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             ) {
-                Text("Show Extracted Variables Pill")
-                Switch(
-                    checked = overlay.showVariableSummaryPill,
-                    onCheckedChange = { onOverlayChanged(overlay.copy(showVariableSummaryPill = it)) }
-                )
-            }
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = "Individual Pill Visibility",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Customize exactly which badges and variables appear in the AR overlay card.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
-            Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Show Formula Hint")
-                Switch(
-                    checked = overlay.showCalculationFormulaHint,
-                    onCheckedChange = { onOverlayChanged(overlay.copy(showCalculationFormulaHint = it)) }
-                )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Formula Pill (= a + b)", style = MaterialTheme.typography.bodyMedium)
+                        Switch(
+                            checked = overlay.showCalculationFormulaHint,
+                            onCheckedChange = { onOverlayChanged(overlay.copy(showCalculationFormulaHint = it)) }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Raw QR Content Pill", style = MaterialTheme.typography.bodyMedium)
+                        Switch(
+                            checked = overlay.showRawQrPill,
+                            onCheckedChange = { onOverlayChanged(overlay.copy(showRawQrPill = it)) }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Variable Pills (All)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        Switch(
+                            checked = overlay.showVariableSummaryPill,
+                            onCheckedChange = { onOverlayChanged(overlay.copy(showVariableSummaryPill = it)) }
+                        )
+                    }
+
+                    if (overlay.showVariableSummaryPill) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Toggle Individual Variable Pills:",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        val varsToDisplay = if (definedVariables.isNotEmpty()) {
+                            definedVariables.map { it.name }
+                        } else {
+                            listOf("a", "b", "c", "d")
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            varsToDisplay.forEach { varName ->
+                                val isVisible = varName !in overlay.hiddenPillVariables
+                                FilterChip(
+                                    selected = isVisible,
+                                    onClick = {
+                                        val updatedHidden = if (isVisible) {
+                                            overlay.hiddenPillVariables + varName
+                                        } else {
+                                            overlay.hiddenPillVariables.filterNot { it == varName }
+                                        }
+                                        onOverlayChanged(overlay.copy(hiddenPillVariables = updatedHidden))
+                                    },
+                                    label = { Text("Pill: $varName") }
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -45,8 +45,9 @@ object QrParser {
             val rawToken = if (hasToken) tokens[varDef.position] else null
 
             val tokenToUse = when {
+                varDef.overrideBarcode && varDef.defaultValue.isNotBlank() -> varDef.defaultValue
                 !rawToken.isNullOrEmpty() -> rawToken
-                varDef.isOptional -> varDef.defaultValue
+                varDef.isOptional || varDef.defaultValue.isNotBlank() -> varDef.defaultValue
                 else -> {
                     return QrParseOutcome.Error(
                         "Missing required field '${varDef.name}' at position ${varDef.position + 1}"

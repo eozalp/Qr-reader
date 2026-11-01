@@ -6,7 +6,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -290,40 +292,82 @@ fun OverlayCardContent(
                 }
             }
 
-            // Optional formula hint
-            if (config.showCalculationFormulaHint && result.formulaExpression.isNotBlank()) {
-                Spacer(modifier = Modifier.height(3.dp))
-                Text(
-                    text = "= ${result.formulaExpression}",
-                    color = textColor.copy(alpha = 0.65f),
-                    fontSize = 10.sp,
-                    textAlign = if (config.textAlignCenter) TextAlign.Center else TextAlign.Start
-                )
-            }
+            // Individual Pills Row (Formula, Raw QR, and individual Variable pills)
+            val visibleVariables = if (config.showVariableSummaryPill) {
+                result.extractedVariables.entries
+                    .filter { (name, _) -> name !in config.hiddenPillVariables && !name.contains("_alias") }
+            } else emptyList()
 
-            // Optional variable values pill
-            if (config.showVariableSummaryPill && result.extractedVariables.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                val varsText = result.extractedVariables.entries
-                    .filter { !it.key.contains("_alias") } // Skip duplicate aliases in chip
-                    .take(4)
-                    .joinToString(" • ") { (name, value) ->
-                        val cleanVal = if (value % 1.0 == 0.0) value.toLong().toString() else "%.1f".format(value)
-                        "$name:$cleanVal"
+            val hasPills = (config.showCalculationFormulaHint && result.formulaExpression.isNotBlank()) ||
+                    (config.showRawQrPill && result.rawText.isNotBlank()) ||
+                    visibleVariables.isNotEmpty()
+
+            if (hasPills) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = if (config.textAlignCenter) Arrangement.Center else Arrangement.Start,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Formula Pill
+                    if (config.showCalculationFormulaHint && result.formulaExpression.isNotBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color.Black.copy(alpha = 0.5f))
+                                .border(0.5.dp, textColor.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "= ${result.formulaExpression}",
+                                color = textColor.copy(alpha = 0.9f),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
                     }
 
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color.Black.copy(alpha = 0.45f))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = varsText,
-                        color = Color.White.copy(alpha = 0.85f),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                    // Raw QR Pill
+                    if (config.showRawQrPill && result.rawText.isNotBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color.Black.copy(alpha = 0.5f))
+                                .border(0.5.dp, Color(0xFF64748B), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "QR: ${result.rawText.take(15)}",
+                                color = Color(0xFF94A3B8),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+
+                    // Individual Variable Pills
+                    visibleVariables.forEach { (name, value) ->
+                        val cleanVal = if (value % 1.0 == 0.0) value.toLong().toString() else "%.1f".format(value)
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color.Black.copy(alpha = 0.5f))
+                                .border(0.5.dp, textColor.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "$name: $cleanVal",
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
                 }
             }
         }

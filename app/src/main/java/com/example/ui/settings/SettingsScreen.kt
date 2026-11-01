@@ -124,6 +124,7 @@ fun SettingsScreen(
                 SettingsTab.OVERLAY -> {
                     OverlayAppearanceSection(
                         overlay = activeProfile.overlay,
+                        definedVariables = activeProfile.parsingRules.variables,
                         onOverlayChanged = { updatedOverlay ->
                             profileRepository.saveProfile(activeProfile.copy(overlay = updatedOverlay))
                         }

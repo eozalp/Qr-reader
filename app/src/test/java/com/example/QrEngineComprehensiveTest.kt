@@ -65,6 +65,44 @@ class QrEngineComprehensiveTest {
     }
 
     @Test
+    fun testDefaultValueOverridesBarcodeValueWhenConfigured() {
+        val rules = QrParsingRules(
+            delimiter = "-",
+            variables = listOf(
+                VariableDefinition(position = 0, name = "a"),
+                VariableDefinition(position = 1, name = "b", defaultValue = "999", overrideBarcode = true),
+                VariableDefinition(position = 2, name = "c"),
+                VariableDefinition(position = 3, name = "d")
+            )
+        )
+        // Barcode contains "10-20-30-40", but b is set to override with defaultValue "999"
+        val outcome = QrParser.parse("10-20-30-40", rules)
+        assertTrue(outcome is QrParseOutcome.Success)
+        val vars = (outcome as QrParseOutcome.Success).numericVariables
+        assertEquals(10.0, vars["a"]!!, 1e-6)
+        assertEquals(999.0, vars["b"]!!, 1e-6) // Overridden by default value!
+        assertEquals(30.0, vars["c"]!!, 1e-6)
+        assertEquals(40.0, vars["d"]!!, 1e-6)
+    }
+
+    @Test
+    fun testBarcodeValueUsedWhenOverrideDisabled() {
+        val rules = QrParsingRules(
+            delimiter = "-",
+            variables = listOf(
+                VariableDefinition(position = 0, name = "a"),
+                VariableDefinition(position = 1, name = "b", defaultValue = "999", overrideBarcode = false)
+            )
+        )
+        // Barcode contains "10-20", override is false, so scanned 20 must be preserved
+        val outcome = QrParser.parse("10-20", rules)
+        assertTrue(outcome is QrParseOutcome.Success)
+        val vars = (outcome as QrParseOutcome.Success).numericVariables
+        assertEquals(10.0, vars["a"]!!, 1e-6)
+        assertEquals(20.0, vars["b"]!!, 1e-6)
+    }
+
+    @Test
     fun testInvalidInputHandledSafely() {
         val rules = QrParsingRules(delimiter = "-")
         val emptyOutcome = QrParser.parse("", rules)

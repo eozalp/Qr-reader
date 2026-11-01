@@ -26,6 +26,8 @@ data class VariableDefinition(
     val dataType: FieldDataType = FieldDataType.DOUBLE,
     val isOptional: Boolean = false,
     val defaultValue: String = "0",
+    val overrideBarcode: Boolean = false, // If true, default value overrides scanned barcode token
+    val showPill: Boolean = true, // Whether to show an individual pill for this variable in overlay
     val minValue: Double? = null,
     val maxValue: Double? = null
 ) {
@@ -38,6 +40,8 @@ data class VariableDefinition(
             put("dataType", dataType.name)
             put("isOptional", isOptional)
             put("defaultValue", defaultValue)
+            put("overrideBarcode", overrideBarcode)
+            put("showPill", showPill)
             if (minValue != null) put("minValue", minValue)
             if (maxValue != null) put("maxValue", maxValue)
         }
@@ -55,6 +59,8 @@ data class VariableDefinition(
                 }.getOrDefault(FieldDataType.DOUBLE),
                 isOptional = json.optBoolean("isOptional", false),
                 defaultValue = json.optString("defaultValue", "0"),
+                overrideBarcode = json.optBoolean("overrideBarcode", false),
+                showPill = json.optBoolean("showPill", true),
                 minValue = if (json.has("minValue")) json.optDouble("minValue") else null,
                 maxValue = if (json.has("maxValue")) json.optDouble("maxValue") else null
             )
@@ -291,6 +297,8 @@ data class OverlayAppearance(
     val paddingDp: Float = 12f,
     val showVariableSummaryPill: Boolean = true,
     val showCalculationFormulaHint: Boolean = true,
+    val showRawQrPill: Boolean = false,
+    val hiddenPillVariables: List<String> = emptyList(), // Individually hidden variables in pills
     val iconName: String = "calculator" // "calculator", "tag", "qr", "sparkle", "none"
 ) {
     fun toJson(): JSONObject {
@@ -326,12 +334,23 @@ data class OverlayAppearance(
             put("paddingDp", paddingDp.toDouble())
             put("showVariableSummaryPill", showVariableSummaryPill)
             put("showCalculationFormulaHint", showCalculationFormulaHint)
+            put("showRawQrPill", showRawQrPill)
+            val hiddenArray = JSONArray()
+            hiddenPillVariables.forEach { hiddenArray.put(it) }
+            put("hiddenPillVariables", hiddenArray)
             put("iconName", iconName)
         }
     }
 
     companion object {
         fun fromJson(json: JSONObject): OverlayAppearance {
+            val hiddenList = mutableListOf<String>()
+            val hArray = json.optJSONArray("hiddenPillVariables")
+            if (hArray != null) {
+                for (i in 0 until hArray.length()) {
+                    hiddenList.add(hArray.optString(i))
+                }
+            }
             return OverlayAppearance(
                 anchorPosition = runCatching {
                     OverlayAnchorPosition.valueOf(json.optString("anchorPosition", OverlayAnchorPosition.CENTER.name))
@@ -370,6 +389,8 @@ data class OverlayAppearance(
                 paddingDp = json.optDouble("paddingDp", 12.0).toFloat(),
                 showVariableSummaryPill = json.optBoolean("showVariableSummaryPill", true),
                 showCalculationFormulaHint = json.optBoolean("showCalculationFormulaHint", true),
+                showRawQrPill = json.optBoolean("showRawQrPill", false),
+                hiddenPillVariables = hiddenList,
                 iconName = json.optString("iconName", "calculator")
             )
         }
