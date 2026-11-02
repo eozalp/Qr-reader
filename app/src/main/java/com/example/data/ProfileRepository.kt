@@ -136,6 +136,34 @@ class ProfileRepository(private val context: Context) {
         return array.toString(2)
     }
 
+    fun exportSingleProfileJson(profileId: String): String {
+        val profile = _profiles.value.find { it.id == profileId } ?: _activeProfile.value
+        return profile.toJson().toString(2)
+    }
+
+    fun importSingleProfile(profile: QrProfile, activate: Boolean = true): QrProfile {
+        val existingIds = _profiles.value.map { it.id }.toSet()
+        val targetProfile = if (profile.id in existingIds) {
+            profile.copy(id = UUID.randomUUID().toString(), name = "${profile.name} (Imported)")
+        } else {
+            profile
+        }
+        val currentList = _profiles.value.toMutableList()
+        currentList.add(targetProfile)
+        _profiles.value = currentList
+        if (activate) {
+            _activeProfile.value = targetProfile
+            persistProfiles(currentList, targetProfile.id)
+        } else {
+            persistProfiles(currentList)
+        }
+        return targetProfile
+    }
+
+    fun findProfileBySignal(rawText: String): QrProfile? {
+        return com.example.engine.QrParser.findMatchingProfileBySignal(rawText, _profiles.value)
+    }
+
     fun importProfilesJson(jsonStr: String): Result<Int> {
         return runCatching {
             val list = parseProfilesJson(jsonStr)

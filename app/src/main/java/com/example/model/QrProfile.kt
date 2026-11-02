@@ -32,6 +32,7 @@ data class VariableDefinition(
     val postfix: String = "", // Postfix specific to this variable pill (e.g. g, kg, TL)
     val isComputed: Boolean = false, // True if computed from other variables (e.g. price / grams)
     val computationFormula: String = "", // e.g. "price / grams" or "a / b"
+    val isManual: Boolean = false, // True if manually added variable not extracted from barcode tokens
     val minValue: Double? = null,
     val maxValue: Double? = null
 ) {
@@ -50,6 +51,7 @@ data class VariableDefinition(
             put("postfix", postfix)
             put("isComputed", isComputed)
             put("computationFormula", computationFormula)
+            put("isManual", isManual)
             if (minValue != null) put("minValue", minValue)
             if (maxValue != null) put("maxValue", maxValue)
         }
@@ -73,6 +75,7 @@ data class VariableDefinition(
                 postfix = json.optString("postfix", ""),
                 isComputed = json.optBoolean("isComputed", false),
                 computationFormula = json.optString("computationFormula", ""),
+                isManual = json.optBoolean("isManual", false),
                 minValue = if (json.has("minValue")) json.optDouble("minValue") else null,
                 maxValue = if (json.has("maxValue")) json.optDouble("maxValue") else null
             )
@@ -606,6 +609,7 @@ data class QrProfile(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "Default Profile",
     val description: String = "Standard 4-field sum calculator (a-b-c-d)",
+    val triggerSignal: String = "", // QR prefix, keyword or tag (e.g. "[P:gold]" or "TESBIH-") to auto-switch profile
     val parsingRules: QrParsingRules = QrParsingRules(),
     val formula: ArithmeticFormula = ArithmeticFormula(),
     val formatting: ResultFormatting = ResultFormatting(),
@@ -617,6 +621,7 @@ data class QrProfile(
             put("id", id)
             put("name", name)
             put("description", description)
+            put("triggerSignal", triggerSignal)
             put("parsingRules", parsingRules.toJson())
             put("formula", formula.toJson())
             put("formatting", formatting.toJson())
@@ -631,6 +636,7 @@ data class QrProfile(
                 id = json.optString("id", UUID.randomUUID().toString()),
                 name = json.optString("name", "Default Profile"),
                 description = json.optString("description", ""),
+                triggerSignal = json.optString("triggerSignal", ""),
                 parsingRules = if (json.has("parsingRules")) QrParsingRules.fromJson(json.getJSONObject("parsingRules")) else QrParsingRules(),
                 formula = if (json.has("formula")) ArithmeticFormula.fromJson(json.getJSONObject("formula")) else ArithmeticFormula(),
                 formatting = if (json.has("formatting")) ResultFormatting.fromJson(json.getJSONObject("formatting")) else ResultFormatting(),

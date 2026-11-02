@@ -139,6 +139,10 @@ fun SettingsScreen(
                         rules = activeProfile.parsingRules,
                         onRulesChanged = { updatedRules ->
                             profileRepository.saveProfile(activeProfile.copy(parsingRules = updatedRules))
+                        },
+                        triggerSignal = activeProfile.triggerSignal,
+                        onTriggerSignalChanged = { updatedSignal ->
+                            profileRepository.saveProfile(activeProfile.copy(triggerSignal = updatedSignal))
                         }
                     )
                 }

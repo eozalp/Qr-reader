@@ -434,4 +434,121 @@ class QrEngineComprehensiveTest {
         assertEquals("$0.20/g", row2.second)
         assertTrue(row2.first.isEmphasized)
     }
+
+    // --- Manual Variables, Signals & Embedded Profile QR Tests ---
+
+    @Test
+    fun testManualVariablesWithoutBarcodeToken() {
+        val rules = QrParsingRules(
+            delimiter = "-",
+            variables = listOf(
+                VariableDefinition(position = 0, name = "weight"),
+                VariableDefinition(
+                    name = "gram_price",
+                    isManual = true,
+                    defaultValue = "85.5",
+                    prefix = "$"
+                ),
+                VariableDefinition(
+                    name = "labor_fee",
+                    isManual = true,
+                    defaultValue = "15.0"
+                ),
+                VariableDefinition(
+                    name = "total",
+                    isComputed = true,
+                    computationFormula = "weight * gram_price + labor_fee"
+                )
+            )
+        )
+
+        // Scanned barcode only has ONE token ("10"), but manual variables and formula calculate successfully!
+        val outcome = QrParser.parse("10", rules)
+        assertTrue("Expected success: $outcome", outcome is QrParseOutcome.Success)
+        val vars = (outcome as QrParseOutcome.Success).numericVariables
+
+        assertEquals(10.0, vars["weight"]!!, 1e-6)
+        assertEquals(85.5, vars["gram_price"]!!, 1e-6)
+        assertEquals(15.0, vars["labor_fee"]!!, 1e-6)
+        assertEquals(10.0 * 85.5 + 15.0, vars["total"]!!, 1e-6)
+    }
+
+    @Test
+    fun testEmbeddedProfileQrDetectionAndEncoding() {
+        val originalProfile = QrProfile(
+            name = "Amber Beads Workshop",
+            triggerSignal = "AMBER-",
+            parsingRules = QrParsingRules(
+                delimiter = ";",
+                variables = listOf(
+                    VariableDefinition(position = 0, name = "beads"),
+                    VariableDefinition(name = "bead_cost", isManual = true, defaultValue = "12.5")
+                )
+            ),
+            formula = ArithmeticFormula("beads * bead_cost", "Total batch cost")
+        )
+
+        val qrEncoded = QrParser.encodeProfileToQrString(originalProfile)
+        assertTrue(qrEncoded.startsWith("ARQR:PROFILE:"))
+
+        val detected = QrParser.detectEmbeddedProfile(qrEncoded)
+        assertNotNull(detected)
+        assertEquals("Amber Beads Workshop", detected!!.name)
+        assertEquals("AMBER-", detected.triggerSignal)
+        assertEquals(";", detected.parsingRules.delimiter)
+        assertEquals(2, detected.parsingRules.variables.size)
+        assertTrue(detected.parsingRules.variables[1].isManual)
+        assertEquals("12.5", detected.parsingRules.variables[1].defaultValue)
+        assertEquals("beads * bead_cost", detected.formula.expression)
+    }
+
+    @Test
+    fun testProfileTriggerSignalMatching() {
+        val profiles = listOf(
+            QrProfile(id = "p1", name = "Tesbih Amber", triggerSignal = "TESBIH-"),
+            QrProfile(id = "p2", name = "Gold Jewelry", triggerSignal = "GOLD-"),
+            QrProfile(id = "p3", name = "Silver Ring", triggerSignal = "[P:silver]")
+        )
+
+        // 1. Matches prefix TESBIH-
+        val match1 = QrParser.findMatchingProfileBySignal("TESBIH-50-250", profiles)
+        assertNotNull(match1)
+        assertEquals("Tesbih Amber", match1!!.name)
+
+        // 2. Matches prefix GOLD-
+        val match2 = QrParser.findMatchingProfileBySignal("GOLD-18K-10.5", profiles)
+        assertNotNull(match2)
+        assertEquals("Gold Jewelry", match2!!.name)
+
+        // 3. Matches structured tag [P:silver]
+        val match3 = QrParser.findMatchingProfileBySignal("ITEM-999 [P:silver] 42", profiles)
+        assertNotNull(match3)
+        assertEquals("Silver Ring", match3!!.name)
+
+        // 4. No signal match
+        val matchNone = QrParser.findMatchingProfileBySignal("RANDOM-BARCODE-123", profiles)
+        assertNull(matchNone)
+    }
+
+    @Test
+    fun testProfileSerializationWithManualVarsAndTriggerSignal() {
+        val profile = QrProfile(
+            name = "Test Manual Profile",
+            triggerSignal = "TRIGGER-XYZ",
+            parsingRules = QrParsingRules(
+                variables = listOf(
+                    VariableDefinition(name = "custom_rate", isManual = true, defaultValue = "3.1415")
+                )
+            )
+        )
+
+        val json = profile.toJson()
+        val restored = QrProfile.fromJson(json)
+
+        assertEquals("Test Manual Profile", restored.name)
+        assertEquals("TRIGGER-XYZ", restored.triggerSignal)
+        assertEquals(1, restored.parsingRules.variables.size)
+        assertTrue(restored.parsingRules.variables[0].isManual)
+        assertEquals("3.1415", restored.parsingRules.variables[0].defaultValue)
+    }
 }

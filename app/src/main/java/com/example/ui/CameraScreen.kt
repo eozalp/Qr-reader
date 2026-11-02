@@ -102,13 +102,42 @@ fun CameraScreen(
     var showScaleToast by remember { mutableStateOf(false) }
     var saveScaleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
+    // Auto-switch notification & embedded profile import states
+    var autoSwitchedProfileName by remember { mutableStateOf<String?>(null) }
+    var autoSwitchedSignal by remember { mutableStateOf("") }
+    var detectedEmbeddedProfile by remember { mutableStateOf<QrProfile?>(null) }
+
     val analyzer = remember {
         QrCodeAnalyzer { rawList ->
             if (!isPaused) {
                 val combined = rawList + simulatedCodes
+
+                for (code in combined) {
+                    // Check for embedded profile QR code
+                    val embedded = com.example.engine.QrParser.detectEmbeddedProfile(code.rawValue)
+                    if (embedded != null && detectedEmbeddedProfile?.id != embedded.id) {
+                        detectedEmbeddedProfile = embedded
+                    }
+
+                    // Check for trigger signal auto-switch
+                    val matched = com.example.engine.QrParser.findMatchingProfileBySignal(code.rawValue, allProfiles)
+                    if (matched != null && matched.id != activeProfile.id) {
+                        autoSwitchedProfileName = matched.name
+                        autoSwitchedSignal = matched.triggerSignal
+                        profileRepository.selectProfile(matched.id)
+                    }
+                }
+
                 val updated = qrTracker.update(combined, activeProfile)
                 trackedQrs = updated
             }
+        }
+    }
+
+    LaunchedEffect(autoSwitchedProfileName) {
+        if (autoSwitchedProfileName != null) {
+            delay(2800)
+            autoSwitchedProfileName = null
         }
     }
 
@@ -292,6 +321,132 @@ fun CameraScreen(
                     .windowInsetsPadding(WindowInsets.statusBars)
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
+
+            // Auto-switched Profile Notification Banner
+            AnimatedVisibility(
+                visible = autoSwitchedProfileName != null,
+                enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(top = 70.dp)
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(20.dp),
+                    shadowElevation = 8.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Bolt,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Auto-Switched to '$autoSwitchedProfileName'${if (autoSwitchedSignal.isNotBlank()) " ($autoSwitchedSignal)" else ""}",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
+
+            // Embedded Profile Detected Bottom Card
+            AnimatedVisibility(
+                visible = detectedEmbeddedProfile != null,
+                enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
+                exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(bottom = 90.dp, start = 16.dp, end = 16.dp)
+            ) {
+                detectedEmbeddedProfile?.let { detected ->
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(20.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Default.QrCode2,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Embedded Profile Scanned",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { detectedEmbeddedProfile = null },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(18.dp))
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Text(
+                                text = "Profile: ${detected.name}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Formula: ${detected.formula.expression} · Delimiter: '${detected.parsingRules.effectiveDelimiter}' · ${detected.parsingRules.variables.size} variables",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        profileRepository.importSingleProfile(detected, activate = true)
+                                        android.widget.Toast.makeText(context, "Profile '${detected.name}' imported & activated!", android.widget.Toast.LENGTH_SHORT).show()
+                                        detectedEmbeddedProfile = null
+                                    },
+                                    modifier = Modifier.weight(1f).testTag("import_embedded_profile_btn")
+                                ) {
+                                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Import & Activate")
+                                }
+
+                                OutlinedButton(
+                                    onClick = { detectedEmbeddedProfile = null },
+                                    modifier = Modifier.weight(0.6f)
+                                ) {
+                                    Text("Dismiss")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // Zoom slider overlay (subtle at right side)
             Box(

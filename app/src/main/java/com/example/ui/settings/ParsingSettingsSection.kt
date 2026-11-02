@@ -25,10 +25,15 @@ import com.example.model.QrParsingRules
 import com.example.model.VariableDefinition
 import java.util.UUID
 
+import androidx.compose.material.icons.filled.Pin
+import androidx.compose.material.icons.filled.QrCodeScanner
+
 @Composable
 fun ParsingSettingsSection(
     rules: QrParsingRules,
     onRulesChanged: (QrParsingRules) -> Unit,
+    triggerSignal: String = "",
+    onTriggerSignalChanged: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val delimiterPresets = listOf("-", ",", ";", "|", "/", " ")
@@ -39,6 +44,48 @@ fun ParsingSettingsSection(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Auto-switch QR Trigger Signal
+        if (onTriggerSignalChanged != null) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.QrCodeScanner,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "QR Auto-Switch Signal",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "If a scanned QR starts with or contains this text (e.g. 'TESBIH-' or '[P:amber]'), the app automatically switches to this profile.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = triggerSignal,
+                            onValueChange = onTriggerSignalChanged,
+                            label = { Text("Signal Tag / Prefix") },
+                            placeholder = { Text("e.g. TESBIH-, GOLD-, or [P:amber]") },
+                            modifier = Modifier.fillMaxWidth().testTag("trigger_signal_input"),
+                            singleLine = true
+                        )
+                    }
+                }
+            }
+        }
+
         item {
             Text(
                 text = "QR Token Delimiter",
@@ -142,6 +189,10 @@ fun ParsingSettingsSection(
 
         item {
             Column(modifier = Modifier.fillMaxWidth()) {
+                val scannedCount = rules.variables.count { !it.isComputed && !it.isManual }
+                val manualCount = rules.variables.count { it.isManual && !it.isComputed }
+                val computedCount = rules.variables.count { it.isComputed }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -154,7 +205,7 @@ fun ParsingSettingsSection(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${rules.variables.size} defined (${rules.variables.count { !it.isComputed }} scanned, ${rules.variables.count { it.isComputed }} computed)",
+                            text = "$scannedCount barcode token(s) · $manualCount manual · $computedCount computed",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -184,13 +235,14 @@ fun ParsingSettingsSection(
                 ) {
                     Button(
                         onClick = {
-                            val tokenCount = rules.variables.count { !it.isComputed }
+                            val tokenCount = rules.variables.count { !it.isComputed && !it.isManual }
                             val nextName = if (tokenCount < 26) ('a'.code + tokenCount).toChar().toString() else "var$tokenCount"
                             val newVar = VariableDefinition(
                                 id = UUID.randomUUID().toString(),
                                 position = tokenCount,
                                 name = nextName,
                                 isComputed = false,
+                                isManual = false,
                                 dataType = FieldDataType.DOUBLE
                             )
                             onRulesChanged(rules.copy(variables = rules.variables + newVar))
@@ -204,11 +256,33 @@ fun ParsingSettingsSection(
 
                     FilledTonalButton(
                         onClick = {
-                            val computedCount = rules.variables.count { it.isComputed } + 1
+                            val manualIndex = rules.variables.count { it.isManual } + 1
                             val newVar = VariableDefinition(
                                 id = UUID.randomUUID().toString(),
-                                name = "calc$computedCount",
+                                position = -1,
+                                name = "m$manualIndex",
+                                isComputed = false,
+                                isManual = true,
+                                defaultValue = "1",
+                                dataType = FieldDataType.DOUBLE
+                            )
+                            onRulesChanged(rules.copy(variables = rules.variables + newVar))
+                        },
+                        modifier = Modifier.testTag("add_manual_variable_button")
+                    ) {
+                        Icon(Icons.Default.Pin, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Add Manual Var")
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            val compCount = rules.variables.count { it.isComputed } + 1
+                            val newVar = VariableDefinition(
+                                id = UUID.randomUUID().toString(),
+                                name = "calc$compCount",
                                 isComputed = true,
+                                isManual = false,
                                 computationFormula = "",
                                 dataType = FieldDataType.DOUBLE
                             )
@@ -265,19 +339,31 @@ fun VariableItemCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val badgeColor = when {
+                        varDef.isComputed -> MaterialTheme.colorScheme.tertiaryContainer
+                        varDef.isManual -> MaterialTheme.colorScheme.secondaryContainer
+                        else -> MaterialTheme.colorScheme.primaryContainer
+                    }
+                    val badgeTextColor = when {
+                        varDef.isComputed -> MaterialTheme.colorScheme.onTertiaryContainer
+                        varDef.isManual -> MaterialTheme.colorScheme.onSecondaryContainer
+                        else -> MaterialTheme.colorScheme.onPrimaryContainer
+                    }
+                    val badgeText = when {
+                        varDef.isComputed -> "fx Computed"
+                        varDef.isManual -> "📌 Manual Var"
+                        else -> "Pos ${varDef.position} (Token)"
+                    }
+
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .background(
-                                if (varDef.isComputed) MaterialTheme.colorScheme.tertiaryContainer
-                                else MaterialTheme.colorScheme.primaryContainer
-                            )
+                            .background(badgeColor)
                             .padding(horizontal = 10.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = if (varDef.isComputed) "fx Computed" else "Pos ${varDef.position}",
-                            color = if (varDef.isComputed) MaterialTheme.colorScheme.onTertiaryContainer
-                            else MaterialTheme.colorScheme.onPrimaryContainer,
+                            text = badgeText,
+                            color = badgeTextColor,
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp
                         )
@@ -301,7 +387,7 @@ fun VariableItemCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Source Type Selector: Token vs Computed
+            // Source Type Selector: Token vs Manual vs Computed
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -309,14 +395,19 @@ fun VariableItemCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 FilterChip(
-                    selected = !varDef.isComputed,
-                    onClick = { onUpdate(varDef.copy(isComputed = false)) },
+                    selected = !varDef.isComputed && !varDef.isManual,
+                    onClick = { onUpdate(varDef.copy(isComputed = false, isManual = false)) },
                     label = { Text("Scanned Token") }
                 )
                 FilterChip(
+                    selected = varDef.isManual,
+                    onClick = { onUpdate(varDef.copy(isComputed = false, isManual = true)) },
+                    label = { Text("Manual / Constant") }
+                )
+                FilterChip(
                     selected = varDef.isComputed,
-                    onClick = { onUpdate(varDef.copy(isComputed = true)) },
-                    label = { Text("Computed Variable (Formula)") }
+                    onClick = { onUpdate(varDef.copy(isComputed = true, isManual = false)) },
+                    label = { Text("Computed (Formula)") }
                 )
             }
 
@@ -364,89 +455,111 @@ fun VariableItemCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // If Computed: show formula editor and variable picker chips
-            if (varDef.isComputed) {
-                OutlinedTextField(
-                    value = varDef.computationFormula,
-                    onValueChange = { onUpdate(varDef.copy(computationFormula = it)) },
-                    label = { Text("Computation Formula (e.g. price / grams)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-
-                val otherVariables = allVariables.filter { it.name != varDef.name }
-                if (otherVariables.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Insert variable into formula:",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        otherVariables.forEach { other ->
-                            AssistChip(
-                                onClick = {
-                                    val current = varDef.computationFormula
-                                    val sep = if (current.isNotEmpty() && !current.endsWith(" ") && !current.endsWith("+") && !current.endsWith("-") && !current.endsWith("*") && !current.endsWith("/")) " " else ""
-                                    onUpdate(varDef.copy(computationFormula = "$current$sep${other.name}"))
-                                },
-                                label = { Text("+ ${other.name}") }
-                            )
-                        }
-                    }
-                }
-            } else {
-                // If Token-based: show default value, optional, and override settings
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            when {
+                // If Computed: show formula editor and variable picker chips
+                varDef.isComputed -> {
                     OutlinedTextField(
-                        value = varDef.defaultValue,
-                        onValueChange = { onUpdate(varDef.copy(defaultValue = it)) },
-                        label = { Text("Default Value") },
-                        modifier = Modifier.weight(1f),
+                        value = varDef.computationFormula,
+                        onValueChange = { onUpdate(varDef.copy(computationFormula = it)) },
+                        label = { Text("Computation Formula (e.g. price / grams)") },
+                        modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
 
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = varDef.isOptional,
-                            onCheckedChange = { onUpdate(varDef.copy(isOptional = it)) }
+                    val otherVariables = allVariables.filter { it.name != varDef.name }
+                    if (otherVariables.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Insert variable into formula:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
                         )
-                        Text("Optional", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            otherVariables.forEach { other ->
+                                AssistChip(
+                                    onClick = {
+                                        val current = varDef.computationFormula
+                                        val sep = if (current.isNotEmpty() && !current.endsWith(" ") && !current.endsWith("+") && !current.endsWith("-") && !current.endsWith("*") && !current.endsWith("/")) " " else ""
+                                        onUpdate(varDef.copy(computationFormula = "$current$sep${other.name}"))
+                                    },
+                                    label = { Text("+ ${other.name}") }
+                                )
+                            }
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                // If Manual: show fixed value/constant input
+                varDef.isManual -> {
+                    OutlinedTextField(
+                        value = varDef.defaultValue,
+                        onValueChange = { onUpdate(varDef.copy(defaultValue = it)) },
+                        label = { Text("Manual Value / Constant") },
+                        placeholder = { Text("e.g. 18, 5.5, Gold, 0.20") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Constant or user-entered value not extracted from the barcode. Available for formulas, pills, and spreadsheet table.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text(
-                            text = "Override Barcode Value",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold
+                // If Token-based: show default value, optional, and override settings
+                else -> {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = varDef.defaultValue,
+                            onValueChange = { onUpdate(varDef.copy(defaultValue = it)) },
+                            label = { Text("Default Value") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true
                         )
-                        Text(
-                            text = "Always use default value instead of scanned QR token",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = varDef.isOptional,
+                                onCheckedChange = { onUpdate(varDef.copy(isOptional = it)) }
+                            )
+                            Text("Optional", style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = "Override Barcode Value",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "Always use default value instead of scanned QR token",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = varDef.overrideBarcode,
+                            onCheckedChange = { onUpdate(varDef.copy(overrideBarcode = it)) }
                         )
                     }
-                    Switch(
-                        checked = varDef.overrideBarcode,
-                        onCheckedChange = { onUpdate(varDef.copy(overrideBarcode = it)) }
-                    )
                 }
             }
 

@@ -42,8 +42,34 @@ object QrParser {
         val numericMap = mutableMapOf<String, Double>()
         val stringMap = mutableMapOf<String, String>()
 
-        // 1. Process direct token variables
-        val tokenVars = rules.variables.filter { !it.isComputed }
+        // 1. Process manual / constant variables (not extracted from barcode tokens)
+        val manualVars = rules.variables.filter { it.isManual && !it.isComputed }
+        for (varDef in manualVars) {
+            val valueToUse = varDef.defaultValue.ifBlank { "0" }
+            var normalizedNumStr = valueToUse
+            if (rules.decimalSeparator == ",") {
+                normalizedNumStr = normalizedNumStr.replace(',', '.')
+            }
+
+            when (varDef.dataType) {
+                FieldDataType.STRING -> {
+                    stringMap[varDef.name] = valueToUse
+                    if (varDef.alias.isNotBlank()) {
+                        stringMap[varDef.alias] = valueToUse
+                    }
+                }
+                FieldDataType.INTEGER, FieldDataType.FLOAT, FieldDataType.DOUBLE -> {
+                    val parsedNumber = parseNumber(normalizedNumStr, rules.allowNegative) ?: 0.0
+                    numericMap[varDef.name] = parsedNumber
+                    if (varDef.alias.isNotBlank()) {
+                        numericMap[varDef.alias] = parsedNumber
+                    }
+                }
+            }
+        }
+
+        // 2. Process direct token variables
+        val tokenVars = rules.variables.filter { !it.isComputed && !it.isManual }
         for (varDef in tokenVars) {
             val hasToken = varDef.position in tokens.indices
             val rawToken = if (hasToken) tokens[varDef.position] else null
@@ -99,7 +125,7 @@ object QrParser {
             }
         }
 
-        // 2. Process computed / derived variables (e.g. price per gram = price / grams)
+        // 3. Process computed / derived variables (e.g. price per gram = price / grams)
         val remainingComputed = rules.variables.filter { it.isComputed }.toMutableList()
         var progress = true
         var passes = 0
@@ -148,5 +174,66 @@ object QrParser {
         return runCatching {
             trimmed.toDouble()
         }.getOrNull()
+    }
+
+    /**
+     * Checks if a scanned QR code contains an embedded configuration profile.
+     * Supported formats:
+     * - "ARQR:PROFILE:<json>"
+     * - Pure JSON containing "parsingRules" and "formula"
+     */
+    fun detectEmbeddedProfile(rawQrText: String): com.example.model.QrProfile? {
+        val trimmed = rawQrText.trim()
+        val jsonPayload = when {
+            trimmed.startsWith("ARQR:PROFILE:") -> trimmed.removePrefix("ARQR:PROFILE:")
+            trimmed.startsWith("{") && trimmed.contains("\"parsingRules\"") -> trimmed
+            else -> null
+        } ?: return null
+
+        return runCatching {
+            val json = org.json.JSONObject(jsonPayload)
+            com.example.model.QrProfile.fromJson(json)
+        }.getOrNull()
+    }
+
+    /**
+     * Formats a profile into an embeddable QR code string.
+     */
+    fun encodeProfileToQrString(profile: com.example.model.QrProfile): String {
+        return "ARQR:PROFILE:${profile.toJson()}"
+    }
+
+    /**
+     * Finds a matching profile based on embedded trigger signals or tags in the QR text.
+     */
+    fun findMatchingProfileBySignal(
+        rawQrText: String,
+        profiles: List<com.example.model.QrProfile>
+    ): com.example.model.QrProfile? {
+        val text = rawQrText.trim()
+        if (text.isEmpty()) return null
+
+        // 1. Direct signal matching
+        for (profile in profiles) {
+            val signal = profile.triggerSignal.trim()
+            if (signal.isNotEmpty()) {
+                if (text.startsWith(signal, ignoreCase = true) || text.contains(signal, ignoreCase = true)) {
+                    return profile
+                }
+            }
+        }
+
+        // 2. Structured profile tags: [PROFILE:name_or_id] or [P:name_or_id]
+        val profileTagRegex = Regex("\\[(?:PROFILE|P):([^\\]]+)\\]", RegexOption.IGNORE_CASE)
+        val match = profileTagRegex.find(text)
+        if (match != null) {
+            val targetKey = match.groupValues[1].trim()
+            val matched = profiles.find {
+                it.name.equals(targetKey, ignoreCase = true) || it.id.equals(targetKey, ignoreCase = true)
+            }
+            if (matched != null) return matched
+        }
+
+        return null
     }
 }

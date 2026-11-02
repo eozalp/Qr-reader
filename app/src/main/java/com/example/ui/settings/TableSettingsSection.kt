@@ -802,7 +802,7 @@ fun AddTableCellDialog(
                                         prefixText = v.prefix
                                         postfixText = v.postfix
                                     },
-                                    label = { Text(v.name) }
+                                    label = { Text(if (v.isManual) "${v.name} (manual)" else v.name) }
                                 )
                             }
                         }

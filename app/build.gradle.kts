@@ -104,6 +104,7 @@ dependencies {
   implementation(libs.androidx.lifecycle.viewmodel.compose)
   implementation(libs.androidx.navigation.compose)
   implementation(libs.mlkit.barcode.scanning)
+  implementation(libs.zxing.core)
   // implementation(libs.androidx.room.ktx)
   // implementation(libs.androidx.room.runtime)
   // implementation(libs.coil.compose)
