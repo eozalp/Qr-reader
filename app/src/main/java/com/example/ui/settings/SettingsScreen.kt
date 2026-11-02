@@ -19,8 +19,9 @@ import com.example.model.QrProfile
 enum class SettingsTab(val title: String, val icon: ImageVector) {
     PARSING("Parsing", Icons.Default.QrCodeScanner),
     FORMULA("Formula", Icons.Default.Calculate),
+    TABLE("Table", Icons.Default.TableChart),
+    OVERLAY("Style", Icons.Default.Layers),
     FORMAT("Format", Icons.Default.FormatListNumbered),
-    OVERLAY("Overlay", Icons.Default.Layers),
     TRACKING("Tracking", Icons.Default.Tune),
     PROFILES("Profiles", Icons.Default.FolderSpecial)
 }
@@ -110,6 +111,14 @@ fun SettingsScreen(
                         rules = activeProfile.parsingRules,
                         onFormulaChanged = { updatedFormula ->
                             profileRepository.saveProfile(activeProfile.copy(formula = updatedFormula))
+                        }
+                    )
+                }
+                SettingsTab.TABLE -> {
+                    TableSettingsSection(
+                        profile = activeProfile,
+                        onProfileChanged = { updatedProfile ->
+                            profileRepository.saveProfile(updatedProfile)
                         }
                     )
                 }

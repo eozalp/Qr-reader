@@ -28,6 +28,10 @@ data class VariableDefinition(
     val defaultValue: String = "0",
     val overrideBarcode: Boolean = false, // If true, default value overrides scanned barcode token
     val showPill: Boolean = true, // Whether to show an individual pill for this variable in overlay
+    val prefix: String = "", // Prefix specific to this variable pill (e.g. $, ₺)
+    val postfix: String = "", // Postfix specific to this variable pill (e.g. g, kg, TL)
+    val isComputed: Boolean = false, // True if computed from other variables (e.g. price / grams)
+    val computationFormula: String = "", // e.g. "price / grams" or "a / b"
     val minValue: Double? = null,
     val maxValue: Double? = null
 ) {
@@ -42,6 +46,10 @@ data class VariableDefinition(
             put("defaultValue", defaultValue)
             put("overrideBarcode", overrideBarcode)
             put("showPill", showPill)
+            put("prefix", prefix)
+            put("postfix", postfix)
+            put("isComputed", isComputed)
+            put("computationFormula", computationFormula)
             if (minValue != null) put("minValue", minValue)
             if (maxValue != null) put("maxValue", maxValue)
         }
@@ -61,6 +69,10 @@ data class VariableDefinition(
                 defaultValue = json.optString("defaultValue", "0"),
                 overrideBarcode = json.optBoolean("overrideBarcode", false),
                 showPill = json.optBoolean("showPill", true),
+                prefix = json.optString("prefix", ""),
+                postfix = json.optString("postfix", ""),
+                isComputed = json.optBoolean("isComputed", false),
+                computationFormula = json.optString("computationFormula", ""),
                 minValue = if (json.has("minValue")) json.optDouble("minValue") else null,
                 maxValue = if (json.has("maxValue")) json.optDouble("maxValue") else null
             )
@@ -253,6 +265,145 @@ enum class BorderStyle {
 }
 
 /**
+ * Source type for a cell in the Mini Excel Table overlay.
+ */
+enum class TableItemSource {
+    VARIABLE,        // Extracted token variable (e.g. price, grams)
+    COMPUTED,        // Computed variable (e.g. price_per_gram)
+    FORMULA_RESULT,  // Main evaluated formula result
+    RAW_QR,          // Raw scanned QR text
+    CUSTOM_TEXT      // Static custom label/value
+}
+
+/**
+ * Display modes for the visual overlay.
+ */
+enum class OverlayDisplayMode {
+    EXCEL_TABLE,    // Mini Excel Spreadsheet grid
+    COMPACT_CARD,   // Classic compact card with pills
+    HYBRID          // Both compact summary card and Excel table
+}
+
+/**
+ * Themes for the Excel grid overlay.
+ */
+enum class ExcelGridTheme {
+    EXCEL_CLASSIC,  // Microsoft Excel dark emerald green (#107C41 / #22C55E)
+    NEON_CYAN,      // Cyber Cyan (#00F5D4)
+    MODERN_SLATE,   // Crisp Ice Blue & Slate (#38BDF8 / #0F172A)
+    AMBER_GOLD      // Financial Amber & Gold (#F59E0B)
+}
+
+/**
+ * Configuration for an individual cell/row in the Mini Excel Table.
+ */
+data class ExcelTableCellItem(
+    val id: String = UUID.randomUUID().toString(),
+    val source: TableItemSource = TableItemSource.VARIABLE,
+    val variableName: String = "",
+    val label: String = "",
+    val isVisible: Boolean = true,
+    val prefix: String = "",
+    val postfix: String = "",
+    val isEmphasized: Boolean = false,
+    val customValue: String = "",
+    val coordinate: String = "" // e.g. "A1", "A2", "B1" or auto-generated
+) {
+    fun toJson(): JSONObject {
+        return JSONObject().apply {
+            put("id", id)
+            put("source", source.name)
+            put("variableName", variableName)
+            put("label", label)
+            put("isVisible", isVisible)
+            put("prefix", prefix)
+            put("postfix", postfix)
+            put("isEmphasized", isEmphasized)
+            put("customValue", customValue)
+            put("coordinate", coordinate)
+        }
+    }
+
+    companion object {
+        fun fromJson(json: JSONObject): ExcelTableCellItem {
+            return ExcelTableCellItem(
+                id = json.optString("id", UUID.randomUUID().toString()),
+                source = runCatching {
+                    TableItemSource.valueOf(json.optString("source", TableItemSource.VARIABLE.name))
+                }.getOrDefault(TableItemSource.VARIABLE),
+                variableName = json.optString("variableName", ""),
+                label = json.optString("label", ""),
+                isVisible = json.optBoolean("isVisible", true),
+                prefix = json.optString("prefix", ""),
+                postfix = json.optString("postfix", ""),
+                isEmphasized = json.optBoolean("isEmphasized", false),
+                customValue = json.optString("customValue", ""),
+                coordinate = json.optString("coordinate", "")
+            )
+        }
+    }
+}
+
+/**
+ * Configuration for the Mini Excel Table overlay layout.
+ */
+data class ExcelTableConfig(
+    val isEnabled: Boolean = true,
+    val showHeader: Boolean = true,
+    val headerTitle: String = "DATA SHEET",
+    val headerSubtitle: String = "QR SPREADSHEET",
+    val showColumnHeaders: Boolean = true,
+    val showCoordinates: Boolean = true,
+    val gridTheme: ExcelGridTheme = ExcelGridTheme.EXCEL_CLASSIC,
+    val showGridLines: Boolean = true,
+    val items: List<ExcelTableCellItem> = emptyList()
+) {
+    fun toJson(): JSONObject {
+        return JSONObject().apply {
+            put("isEnabled", isEnabled)
+            put("showHeader", showHeader)
+            put("headerTitle", headerTitle)
+            put("headerSubtitle", headerSubtitle)
+            put("showColumnHeaders", showColumnHeaders)
+            put("showCoordinates", showCoordinates)
+            put("gridTheme", gridTheme.name)
+            put("showGridLines", showGridLines)
+            val arr = JSONArray()
+            items.forEach { arr.put(it.toJson()) }
+            put("items", arr)
+        }
+    }
+
+    companion object {
+        fun fromJson(json: JSONObject): ExcelTableConfig {
+            val list = mutableListOf<ExcelTableCellItem>()
+            val arr = json.optJSONArray("items")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i)
+                    if (obj != null) {
+                        list.add(ExcelTableCellItem.fromJson(obj))
+                    }
+                }
+            }
+            return ExcelTableConfig(
+                isEnabled = json.optBoolean("isEnabled", true),
+                showHeader = json.optBoolean("showHeader", true),
+                headerTitle = json.optString("headerTitle", "DATA SHEET"),
+                headerSubtitle = json.optString("headerSubtitle", "QR SPREADSHEET"),
+                showColumnHeaders = json.optBoolean("showColumnHeaders", true),
+                showCoordinates = json.optBoolean("showCoordinates", true),
+                gridTheme = runCatching {
+                    ExcelGridTheme.valueOf(json.optString("gridTheme", ExcelGridTheme.EXCEL_CLASSIC.name))
+                }.getOrDefault(ExcelGridTheme.EXCEL_CLASSIC),
+                showGridLines = json.optBoolean("showGridLines", true),
+                items = list
+            )
+        }
+    }
+}
+
+/**
  * Advanced Visual Overlay configuration (CSS-inspired parameters translated to native Compose).
  */
 data class OverlayAppearance(
@@ -299,7 +450,9 @@ data class OverlayAppearance(
     val showCalculationFormulaHint: Boolean = true,
     val showRawQrPill: Boolean = false,
     val hiddenPillVariables: List<String> = emptyList(), // Individually hidden variables in pills
-    val iconName: String = "calculator" // "calculator", "tag", "qr", "sparkle", "none"
+    val iconName: String = "calculator", // "calculator", "tag", "qr", "sparkle", "none"
+    val displayMode: OverlayDisplayMode = OverlayDisplayMode.EXCEL_TABLE,
+    val tableConfig: ExcelTableConfig = ExcelTableConfig()
 ) {
     fun toJson(): JSONObject {
         return JSONObject().apply {
@@ -339,6 +492,8 @@ data class OverlayAppearance(
             hiddenPillVariables.forEach { hiddenArray.put(it) }
             put("hiddenPillVariables", hiddenArray)
             put("iconName", iconName)
+            put("displayMode", displayMode.name)
+            put("tableConfig", tableConfig.toJson())
         }
     }
 
@@ -391,7 +546,15 @@ data class OverlayAppearance(
                 showCalculationFormulaHint = json.optBoolean("showCalculationFormulaHint", true),
                 showRawQrPill = json.optBoolean("showRawQrPill", false),
                 hiddenPillVariables = hiddenList,
-                iconName = json.optString("iconName", "calculator")
+                iconName = json.optString("iconName", "calculator"),
+                displayMode = runCatching {
+                    OverlayDisplayMode.valueOf(json.optString("displayMode", OverlayDisplayMode.EXCEL_TABLE.name))
+                }.getOrDefault(OverlayDisplayMode.EXCEL_TABLE),
+                tableConfig = if (json.has("tableConfig")) {
+                    ExcelTableConfig.fromJson(json.getJSONObject("tableConfig"))
+                } else {
+                    ExcelTableConfig()
+                }
             )
         }
     }

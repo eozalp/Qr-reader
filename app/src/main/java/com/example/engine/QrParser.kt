@@ -15,6 +15,8 @@ sealed class QrParseOutcome {
 
 object QrParser {
 
+    private val mathEvaluator = MathExpressionEvaluator()
+
     /**
      * Parses the raw QR code text using the defined parsing rules.
      * Maps extracted tokens by position into variable names and aliases.
@@ -40,7 +42,9 @@ object QrParser {
         val numericMap = mutableMapOf<String, Double>()
         val stringMap = mutableMapOf<String, String>()
 
-        for (varDef in rules.variables) {
+        // 1. Process direct token variables
+        val tokenVars = rules.variables.filter { !it.isComputed }
+        for (varDef in tokenVars) {
             val hasToken = varDef.position in tokens.indices
             val rawToken = if (hasToken) tokens[varDef.position] else null
 
@@ -93,6 +97,44 @@ object QrParser {
                     }
                 }
             }
+        }
+
+        // 2. Process computed / derived variables (e.g. price per gram = price / grams)
+        val remainingComputed = rules.variables.filter { it.isComputed }.toMutableList()
+        var progress = true
+        var passes = 0
+        while (remainingComputed.isNotEmpty() && progress && passes < 10) {
+            passes++
+            progress = false
+            val iterator = remainingComputed.iterator()
+            while (iterator.hasNext()) {
+                val compVar = iterator.next()
+                if (compVar.computationFormula.isBlank()) {
+                    iterator.remove()
+                    progress = true
+                    continue
+                }
+                when (val res = mathEvaluator.evaluate(compVar.computationFormula, numericMap)) {
+                    is MathResult.Success -> {
+                        numericMap[compVar.name] = res.value
+                        if (compVar.alias.isNotBlank()) {
+                            numericMap[compVar.alias] = res.value
+                        }
+                        iterator.remove()
+                        progress = true
+                    }
+                    is MathResult.Error -> {
+                        // Might depend on another computed variable not yet evaluated in this pass
+                    }
+                }
+            }
+        }
+
+        if (remainingComputed.isNotEmpty()) {
+            val failedVar = remainingComputed.first()
+            val err = mathEvaluator.evaluate(failedVar.computationFormula, numericMap)
+            val msg = if (err is MathResult.Error) err.message else "Formula evaluation failed"
+            return QrParseOutcome.Error("Computed '${failedVar.name}': $msg")
         }
 
         return QrParseOutcome.Success(numericMap, stringMap)

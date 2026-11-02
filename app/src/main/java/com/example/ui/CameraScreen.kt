@@ -12,9 +12,11 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -41,6 +43,8 @@ import com.example.data.ProfileRepository
 import com.example.model.QrProfile
 import com.example.model.TrackedQr
 import java.util.concurrent.Executors
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -90,6 +94,13 @@ fun CameraScreen(
 
     var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
     var cameraInfo by remember { mutableStateOf<CameraInfo?>(null) }
+
+    val coroutineScope = rememberCoroutineScope()
+    var liveOverlayScale by remember(activeProfile.overlay.scale) {
+        mutableFloatStateOf(activeProfile.overlay.scale)
+    }
+    var showScaleToast by remember { mutableStateOf(false) }
+    var saveScaleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     val analyzer = remember {
         QrCodeAnalyzer { rawList ->
@@ -207,14 +218,58 @@ fun CameraScreen(
                 modifier = Modifier.fillMaxSize()
             )
 
-            // AR Overlay Layer
-            QrOverlaysCanvas(
-                trackedItems = trackedQrs,
-                overlayConfig = activeProfile.overlay,
-                screenWidthPx = screenWidthPx,
-                screenHeightPx = screenHeightPx,
-                modifier = Modifier.fillMaxSize()
-            )
+            // AR Overlay Layer with Multitouch Zoom to resize the overlay
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(activeProfile.id) {
+                        detectTransformGestures { _, _, zoom, _ ->
+                            if (zoom != 1.0f) {
+                                val updated = (liveOverlayScale * zoom).coerceIn(0.5f, 3.0f)
+                                liveOverlayScale = updated
+                                showScaleToast = true
+                                saveScaleJob?.cancel()
+                                saveScaleJob = coroutineScope.launch {
+                                    // Keep last settings: persist the scale to profile repository
+                                    profileRepository.saveProfile(
+                                        activeProfile.copy(
+                                            overlay = activeProfile.overlay.copy(scale = updated)
+                                        )
+                                    )
+                                    kotlinx.coroutines.delay(1200)
+                                    showScaleToast = false
+                                }
+                            }
+                        }
+                    }
+            ) {
+                QrOverlaysCanvas(
+                    trackedItems = trackedQrs,
+                    overlayConfig = activeProfile.overlay.copy(scale = liveOverlayScale),
+                    screenWidthPx = screenWidthPx,
+                    screenHeightPx = screenHeightPx,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // Brief floating badge indicator when user pinches to resize overlay
+                if (showScaleToast) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color.Black.copy(alpha = 0.82f))
+                            .border(1.dp, Color(0xFF00F5D4), RoundedCornerShape(16.dp))
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = "Overlay Size: ${(liveOverlayScale * 100).toInt()}%",
+                            color = Color(0xFF00F5D4),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+            }
 
             // Top HUD Controls & Profile Bar
             TopHudBar(

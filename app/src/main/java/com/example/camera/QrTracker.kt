@@ -119,6 +119,29 @@ class QrTracker {
                 )
             }
             is QrParseOutcome.Success -> {
+                // Pre-compute formatted display string for each variable pill with its individual prefix and postfix
+                val pillDisplay = mutableMapOf<String, String>()
+                for (v in profile.parsingRules.variables) {
+                    val numVal = parseOutcome.numericVariables[v.name]
+                    if (numVal != null) {
+                        val clean = if (numVal % 1.0 == 0.0) numVal.toLong().toString() else "%.2f".format(numVal)
+                        val displayStr = "${v.prefix}$clean${v.postfix}"
+                        pillDisplay[v.name] = displayStr
+                        if (v.alias.isNotBlank()) {
+                            pillDisplay[v.alias] = displayStr
+                        }
+                    } else {
+                        val strVal = parseOutcome.stringVariables[v.name]
+                        if (strVal != null) {
+                            val displayStr = "${v.prefix}$strVal${v.postfix}"
+                            pillDisplay[v.name] = displayStr
+                            if (v.alias.isNotBlank()) {
+                                pillDisplay[v.alias] = displayStr
+                            }
+                        }
+                    }
+                }
+
                 // Step 2: Math formula evaluation
                 when (val evalOutcome = mathEvaluator.evaluate(profile.formula.expression, parseOutcome.numericVariables)) {
                     is MathResult.Error -> {
@@ -126,6 +149,7 @@ class QrTracker {
                             rawText = rawText,
                             extractedVariables = parseOutcome.numericVariables,
                             extractedStrings = parseOutcome.stringVariables,
+                            variablePillDisplay = pillDisplay,
                             status = CalculationStatus.EvaluationError(evalOutcome.message),
                             formulaExpression = profile.formula.expression
                         )
@@ -137,6 +161,7 @@ class QrTracker {
                             rawText = rawText,
                             extractedVariables = parseOutcome.numericVariables,
                             extractedStrings = parseOutcome.stringVariables,
+                            variablePillDisplay = pillDisplay,
                             status = CalculationStatus.Success(evalOutcome.value, formatted),
                             formulaExpression = profile.formula.expression
                         )

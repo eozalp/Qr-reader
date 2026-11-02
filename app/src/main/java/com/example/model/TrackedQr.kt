@@ -18,6 +18,7 @@ data class ParsedQrResult(
     val rawText: String,
     val extractedVariables: Map<String, Double> = emptyMap(),
     val extractedStrings: Map<String, String> = emptyMap(),
+    val variablePillDisplay: Map<String, String> = emptyMap(),
     val status: CalculationStatus,
     val formulaExpression: String = ""
 )

@@ -221,7 +221,20 @@ class ProfileRepository(private val context: Context) {
                         borderColorHex = "#00F5D4",
                         backgroundColorHex = "#090D16",
                         fillMode = OverlayFillMode.SEMI_TRANSPARENT,
-                        iconName = "calculator"
+                        iconName = "calculator",
+                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
+                        tableConfig = ExcelTableConfig(
+                            headerTitle = "QUICK SUM",
+                            headerSubtitle = "DATA SHEET",
+                            gridTheme = ExcelGridTheme.NEON_CYAN,
+                            items = listOf(
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "a", label = "Token A", coordinate = "A1"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "b", label = "Token B", coordinate = "A2"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "c", label = "Token C", coordinate = "A3"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "d", label = "Token D", coordinate = "A4"),
+                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "TOTAL", postfix = " pts", coordinate = "A5", isEmphasized = true)
+                            )
+                        )
                     )
                 ),
                 QrProfile(
@@ -231,9 +244,9 @@ class ProfileRepository(private val context: Context) {
                     parsingRules = QrParsingRules(
                         delimiter = ",",
                         variables = listOf(
-                            VariableDefinition(position = 0, name = "price", alias = "p"),
-                            VariableDefinition(position = 1, name = "tax", alias = "t", defaultValue = "18"),
-                            VariableDefinition(position = 2, name = "qty", alias = "q", defaultValue = "1", isOptional = true)
+                            VariableDefinition(position = 0, name = "price", alias = "p", prefix = "$"),
+                            VariableDefinition(position = 1, name = "tax", alias = "t", postfix = "%", defaultValue = "18"),
+                            VariableDefinition(position = 2, name = "qty", alias = "q", postfix = " pcs", defaultValue = "1", isOptional = true)
                         )
                     ),
                     formula = ArithmeticFormula(
@@ -253,7 +266,19 @@ class ProfileRepository(private val context: Context) {
                         backgroundColorHex = "#022C22",
                         gradientColorEndHex = "#064E3B",
                         fillMode = OverlayFillMode.FILLED_GRADIENT,
-                        iconName = "tag"
+                        iconName = "tag",
+                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
+                        tableConfig = ExcelTableConfig(
+                            headerTitle = "PRICE & TAX SHEET",
+                            headerSubtitle = "INVOICE CALC",
+                            gridTheme = ExcelGridTheme.EXCEL_CLASSIC,
+                            items = listOf(
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "price", label = "Unit Price", prefix = "$", coordinate = "A1"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "qty", label = "Quantity", postfix = " pcs", coordinate = "A2"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "tax", label = "Tax Rate", postfix = "%", coordinate = "A3"),
+                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "TOTAL DUE", prefix = "$", coordinate = "A4", isEmphasized = true)
+                            )
+                        )
                     )
                 ),
                 QrProfile(
@@ -263,8 +288,8 @@ class ProfileRepository(private val context: Context) {
                     parsingRules = QrParsingRules(
                         delimiter = "-",
                         variables = listOf(
-                            VariableDefinition(position = 0, name = "price", alias = "a"),
-                            VariableDefinition(position = 1, name = "disc", alias = "b")
+                            VariableDefinition(position = 0, name = "price", alias = "a", prefix = "₺"),
+                            VariableDefinition(position = 1, name = "disc", alias = "b", postfix = "%")
                         )
                     ),
                     formula = ArithmeticFormula(
@@ -285,7 +310,18 @@ class ProfileRepository(private val context: Context) {
                         backgroundColorHex = "#451A03",
                         gradientColorEndHex = "#1E1B4B",
                         fillMode = OverlayFillMode.FILLED_GRADIENT,
-                        iconName = "sparkle"
+                        iconName = "sparkle",
+                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
+                        tableConfig = ExcelTableConfig(
+                            headerTitle = "DISCOUNT BREAKDOWN",
+                            headerSubtitle = "₺ PRICING",
+                            gridTheme = ExcelGridTheme.AMBER_GOLD,
+                            items = listOf(
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "price", label = "Original Price", prefix = "₺", coordinate = "A1"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "disc", label = "Discount %", postfix = "%", coordinate = "A2"),
+                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "FINAL PRICE", prefix = "₺", postfix = " TL", coordinate = "A3", isEmphasized = true)
+                            )
+                        )
                     )
                 ),
                 QrProfile(
@@ -295,9 +331,9 @@ class ProfileRepository(private val context: Context) {
                     parsingRules = QrParsingRules(
                         delimiter = "-",
                         variables = listOf(
-                            VariableDefinition(position = 0, name = "l"),
-                            VariableDefinition(position = 1, name = "w"),
-                            VariableDefinition(position = 2, name = "h")
+                            VariableDefinition(position = 0, name = "l", postfix = "cm"),
+                            VariableDefinition(position = 1, name = "w", postfix = "cm"),
+                            VariableDefinition(position = 2, name = "h", postfix = "cm")
                         )
                     ),
                     formula = ArithmeticFormula(
@@ -314,7 +350,67 @@ class ProfileRepository(private val context: Context) {
                         borderColorHex = "#A855F7",
                         backgroundColorHex = "#2E1065",
                         fillMode = OverlayFillMode.SEMI_TRANSPARENT,
-                        iconName = "qr"
+                        iconName = "qr",
+                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
+                        tableConfig = ExcelTableConfig(
+                            headerTitle = "PACKAGE VOLUME",
+                            headerSubtitle = "METRIC SPREADSHEET",
+                            gridTheme = ExcelGridTheme.MODERN_SLATE,
+                            items = listOf(
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "l", label = "Length", postfix = " cm", coordinate = "A1"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "w", label = "Width", postfix = " cm", coordinate = "A2"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "h", label = "Height", postfix = " cm", coordinate = "A3"),
+                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "VOLUME (L)", postfix = " L", coordinate = "A4", isEmphasized = true)
+                            )
+                        )
+                    )
+                ),
+                QrProfile(
+                    id = "preset_price_per_gram",
+                    name = "Price per Gram (Unit Price)",
+                    description = "Format: 'Price-Weight' (e.g., 50-250) with computed price per gram",
+                    parsingRules = QrParsingRules(
+                        delimiter = "-",
+                        variables = listOf(
+                            VariableDefinition(position = 0, name = "price", prefix = "$", defaultValue = "50"),
+                            VariableDefinition(position = 1, name = "grams", postfix = "g", defaultValue = "250"),
+                            VariableDefinition(
+                                name = "ppg",
+                                isComputed = true,
+                                computationFormula = "price / grams",
+                                prefix = "$",
+                                postfix = "/g"
+                            )
+                        )
+                    ),
+                    formula = ArithmeticFormula(
+                        expression = "price / grams",
+                        description = "Unit price per gram"
+                    ),
+                    formatting = ResultFormatting(
+                        decimalPrecision = 4,
+                        prefix = "$",
+                        postfix = " / g",
+                        roundingMode = AppRoundingMode.ROUND_HALF_UP
+                    ),
+                    overlay = OverlayAppearance(
+                        textColorHex = "#38BDF8",
+                        borderColorHex = "#38BDF8",
+                        backgroundColorHex = "#0C4A6E",
+                        fillMode = OverlayFillMode.SEMI_TRANSPARENT,
+                        iconName = "calculator",
+                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
+                        tableConfig = ExcelTableConfig(
+                            headerTitle = "UNIT PRICE SHEET",
+                            headerSubtitle = "EXCEL SPREADSHEET",
+                            gridTheme = ExcelGridTheme.EXCEL_CLASSIC,
+                            items = listOf(
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "price", label = "Total Price", prefix = "$", coordinate = "A1"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "grams", label = "Weight", postfix = " g", coordinate = "A2"),
+                                ExcelTableCellItem(source = TableItemSource.COMPUTED, variableName = "ppg", label = "Price / Gram", prefix = "$", postfix = "/g", coordinate = "A3", isEmphasized = true),
+                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "RATE", prefix = "$", postfix = "/g", coordinate = "A4", isEmphasized = true)
+                            )
+                        )
                     )
                 )
             )

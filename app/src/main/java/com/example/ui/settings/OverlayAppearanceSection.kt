@@ -88,6 +88,71 @@ fun OverlayAppearanceSection(
             }
         }
 
+        // Overlay Display Mode (Excel Table vs Compact Card vs Hybrid)
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Overlay Display Mode",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFF107C41))
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text("SPREADSHEET", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Choose between the Mini Excel Cells Grid, Classic Card with pills, or Hybrid display.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OverlayDisplayMode.entries.forEach { mode ->
+                            val isSelected = overlay.displayMode == mode
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { onOverlayChanged(overlay.copy(displayMode = mode)) },
+                                label = {
+                                    Text(
+                                        when (mode) {
+                                            OverlayDisplayMode.EXCEL_TABLE -> "Mini Excel Grid"
+                                            OverlayDisplayMode.COMPACT_CARD -> "Compact Card"
+                                            OverlayDisplayMode.HYBRID -> "Hybrid (Both)"
+                                        }
+                                    )
+                                },
+                                leadingIcon = if (isSelected) {
+                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                } else null
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Anchor Position
         item {
             Text(text = "Anchor Position Relative to QR", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -241,11 +306,13 @@ fun OverlayAppearanceSection(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Text("Background Opacity: ${(overlay.backgroundOpacity * 100).toInt()}%")
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text("Overlay Scale / Zoom: ${(overlay.scale * 100).toInt()}% (or pinch-to-zoom on screen)")
             Slider(
-                value = overlay.backgroundOpacity,
-                onValueChange = { onOverlayChanged(overlay.copy(backgroundOpacity = it)) },
-                valueRange = 0.2f..1.0f
+                value = overlay.scale,
+                onValueChange = { onOverlayChanged(overlay.copy(scale = it)) },
+                valueRange = 0.5f..3.0f
             )
         }
 

@@ -1,12 +1,15 @@
 package com.example.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -142,23 +145,44 @@ fun ParsingSettingsSection(
                     fontWeight = FontWeight.Bold
                 )
 
-                FilledTonalButton(
-                    onClick = {
-                        val nextPos = rules.variables.size
-                        val nextName = if (nextPos < 26) ('a'.code + nextPos).toChar().toString() else "var$nextPos"
-                        val newVar = VariableDefinition(
-                            id = UUID.randomUUID().toString(),
-                            position = nextPos,
-                            name = nextName,
-                            dataType = FieldDataType.DOUBLE
-                        )
-                        onRulesChanged(rules.copy(variables = rules.variables + newVar))
-                    },
-                    modifier = Modifier.testTag("add_variable_button")
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Add Variable")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(
+                        onClick = {
+                            val tokenCount = rules.variables.count { !it.isComputed }
+                            val nextName = if (tokenCount < 26) ('a'.code + tokenCount).toChar().toString() else "var$tokenCount"
+                            val newVar = VariableDefinition(
+                                id = UUID.randomUUID().toString(),
+                                position = tokenCount,
+                                name = nextName,
+                                isComputed = false,
+                                dataType = FieldDataType.DOUBLE
+                            )
+                            onRulesChanged(rules.copy(variables = rules.variables + newVar))
+                        },
+                        modifier = Modifier.testTag("add_variable_button")
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Add Token", fontSize = 12.sp)
+                    }
+
+                    FilledTonalButton(
+                        onClick = {
+                            val computedCount = rules.variables.count { it.isComputed } + 1
+                            val newVar = VariableDefinition(
+                                id = UUID.randomUUID().toString(),
+                                name = "calc$computedCount",
+                                isComputed = true,
+                                computationFormula = "",
+                                dataType = FieldDataType.DOUBLE
+                            )
+                            onRulesChanged(rules.copy(variables = rules.variables + newVar))
+                        }
+                    ) {
+                        Icon(Icons.Default.Calculate, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Add Computed", fontSize = 12.sp)
+                    }
                 }
             }
         }
@@ -167,6 +191,7 @@ fun ParsingSettingsSection(
             VariableItemCard(
                 varDef = varDef,
                 index = index,
+                allVariables = rules.variables,
                 onUpdate = { updated ->
                     val newList = rules.variables.toMutableList()
                     newList[index] = updated
@@ -187,6 +212,7 @@ fun ParsingSettingsSection(
 fun VariableItemCard(
     varDef: VariableDefinition,
     index: Int,
+    allVariables: List<VariableDefinition> = emptyList(),
     onUpdate: (VariableDefinition) -> Unit,
     onDelete: () -> Unit
 ) {
@@ -195,6 +221,7 @@ fun VariableItemCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
+            // Header: Type badge & Name & Delete button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -204,12 +231,16 @@ fun VariableItemCard(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.primaryContainer)
+                            .background(
+                                if (varDef.isComputed) MaterialTheme.colorScheme.tertiaryContainer
+                                else MaterialTheme.colorScheme.primaryContainer
+                            )
                             .padding(horizontal = 10.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = "Pos ${varDef.position}",
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            text = if (varDef.isComputed) "fx Computed" else "Pos ${varDef.position}",
+                            color = if (varDef.isComputed) MaterialTheme.colorScheme.onTertiaryContainer
+                            else MaterialTheme.colorScheme.onPrimaryContainer,
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp
                         )
@@ -233,6 +264,26 @@ fun VariableItemCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
+            // Source Type Selector: Token vs Computed
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = !varDef.isComputed,
+                    onClick = { onUpdate(varDef.copy(isComputed = false)) },
+                    label = { Text("Scanned Token") }
+                )
+                FilterChip(
+                    selected = varDef.isComputed,
+                    onClick = { onUpdate(varDef.copy(isComputed = true)) },
+                    label = { Text("Computed Variable (Formula)") }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Name and Alias
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = varDef.name,
@@ -253,54 +304,116 @@ fun VariableItemCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            // Variable Prefix and Postfix
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
-                    value = varDef.defaultValue,
-                    onValueChange = { onUpdate(varDef.copy(defaultValue = it)) },
-                    label = { Text("Default Value") },
+                    value = varDef.prefix,
+                    onValueChange = { onUpdate(varDef.copy(prefix = it)) },
+                    label = { Text("Prefix (e.g. $, ₺)") },
                     modifier = Modifier.weight(1f),
                     singleLine = true
                 )
 
-                Row(
+                OutlinedTextField(
+                    value = varDef.postfix,
+                    onValueChange = { onUpdate(varDef.copy(postfix = it)) },
+                    label = { Text("Postfix (e.g. g, /g, TL)") },
                     modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = varDef.isOptional,
-                        onCheckedChange = { onUpdate(varDef.copy(isOptional = it)) }
-                    )
-                    Text("Optional", style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                    Text(
-                        text = "Override Barcode Value",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = "Always use default value instead of scanned QR code value",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = varDef.overrideBarcode,
-                    onCheckedChange = { onUpdate(varDef.copy(overrideBarcode = it)) }
+                    singleLine = true
                 )
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            // If Computed: show formula editor and variable picker chips
+            if (varDef.isComputed) {
+                OutlinedTextField(
+                    value = varDef.computationFormula,
+                    onValueChange = { onUpdate(varDef.copy(computationFormula = it)) },
+                    label = { Text("Computation Formula (e.g. price / grams)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                val otherVariables = allVariables.filter { it.name != varDef.name }
+                if (otherVariables.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Insert variable into formula:",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        otherVariables.forEach { other ->
+                            AssistChip(
+                                onClick = {
+                                    val current = varDef.computationFormula
+                                    val sep = if (current.isNotEmpty() && !current.endsWith(" ") && !current.endsWith("+") && !current.endsWith("-") && !current.endsWith("*") && !current.endsWith("/")) " " else ""
+                                    onUpdate(varDef.copy(computationFormula = "$current$sep${other.name}"))
+                                },
+                                label = { Text("+ ${other.name}") }
+                            )
+                        }
+                    }
+                }
+            } else {
+                // If Token-based: show default value, optional, and override settings
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = varDef.defaultValue,
+                        onValueChange = { onUpdate(varDef.copy(defaultValue = it)) },
+                        label = { Text("Default Value") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = varDef.isOptional,
+                            onCheckedChange = { onUpdate(varDef.copy(isOptional = it)) }
+                        )
+                        Text("Optional", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text(
+                            text = "Override Barcode Value",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Always use default value instead of scanned QR token",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = varDef.overrideBarcode,
+                        onCheckedChange = { onUpdate(varDef.copy(overrideBarcode = it)) }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Show Pill in Overlay Toggle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,

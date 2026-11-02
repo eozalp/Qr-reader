@@ -103,6 +103,52 @@ class QrEngineComprehensiveTest {
     }
 
     @Test
+    fun testComputedVariablePricePerGram() {
+        val rules = QrParsingRules(
+            delimiter = "-",
+            variables = listOf(
+                VariableDefinition(position = 0, name = "price", prefix = "$"),
+                VariableDefinition(position = 1, name = "grams", postfix = "g"),
+                VariableDefinition(
+                    name = "ppg",
+                    isComputed = true,
+                    computationFormula = "price / grams",
+                    prefix = "$",
+                    postfix = "/g"
+                )
+            )
+        )
+        // Barcode contains "50-250" -> 50 dollars for 250 grams -> 0.20 $/g
+        val outcome = QrParser.parse("50-250", rules)
+        assertTrue(outcome is QrParseOutcome.Success)
+        val vars = (outcome as QrParseOutcome.Success).numericVariables
+        assertEquals(50.0, vars["price"]!!, 1e-6)
+        assertEquals(250.0, vars["grams"]!!, 1e-6)
+        assertEquals(0.20, vars["ppg"]!!, 1e-6)
+    }
+
+    @Test
+    fun testChainedComputedVariables() {
+        val rules = QrParsingRules(
+            delimiter = "-",
+            variables = listOf(
+                VariableDefinition(position = 0, name = "price"),
+                VariableDefinition(position = 1, name = "qty"),
+                VariableDefinition(name = "subtotal", isComputed = true, computationFormula = "price * qty"),
+                VariableDefinition(name = "tax", isComputed = true, computationFormula = "subtotal * 0.18"),
+                VariableDefinition(name = "total", isComputed = true, computationFormula = "subtotal + tax")
+            )
+        )
+        // Barcode contains "100-2" -> subtotal=200, tax=36, total=236
+        val outcome = QrParser.parse("100-2", rules)
+        assertTrue(outcome is QrParseOutcome.Success)
+        val vars = (outcome as QrParseOutcome.Success).numericVariables
+        assertEquals(200.0, vars["subtotal"]!!, 1e-6)
+        assertEquals(36.0, vars["tax"]!!, 1e-6)
+        assertEquals(236.0, vars["total"]!!, 1e-6)
+    }
+
+    @Test
     fun testInvalidInputHandledSafely() {
         val rules = QrParsingRules(delimiter = "-")
         val emptyOutcome = QrParser.parse("", rules)
@@ -271,5 +317,121 @@ class QrEngineComprehensiveTest {
         assertEquals(preset.parsingRules.delimiter, reconstructed.parsingRules.delimiter)
         assertEquals(preset.formatting.prefix, reconstructed.formatting.prefix)
         assertEquals(preset.formatting.postfix, reconstructed.formatting.postfix)
+        assertEquals(preset.overlay.displayMode, reconstructed.overlay.displayMode)
+        assertEquals(preset.overlay.tableConfig.headerTitle, reconstructed.overlay.tableConfig.headerTitle)
+        assertTrue(reconstructed.overlay.tableConfig.items.isNotEmpty())
+    }
+
+    // --- Mini Excel Table Layout & Resolution Tests ---
+
+    @Test
+    fun testExcelTableConfigSerialization() {
+        val table = ExcelTableConfig(
+            isEnabled = true,
+            showHeader = true,
+            headerTitle = "RECEIPT BREAKDOWN",
+            headerSubtitle = "TAX 18%",
+            showColumnHeaders = true,
+            showCoordinates = true,
+            gridTheme = ExcelGridTheme.AMBER_GOLD,
+            items = listOf(
+                ExcelTableCellItem(
+                    source = TableItemSource.VARIABLE,
+                    variableName = "price",
+                    label = "Base Price",
+                    prefix = "$",
+                    postfix = " USD",
+                    coordinate = "A1",
+                    isVisible = true,
+                    isEmphasized = false
+                ),
+                ExcelTableCellItem(
+                    source = TableItemSource.FORMULA_RESULT,
+                    label = "GRAND TOTAL",
+                    prefix = "$",
+                    coordinate = "A2",
+                    isVisible = true,
+                    isEmphasized = true
+                )
+            )
+        )
+
+        val json = table.toJson()
+        val restored = ExcelTableConfig.fromJson(json)
+
+        assertEquals("RECEIPT BREAKDOWN", restored.headerTitle)
+        assertEquals("TAX 18%", restored.headerSubtitle)
+        assertEquals(ExcelGridTheme.AMBER_GOLD, restored.gridTheme)
+        assertEquals(2, restored.items.size)
+
+        val item1 = restored.items[0]
+        assertEquals("Base Price", item1.label)
+        assertEquals("$", item1.prefix)
+        assertEquals(" USD", item1.postfix)
+        assertEquals("A1", item1.coordinate)
+        assertFalse(item1.isEmphasized)
+
+        val item2 = restored.items[1]
+        assertEquals("GRAND TOTAL", item2.label)
+        assertTrue(item2.isEmphasized)
+    }
+
+    @Test
+    fun testResolveTableRowsFormattingAndEmphasis() {
+        val tableConfig = ExcelTableConfig(
+            items = listOf(
+                ExcelTableCellItem(
+                    source = TableItemSource.VARIABLE,
+                    variableName = "price",
+                    label = "Price",
+                    prefix = "$",
+                    coordinate = "A1",
+                    isVisible = true
+                ),
+                ExcelTableCellItem(
+                    source = TableItemSource.VARIABLE,
+                    variableName = "grams",
+                    label = "Grams",
+                    postfix = "g",
+                    coordinate = "A2",
+                    isVisible = false // Hidden
+                ),
+                ExcelTableCellItem(
+                    source = TableItemSource.COMPUTED,
+                    variableName = "unit_price",
+                    label = "Unit Price",
+                    prefix = "$",
+                    postfix = "/g",
+                    coordinate = "A3",
+                    isVisible = true,
+                    isEmphasized = true
+                )
+            )
+        )
+
+        val sampleResult = ParsedQrResult(
+            rawText = "50-250",
+            extractedVariables = mapOf(
+                "price" to 50.0,
+                "grams" to 250.0,
+                "unit_price" to 0.20
+            ),
+            status = CalculationStatus.Success(0.20, "$0.20")
+        )
+
+        val resolved = com.example.ui.resolveTableRows(tableConfig, sampleResult)
+
+        // Grams was isVisible = false, so only 2 rows should be present
+        assertEquals(2, resolved.size)
+
+        val row1 = resolved[0]
+        assertEquals("Price", row1.first.label)
+        assertEquals("$50", row1.second)
+        assertFalse(row1.first.isEmphasized)
+
+        val row2 = resolved[1]
+        assertEquals("Unit Price", row2.first.label)
+        assertEquals("$0.20/g", row2.second)
+        assertTrue(row2.first.isEmphasized)
     }
 }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -30,9 +31,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -159,10 +162,517 @@ fun QrTrackingHudElement(
 }
 
 /**
- * Renders the customizable CSS-like visual card for a calculation result or error.
+ * Main overlay router: dispatches between Mini Excel Table, Compact Card, or Hybrid mode.
  */
 @Composable
 fun OverlayCardContent(
+    result: ParsedQrResult,
+    config: OverlayAppearance,
+    modifier: Modifier = Modifier
+) {
+    when (config.displayMode) {
+        OverlayDisplayMode.EXCEL_TABLE -> {
+            ExcelTableOverlayContent(
+                result = result,
+                config = config,
+                modifier = modifier
+            )
+        }
+        OverlayDisplayMode.COMPACT_CARD -> {
+            CompactCardOverlayContent(
+                result = result,
+                config = config,
+                modifier = modifier
+            )
+        }
+        OverlayDisplayMode.HYBRID -> {
+            Column(
+                modifier = modifier,
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CompactCardOverlayContent(result = result, config = config)
+                ExcelTableOverlayContent(result = result, config = config)
+            }
+        }
+    }
+}
+
+/**
+ * Palette colors for the Mini Excel Table themes.
+ */
+data class ExcelThemeColors(
+    val accent: Color,
+    val headerBgStart: Color,
+    val headerBgEnd: Color,
+    val containerBg: Color,
+    val gridBorder: Color,
+    val rowBgEven: Color,
+    val rowBgOdd: Color,
+    val textPrimary: Color,
+    val textSecondary: Color,
+    val coordinateBg: Color,
+    val coordinateText: Color,
+    val emphasizedBg: Brush,
+    val emphasizedBorder: Color,
+    val emphasizedText: Color
+)
+
+fun getExcelThemeColors(theme: ExcelGridTheme): ExcelThemeColors {
+    return when (theme) {
+        ExcelGridTheme.EXCEL_CLASSIC -> ExcelThemeColors(
+            accent = Color(0xFF107C41),
+            headerBgStart = Color(0xFF0F3B25),
+            headerBgEnd = Color(0xFF0A2216),
+            containerBg = Color(0xF5071A11),
+            gridBorder = Color(0x4422C55E),
+            rowBgEven = Color(0x00000000),
+            rowBgOdd = Color(0x1822C55E),
+            textPrimary = Color(0xFFF1F5F9),
+            textSecondary = Color(0xFF86EFAC),
+            coordinateBg = Color(0xFF0A2E1C),
+            coordinateText = Color(0xFF4ADE80),
+            emphasizedBg = Brush.horizontalGradient(listOf(Color(0xFF065F46), Color(0xFF047857))),
+            emphasizedBorder = Color(0xFF34D399),
+            emphasizedText = Color(0xFFFFFFFF)
+        )
+        ExcelGridTheme.NEON_CYAN -> ExcelThemeColors(
+            accent = Color(0xFF00F5D4),
+            headerBgStart = Color(0xFF083344),
+            headerBgEnd = Color(0xFF041C24),
+            containerBg = Color(0xF5031B22),
+            gridBorder = Color(0x4400F5D4),
+            rowBgEven = Color(0x00000000),
+            rowBgOdd = Color(0x1800F5D4),
+            textPrimary = Color(0xFFF0FDFA),
+            textSecondary = Color(0xFF5EEAD4),
+            coordinateBg = Color(0xFF072935),
+            coordinateText = Color(0xFF2DD4BF),
+            emphasizedBg = Brush.horizontalGradient(listOf(Color(0xFF0E7490), Color(0xFF0891B2))),
+            emphasizedBorder = Color(0xFF22D3EE),
+            emphasizedText = Color(0xFFFFFFFF)
+        )
+        ExcelGridTheme.MODERN_SLATE -> ExcelThemeColors(
+            accent = Color(0xFF38BDF8),
+            headerBgStart = Color(0xFF1E293B),
+            headerBgEnd = Color(0xFF0F172A),
+            containerBg = Color(0xF50B1120),
+            gridBorder = Color(0x4438BDF8),
+            rowBgEven = Color(0x00000000),
+            rowBgOdd = Color(0x1838BDF8),
+            textPrimary = Color(0xFFF8FAFC),
+            textSecondary = Color(0xFF94A3B8),
+            coordinateBg = Color(0xFF1E293B),
+            coordinateText = Color(0xFF7DD3FC),
+            emphasizedBg = Brush.horizontalGradient(listOf(Color(0xFF0369A1), Color(0xFF0284C7))),
+            emphasizedBorder = Color(0xFF38BDF8),
+            emphasizedText = Color(0xFFFFFFFF)
+        )
+        ExcelGridTheme.AMBER_GOLD -> ExcelThemeColors(
+            accent = Color(0xFFF59E0B),
+            headerBgStart = Color(0xFF451A03),
+            headerBgEnd = Color(0xFF260E02),
+            containerBg = Color(0xF51C0D03),
+            gridBorder = Color(0x44F59E0B),
+            rowBgEven = Color(0x00000000),
+            rowBgOdd = Color(0x18F59E0B),
+            textPrimary = Color(0xFFFEF3C7),
+            textSecondary = Color(0xFFFCD34D),
+            coordinateBg = Color(0xFF351502),
+            coordinateText = Color(0xFFFBBF24),
+            emphasizedBg = Brush.horizontalGradient(listOf(Color(0xFF92400E), Color(0xFFB45309))),
+            emphasizedBorder = Color(0xFFF59E0B),
+            emphasizedText = Color(0xFFFFFFFF)
+        )
+    }
+}
+
+/**
+ * Resolves effective rows with formatted values, prefixes, and postfixes.
+ */
+fun resolveTableRows(
+    tableConfig: ExcelTableConfig,
+    result: ParsedQrResult
+): List<Pair<ExcelTableCellItem, String>> {
+    val itemsToUse = if (tableConfig.items.isNotEmpty()) {
+        tableConfig.items
+    } else {
+        // Auto-generate from extracted variables + formula result
+        val autoList = mutableListOf<ExcelTableCellItem>()
+        var coordIdx = 1
+        result.extractedVariables.forEach { (name, _) ->
+            if (!name.contains("_alias")) {
+                autoList.add(
+                    ExcelTableCellItem(
+                        source = TableItemSource.VARIABLE,
+                        variableName = name,
+                        label = name.replaceFirstChar { it.uppercase() },
+                        coordinate = "A$coordIdx",
+                        isVisible = true,
+                        isEmphasized = false
+                    )
+                )
+                coordIdx++
+            }
+        }
+        autoList.add(
+            ExcelTableCellItem(
+                source = TableItemSource.FORMULA_RESULT,
+                label = "TOTAL",
+                coordinate = "A$coordIdx",
+                isVisible = true,
+                isEmphasized = true
+            )
+        )
+        autoList
+    }
+
+    return itemsToUse.filter { it.isVisible }.mapIndexed { index, item ->
+        val resolvedValue = when (item.source) {
+            TableItemSource.VARIABLE, TableItemSource.COMPUTED -> {
+                val numVal = result.extractedVariables[item.variableName]
+                if (numVal != null) {
+                    val formattedNum = if (numVal % 1.0 == 0.0) {
+                        numVal.toLong().toString()
+                    } else {
+                        "%.2f".format(numVal)
+                    }
+                    "${item.prefix}$formattedNum${item.postfix}"
+                } else {
+                    val strVal = result.extractedStrings[item.variableName]
+                    if (strVal != null) {
+                        "${item.prefix}$strVal${item.postfix}"
+                    } else if (item.customValue.isNotBlank()) {
+                        "${item.prefix}${item.customValue}${item.postfix}"
+                    } else {
+                        "-"
+                    }
+                }
+            }
+            TableItemSource.FORMULA_RESULT -> {
+                when (val status = result.status) {
+                    is CalculationStatus.Success -> {
+                        "${item.prefix}${status.formattedText}${item.postfix}"
+                    }
+                    is CalculationStatus.ParseError -> "ERR"
+                    is CalculationStatus.EvaluationError -> "ERR"
+                }
+            }
+            TableItemSource.RAW_QR -> {
+                "${item.prefix}${result.rawText.take(16)}${item.postfix}"
+            }
+            TableItemSource.CUSTOM_TEXT -> {
+                "${item.prefix}${item.customValue}${item.postfix}"
+            }
+        }
+        val effectiveItem = if (item.coordinate.isBlank()) {
+            item.copy(coordinate = "A${index + 1}")
+        } else item
+        Pair(effectiveItem, resolvedValue)
+    }
+}
+
+/**
+ * Renders the high-fidelity Mini Excel Spreadsheet Table overlay.
+ */
+@Composable
+fun ExcelTableOverlayContent(
+    result: ParsedQrResult,
+    config: OverlayAppearance,
+    modifier: Modifier = Modifier
+) {
+    val tableConfig = config.tableConfig
+    val themeColors = getExcelThemeColors(tableConfig.gridTheme)
+    val shape = RoundedCornerShape(10.dp)
+
+    val rows = resolveTableRows(tableConfig, result)
+
+    Box(
+        modifier = modifier
+            .graphicsLayer {
+                scaleX = config.scale
+                scaleY = config.scale
+            }
+            .shadow(elevation = 12.dp, shape = shape, spotColor = themeColors.accent, ambientColor = themeColors.accent)
+            .border(1.dp, themeColors.gridBorder, shape)
+            .background(themeColors.containerBg, shape)
+            .clip(shape)
+            .widthIn(min = 200.dp, max = 340.dp)
+            .padding(config.paddingDp.dp.coerceAtMost(10.dp))
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            // 1. Spreadsheet Header Bar (if enabled)
+            if (tableConfig.showHeader) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(themeColors.headerBgStart, themeColors.headerBgEnd)
+                            )
+                        )
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(20.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(themeColors.accent),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.TableChart,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = tableConfig.headerTitle.ifBlank { "DATA SHEET" }.uppercase(),
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.8.sp
+                        )
+                    }
+
+                    if (tableConfig.headerSubtitle.isNotBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color.Black.copy(alpha = 0.4f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = tableConfig.headerSubtitle,
+                                color = themeColors.textSecondary,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            // 2. Column Headers Row (if enabled)
+            if (tableConfig.showColumnHeaders && rows.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color.Black.copy(alpha = 0.35f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (tableConfig.showCoordinates) {
+                        Text(
+                            text = "#",
+                            color = themeColors.textSecondary.copy(alpha = 0.8f),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.width(28.dp),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                    Text(
+                        text = "CELL / PARAMETER",
+                        color = themeColors.textSecondary.copy(alpha = 0.8f),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                        modifier = Modifier.weight(1.1f)
+                    )
+                    Text(
+                        text = "VALUE",
+                        color = themeColors.textSecondary.copy(alpha = 0.8f),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                        modifier = Modifier.weight(1.2f),
+                        textAlign = TextAlign.End
+                    )
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+            }
+
+            // 3. Data Rows & Cells
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .border(
+                        if (tableConfig.showGridLines) 0.5.dp else 0.dp,
+                        themeColors.gridBorder.copy(alpha = 0.3f),
+                        RoundedCornerShape(6.dp)
+                    )
+            ) {
+                rows.forEachIndexed { index, (item, resolvedVal) ->
+                    val isEven = index % 2 == 0
+                    val rowBg = if (item.isEmphasized) {
+                        themeColors.emphasizedBg
+                    } else if (isEven) {
+                        Brush.horizontalGradient(listOf(themeColors.rowBgEven, themeColors.rowBgEven))
+                    } else {
+                        Brush.horizontalGradient(listOf(themeColors.rowBgOdd, themeColors.rowBgOdd))
+                    }
+
+                    val rowBorder = if (item.isEmphasized) {
+                        Modifier.border(1.dp, themeColors.emphasizedBorder, RoundedCornerShape(4.dp))
+                    } else Modifier
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(rowBorder)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(rowBg)
+                            .padding(horizontal = 8.dp, vertical = if (item.isEmphasized) 6.dp else 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Cell Coordinate (A1, A2...)
+                        if (tableConfig.showCoordinates) {
+                            Box(
+                                modifier = Modifier
+                                    .width(28.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(
+                                        if (item.isEmphasized) Color.Black.copy(alpha = 0.3f) else themeColors.coordinateBg
+                                    )
+                                    .padding(vertical = 1.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = item.coordinate.ifBlank { "A${index + 1}" },
+                                    color = if (item.isEmphasized) Color.White else themeColors.coordinateText,
+                                    fontSize = 8.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+
+                        // Parameter / Item Label
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1.1f)
+                        ) {
+                            if (item.isEmphasized) {
+                                Icon(
+                                    imageVector = Icons.Default.Star,
+                                    contentDescription = "Emphasized",
+                                    tint = Color(0xFFFBBF24),
+                                    modifier = Modifier
+                                        .size(11.dp)
+                                        .padding(end = 3.dp)
+                                )
+                            }
+                            Text(
+                                text = item.label.ifBlank { item.variableName.ifBlank { "Item" } },
+                                color = if (item.isEmphasized) themeColors.emphasizedText else themeColors.textPrimary,
+                                fontSize = if (item.isEmphasized) 12.sp else 11.sp,
+                                fontWeight = if (item.isEmphasized) FontWeight.Bold else FontWeight.Medium,
+                                maxLines = 1
+                            )
+                        }
+
+                        // Formatted Cell Value
+                        Text(
+                            text = resolvedVal,
+                            color = if (item.isEmphasized) themeColors.emphasizedText else themeColors.accent,
+                            fontSize = if (item.isEmphasized) 13.sp else 11.sp,
+                            fontWeight = if (item.isEmphasized) FontWeight.ExtraBold else FontWeight.SemiBold,
+                            fontFamily = FontFamily.Monospace,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.weight(1.2f),
+                            maxLines = 1
+                        )
+                    }
+
+                    // Divider between rows if enabled
+                    if (tableConfig.showGridLines && index < rows.size - 1 && !item.isEmphasized) {
+                        HorizontalDivider(
+                            color = themeColors.gridBorder.copy(alpha = 0.25f),
+                            thickness = 0.5.dp
+                        )
+                    }
+                }
+            }
+
+            // 4. Status Warning if Parse or Math Error
+            when (val status = result.status) {
+                is CalculationStatus.ParseError -> {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xFF450A0A))
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Color(0xFFEF4444),
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "#PARSE: ${status.message}",
+                            color = Color(0xFFFCA5A5),
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                is CalculationStatus.EvaluationError -> {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xFF451A03))
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ErrorOutline,
+                            contentDescription = null,
+                            tint = Color(0xFFF59E0B),
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "#VALUE!: ${status.message}",
+                            color = Color(0xFFFDE68A),
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                is CalculationStatus.Success -> {
+                    // All good
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Classic single-card overlay with variable pills.
+ */
+@Composable
+fun CompactCardOverlayContent(
     result: ParsedQrResult,
     config: OverlayAppearance,
     modifier: Modifier = Modifier
@@ -215,6 +725,10 @@ fun OverlayCardContent(
 
     Box(
         modifier = modifier
+            .graphicsLayer {
+                scaleX = config.scale
+                scaleY = config.scale
+            }
             .then(shadowModifier)
             .then(borderModifier)
             .then(backgroundModifier)
@@ -349,9 +863,12 @@ fun OverlayCardContent(
                         Spacer(modifier = Modifier.width(4.dp))
                     }
 
-                    // Individual Variable Pills
+                    // Individual Variable Pills with custom prefix and postfix
                     visibleVariables.forEach { (name, value) ->
-                        val cleanVal = if (value % 1.0 == 0.0) value.toLong().toString() else "%.1f".format(value)
+                        val formattedVal = result.variablePillDisplay[name] ?: run {
+                            val cleanVal = if (value % 1.0 == 0.0) value.toLong().toString() else "%.2f".format(value)
+                            cleanVal
+                        }
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
@@ -360,8 +877,8 @@ fun OverlayCardContent(
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = "$name: $cleanVal",
-                                color = Color.White.copy(alpha = 0.9f),
+                                text = "$name: $formattedVal",
+                                color = Color.White.copy(alpha = 0.95f),
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -373,6 +890,7 @@ fun OverlayCardContent(
         }
     }
 }
+
 
 /**
  * Draws high-tech corner brackets around the tracked QR code
