@@ -77,7 +77,12 @@ fun FormattingSettingsSection(
         item {
             Text(text = "Numeric Type", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 listOf("Integer", "Float", "Double").forEach { type ->
                     FilterChip(
                         selected = formatting.numericType == type,
@@ -153,7 +158,12 @@ fun FormattingSettingsSection(
             }
 
             Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 listOf("$", "€", "₺", "£", "¥").forEach { p ->
                     AssistChip(
                         onClick = { onFormattingChanged(formatting.copy(prefix = p)) },
@@ -176,12 +186,17 @@ fun FormattingSettingsSection(
 
             Text("Thousands Separator", style = MaterialTheme.typography.labelMedium)
             Spacer(modifier = Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 listOf("none" to "None", "," to "Comma (,)", "." to "Dot (.)", " " to "Space ( )", "'" to "Apostrophe (')").forEach { (code, label) ->
                     FilterChip(
                         selected = formatting.thousandsSeparator == code,
                         onClick = { onFormattingChanged(formatting.copy(thousandsSeparator = code)) },
-                        label = { Text(label, fontSize = 11.sp) }
+                        label = { Text(label, fontSize = 12.sp) }
                     )
                 }
             }
@@ -190,7 +205,12 @@ fun FormattingSettingsSection(
 
             Text("Decimal Separator", style = MaterialTheme.typography.labelMedium)
             Spacer(modifier = Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = formatting.decimalSeparator == ".",
                     onClick = { onFormattingChanged(formatting.copy(decimalSeparator = ".")) },
@@ -212,7 +232,12 @@ fun FormattingSettingsSection(
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text(text = "Negative Number Format", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.height(6.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         listOf("-x" to "-100", "(x)" to "(100)", "-prefix" to "-$100").forEach { (fmt, example) ->
                             FilterChip(
                                 selected = formatting.negativeFormat == fmt,
