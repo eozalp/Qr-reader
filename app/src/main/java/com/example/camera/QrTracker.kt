@@ -109,23 +109,22 @@ class QrTracker {
     }
 
     fun processQr(rawText: String, profile: QrProfile): ParsedQrResult {
-        // Step 1: Parse variables
+        // Step 1: Parse variables & evaluate computed variables
         return when (val parseOutcome = QrParser.parse(rawText, profile.parsingRules)) {
             is QrParseOutcome.Error -> {
                 ParsedQrResult(
                     rawText = rawText,
                     status = CalculationStatus.ParseError(parseOutcome.message),
-                    formulaExpression = profile.formula.expression
+                    formulaExpression = ""
                 )
             }
             is QrParseOutcome.Success -> {
-                // Pre-compute formatted display string for each variable pill with its individual prefix and postfix
+                // Pre-compute formatted display string for each variable pill with its individual prefix, postfix, and decimal settings
                 val pillDisplay = mutableMapOf<String, String>()
                 for (v in profile.parsingRules.variables) {
                     val numVal = parseOutcome.numericVariables[v.name]
                     if (numVal != null) {
-                        val clean = if (numVal % 1.0 == 0.0) numVal.toLong().toString() else "%.2f".format(numVal)
-                        val displayStr = "${v.prefix}$clean${v.postfix}"
+                        val displayStr = ResultFormatter.formatVariable(numVal, v, profile.formatting)
                         pillDisplay[v.name] = displayStr
                         if (v.alias.isNotBlank()) {
                             pillDisplay[v.alias] = displayStr
@@ -142,30 +141,67 @@ class QrTracker {
                     }
                 }
 
-                // Step 2: Math formula evaluation
-                when (val evalOutcome = mathEvaluator.evaluate(profile.formula.expression, parseOutcome.numericVariables)) {
-                    is MathResult.Error -> {
-                        ParsedQrResult(
-                            rawText = rawText,
-                            extractedVariables = parseOutcome.numericVariables,
-                            extractedStrings = parseOutcome.stringVariables,
-                            variablePillDisplay = pillDisplay,
-                            status = CalculationStatus.EvaluationError(evalOutcome.message),
-                            formulaExpression = profile.formula.expression
-                        )
+                // Step 2: Determine primary result from computed variables
+                val computedVars = profile.parsingRules.variables.filter { it.isComputed }
+                val primaryComputed = computedVars.lastOrNull() ?: computedVars.firstOrNull()
+
+                if (primaryComputed != null) {
+                    val compValue = parseOutcome.numericVariables[primaryComputed.name] ?: 0.0
+                    val formattedResult = pillDisplay[primaryComputed.name]
+                        ?: ResultFormatter.formatVariable(compValue, primaryComputed, profile.formatting)
+
+                    ParsedQrResult(
+                        rawText = rawText,
+                        extractedVariables = parseOutcome.numericVariables,
+                        extractedStrings = parseOutcome.stringVariables,
+                        variablePillDisplay = pillDisplay,
+                        status = CalculationStatus.Success(compValue, formattedResult),
+                        formulaExpression = "${primaryComputed.name} = ${primaryComputed.computationFormula}"
+                    )
+                } else if (profile.formula.expression.isNotBlank()) {
+                    // Graceful formula evaluation fallback when no computed variables defined
+                    when (val evalOutcome = mathEvaluator.evaluate(profile.formula.expression, parseOutcome.numericVariables)) {
+                        is MathResult.Success -> {
+                            val formatted = ResultFormatter.format(evalOutcome.value, profile.formatting)
+                            ParsedQrResult(
+                                rawText = rawText,
+                                extractedVariables = parseOutcome.numericVariables,
+                                extractedStrings = parseOutcome.stringVariables,
+                                variablePillDisplay = pillDisplay,
+                                status = CalculationStatus.Success(evalOutcome.value, formatted),
+                                formulaExpression = profile.formula.expression
+                            )
+                        }
+                        is MathResult.Error -> {
+                            ParsedQrResult(
+                                rawText = rawText,
+                                extractedVariables = parseOutcome.numericVariables,
+                                extractedStrings = parseOutcome.stringVariables,
+                                variablePillDisplay = pillDisplay,
+                                status = CalculationStatus.EvaluationError(evalOutcome.message),
+                                formulaExpression = profile.formula.expression
+                            )
+                        }
                     }
-                    is MathResult.Success -> {
-                        // Step 3: Format the calculated result
-                        val formatted = ResultFormatter.format(evalOutcome.value, profile.formatting)
-                        ParsedQrResult(
-                            rawText = rawText,
-                            extractedVariables = parseOutcome.numericVariables,
-                            extractedStrings = parseOutcome.stringVariables,
-                            variablePillDisplay = pillDisplay,
-                            status = CalculationStatus.Success(evalOutcome.value, formatted),
-                            formulaExpression = profile.formula.expression
-                        )
+                } else {
+                    // No computed variable defined: use first token variable or primary numeric value
+                    val firstVar = profile.parsingRules.variables.firstOrNull { !it.isManual }
+                        ?: profile.parsingRules.variables.firstOrNull()
+                    val numVal = if (firstVar != null) parseOutcome.numericVariables[firstVar.name] ?: 0.0 else 0.0
+                    val formatted = if (firstVar != null) {
+                        pillDisplay[firstVar.name] ?: ResultFormatter.formatVariable(numVal, firstVar, profile.formatting)
+                    } else {
+                        ResultFormatter.format(numVal, profile.formatting)
                     }
+
+                    ParsedQrResult(
+                        rawText = rawText,
+                        extractedVariables = parseOutcome.numericVariables,
+                        extractedStrings = parseOutcome.stringVariables,
+                        variablePillDisplay = pillDisplay,
+                        status = CalculationStatus.Success(numVal, formatted),
+                        formulaExpression = ""
+                    )
                 }
             }
         }

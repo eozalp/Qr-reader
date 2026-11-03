@@ -196,7 +196,7 @@ fun FormattingSettingsSection(
                     FilterChip(
                         selected = formatting.thousandsSeparator == code,
                         onClick = { onFormattingChanged(formatting.copy(thousandsSeparator = code)) },
-                        label = { Text(label, fontSize = 12.sp) }
+                        label = { Text(label, fontSize = 12.sp, maxLines = 1, softWrap = false) }
                     )
                 }
             }

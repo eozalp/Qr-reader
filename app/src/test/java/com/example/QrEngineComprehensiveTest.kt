@@ -8,12 +8,6 @@ import com.example.engine.*
 import com.example.model.*
 import org.junit.Assert.*
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
-import org.robolectric.annotation.Config
-
-@RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
 class QrEngineComprehensiveTest {
 
     // --- QR Parsing Tests ---
@@ -550,5 +544,54 @@ class QrEngineComprehensiveTest {
         assertEquals(1, restored.parsingRules.variables.size)
         assertTrue(restored.parsingRules.variables[0].isManual)
         assertEquals("3.1415", restored.parsingRules.variables[0].defaultValue)
+    }
+
+    @Test
+    fun testComputedVariablesInParsing() {
+        // Barcode gives price (150) and grams (25).
+        // Computed variable 'price_per_gram' computes price / grams = 6.0
+        val rules = QrParsingRules(
+            delimiter = "-",
+            variables = listOf(
+                VariableDefinition(position = 0, name = "price"),
+                VariableDefinition(position = 1, name = "grams"),
+                VariableDefinition(
+                    name = "price_per_gram",
+                    isComputed = true,
+                    computationFormula = "price / grams",
+                    prefix = "$",
+                    postfix = "/g",
+                    decimalPlaces = 2
+                )
+            )
+        )
+
+        val outcome = QrParser.parse("150-25", rules)
+        assertTrue(outcome is QrParseOutcome.Success)
+        val vars = (outcome as QrParseOutcome.Success).numericVariables
+        assertEquals(150.0, vars["price"]!!, 1e-6)
+        assertEquals(25.0, vars["grams"]!!, 1e-6)
+        assertEquals(6.0, vars["price_per_gram"]!!, 1e-6)
+    }
+
+    @Test
+    fun testVariableIndividualDecimalFormatting() {
+        val var3Decimals = VariableDefinition(
+            name = "rate",
+            decimalPlaces = 3,
+            prefix = "₺",
+            postfix = "/g"
+        )
+        val var0Decimals = VariableDefinition(
+            name = "qty",
+            decimalPlaces = 0,
+            postfix = " pcs"
+        )
+
+        val formatted1 = ResultFormatter.formatVariable(12.34567, var3Decimals, null, includePrefixPostfix = true)
+        assertEquals("₺12.346/g", formatted1)
+
+        val formatted2 = ResultFormatter.formatVariable(42.89, var0Decimals, null, includePrefixPostfix = true)
+        assertEquals("43 pcs", formatted2)
     }
 }

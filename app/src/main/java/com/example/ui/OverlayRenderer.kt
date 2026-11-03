@@ -292,38 +292,31 @@ fun getExcelThemeColors(theme: ExcelGridTheme): ExcelThemeColors {
  */
 fun resolveTableRows(
     tableConfig: ExcelTableConfig,
-    result: ParsedQrResult
+    result: ParsedQrResult,
+    variableDefs: List<VariableDefinition> = emptyList()
 ): List<Pair<ExcelTableCellItem, String>> {
     val itemsToUse = if (tableConfig.items.isNotEmpty()) {
         tableConfig.items
     } else {
-        // Auto-generate from extracted variables + formula result
+        // Auto-generate from extracted variables + computed variables
         val autoList = mutableListOf<ExcelTableCellItem>()
         var coordIdx = 1
         result.extractedVariables.forEach { (name, _) ->
             if (!name.contains("_alias")) {
+                val isComp = variableDefs.find { it.name == name }?.isComputed ?: false
                 autoList.add(
                     ExcelTableCellItem(
-                        source = TableItemSource.VARIABLE,
+                        source = if (isComp) TableItemSource.COMPUTED else TableItemSource.VARIABLE,
                         variableName = name,
                         label = name.replaceFirstChar { it.uppercase() },
                         coordinate = "A$coordIdx",
                         isVisible = true,
-                        isEmphasized = false
+                        isEmphasized = isComp
                     )
                 )
                 coordIdx++
             }
         }
-        autoList.add(
-            ExcelTableCellItem(
-                source = TableItemSource.FORMULA_RESULT,
-                label = "TOTAL",
-                coordinate = "A$coordIdx",
-                isVisible = true,
-                isEmphasized = true
-            )
-        )
         autoList
     }
 
@@ -332,16 +325,25 @@ fun resolveTableRows(
             TableItemSource.VARIABLE, TableItemSource.COMPUTED -> {
                 val numVal = result.extractedVariables[item.variableName]
                 if (numVal != null) {
-                    val formattedNum = if (numVal % 1.0 == 0.0) {
-                        numVal.toLong().toString()
+                    val varDef = variableDefs.find { it.name == item.variableName || it.alias == item.variableName }
+                    val bareFormatted = if (varDef != null) {
+                        com.example.engine.ResultFormatter.formatVariable(numVal, varDef, includePrefixPostfix = false)
                     } else {
-                        "%.2f".format(numVal)
+                        if (numVal % 1.0 == 0.0) {
+                            numVal.toLong().toString()
+                        } else {
+                            "%.2f".format(numVal)
+                        }
                     }
-                    "${item.prefix}$formattedNum${item.postfix}"
+                    val effectivePrefix = if (item.prefix.isNotEmpty()) item.prefix else (varDef?.prefix ?: "")
+                    val effectivePostfix = if (item.postfix.isNotEmpty()) item.postfix else (varDef?.postfix ?: "")
+                    "$effectivePrefix$bareFormatted$effectivePostfix"
                 } else {
                     val strVal = result.extractedStrings[item.variableName]
                     if (strVal != null) {
-                        "${item.prefix}$strVal${item.postfix}"
+                        val effectivePrefix = if (item.prefix.isNotEmpty()) item.prefix else ""
+                        val effectivePostfix = if (item.postfix.isNotEmpty()) item.postfix else ""
+                        "$effectivePrefix$strVal$effectivePostfix"
                     } else if (item.customValue.isNotBlank()) {
                         "${item.prefix}${item.customValue}${item.postfix}"
                     } else {

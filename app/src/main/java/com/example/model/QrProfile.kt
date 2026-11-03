@@ -34,7 +34,13 @@ data class VariableDefinition(
     val computationFormula: String = "", // e.g. "price / grams" or "a / b"
     val isManual: Boolean = false, // True if manually added variable not extracted from barcode tokens
     val minValue: Double? = null,
-    val maxValue: Double? = null
+    val maxValue: Double? = null,
+    val decimalPlaces: Int? = null, // null = Auto/Inherit from profile, 0 = Integer, 1..6
+    val thousandsSeparator: String = "inherit", // "inherit", "none", ",", ".", " ", "'"
+    val decimalSeparator: String = "inherit", // "inherit", ".", ","
+    val roundingMode: AppRoundingMode? = null, // null = inherit from profile
+    val isPercentage: Boolean = false, // If true, treats and formats as percentage
+    val negativeFormat: String = "inherit" // "inherit", "-x", "(x)", "-$x"
 ) {
     fun toJson(): JSONObject {
         return JSONObject().apply {
@@ -54,6 +60,12 @@ data class VariableDefinition(
             put("isManual", isManual)
             if (minValue != null) put("minValue", minValue)
             if (maxValue != null) put("maxValue", maxValue)
+            if (decimalPlaces != null) put("decimalPlaces", decimalPlaces)
+            put("thousandsSeparator", thousandsSeparator)
+            put("decimalSeparator", decimalSeparator)
+            if (roundingMode != null) put("roundingMode", roundingMode.name)
+            put("isPercentage", isPercentage)
+            put("negativeFormat", negativeFormat)
         }
     }
 
@@ -77,7 +89,15 @@ data class VariableDefinition(
                 computationFormula = json.optString("computationFormula", ""),
                 isManual = json.optBoolean("isManual", false),
                 minValue = if (json.has("minValue")) json.optDouble("minValue") else null,
-                maxValue = if (json.has("maxValue")) json.optDouble("maxValue") else null
+                maxValue = if (json.has("maxValue")) json.optDouble("maxValue") else null,
+                decimalPlaces = if (json.has("decimalPlaces") && !json.isNull("decimalPlaces")) json.optInt("decimalPlaces") else null,
+                thousandsSeparator = json.optString("thousandsSeparator", "inherit"),
+                decimalSeparator = json.optString("decimalSeparator", "inherit"),
+                roundingMode = if (json.has("roundingMode")) runCatching {
+                    AppRoundingMode.valueOf(json.getString("roundingMode"))
+                }.getOrNull() else null,
+                isPercentage = json.optBoolean("isPercentage", false),
+                negativeFormat = json.optString("negativeFormat", "inherit")
             )
         }
     }

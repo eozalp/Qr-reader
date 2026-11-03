@@ -19,12 +19,11 @@ import com.example.data.ProfileRepository
 import com.example.model.QrProfile
 
 enum class SettingsTab(val title: String, val icon: ImageVector) {
-    PARSING("Parsing", Icons.Default.QrCodeScanner),
-    FORMULA("Formula", Icons.Default.Calculate),
+    VARIABLES("Variables", Icons.Default.QrCodeScanner),
     TABLE("Table", Icons.Default.TableChart),
     OVERLAY("Style", Icons.Default.Layers),
     FORMAT("Format", Icons.Default.FormatListNumbered),
-    TRACKING("Tracking", Icons.Default.Tune),
+    TRACKING("Camera", Icons.Default.Tune),
     PROFILES("Profiles", Icons.Default.FolderSpecial)
 }
 
@@ -41,7 +40,7 @@ fun SettingsScreen(
     }
 
     val activeProfile by profileRepository.activeProfile.collectAsState()
-    var selectedTab by remember { mutableStateOf(SettingsTab.PARSING) }
+    var selectedTab by remember { mutableStateOf(SettingsTab.VARIABLES) }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -134,7 +133,7 @@ fun SettingsScreen(
                 .padding(innerPadding)
         ) {
             when (selectedTab) {
-                SettingsTab.PARSING -> {
+                SettingsTab.VARIABLES -> {
                     ParsingSettingsSection(
                         rules = activeProfile.parsingRules,
                         onRulesChanged = { updatedRules ->
@@ -143,15 +142,6 @@ fun SettingsScreen(
                         triggerSignal = activeProfile.triggerSignal,
                         onTriggerSignalChanged = { updatedSignal ->
                             profileRepository.saveProfile(activeProfile.copy(triggerSignal = updatedSignal))
-                        }
-                    )
-                }
-                SettingsTab.FORMULA -> {
-                    FormulaSettingsSection(
-                        formula = activeProfile.formula,
-                        rules = activeProfile.parsingRules,
-                        onFormulaChanged = { updatedFormula ->
-                            profileRepository.saveProfile(activeProfile.copy(formula = updatedFormula))
                         }
                     )
                 }

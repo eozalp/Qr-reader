@@ -27,6 +27,7 @@ import java.util.UUID
 
 import androidx.compose.material.icons.filled.Pin
 import androidx.compose.material.icons.filled.QrCodeScanner
+import com.example.engine.ResultFormatter
 
 @Composable
 fun ParsingSettingsSection(
@@ -603,8 +604,86 @@ fun VariableItemCard(
                     FilterChip(
                         selected = varDef.dataType == type,
                         onClick = { onUpdate(varDef.copy(dataType = type)) },
-                        label = { Text(type.name, fontSize = 11.sp) }
+                        label = { Text(type.name, fontSize = 11.sp, maxLines = 1, softWrap = false) }
                     )
+                }
+            }
+
+            if (varDef.dataType != FieldDataType.STRING) {
+                Spacer(modifier = Modifier.height(10.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Number Formatting & Precision",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Decimal Places
+                Text("Decimal Places:", style = MaterialTheme.typography.labelSmall)
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val decOptions = listOf(
+                        null to "Auto",
+                        0 to "0 (Int)",
+                        1 to "1",
+                        2 to "2",
+                        3 to "3",
+                        4 to "4",
+                        5 to "5",
+                        6 to "6"
+                    )
+                    decOptions.forEach { (dec, label) ->
+                        FilterChip(
+                            selected = varDef.decimalPlaces == dec,
+                            onClick = { onUpdate(varDef.copy(decimalPlaces = dec)) },
+                            label = { Text(label, fontSize = 11.sp, maxLines = 1, softWrap = false) }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Percentage & Separator controls
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Checkbox(
+                            checked = varDef.isPercentage,
+                            onCheckedChange = { onUpdate(varDef.copy(isPercentage = it)) }
+                        )
+                        Text("Percentage (%)", style = MaterialTheme.typography.bodySmall)
+                    }
+
+                    val previewSample = ResultFormatter.formatVariable(1234.5678, varDef, null, true)
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
+                    ) {
+                        Text(
+                            text = "Sample: $previewSample",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
                 }
             }
         }
