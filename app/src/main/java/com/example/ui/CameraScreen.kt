@@ -39,9 +39,14 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.camera.QrCodeAnalyzer
 import com.example.camera.QrTracker
 import com.example.camera.RawDetectedCode
+import com.example.data.AttachmentRepository
 import com.example.data.ProfileRepository
+import com.example.model.QrAttachment
 import com.example.model.QrProfile
 import com.example.model.TrackedQr
+import com.example.ui.attachments.AttachmentDetailDialog
+import com.example.ui.attachments.EditAttachmentDialog
+import com.example.ui.attachments.LinkedAttachmentsSheet
 import java.util.concurrent.Executors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -50,6 +55,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun CameraScreen(
     profileRepository: ProfileRepository,
+    attachmentRepository: AttachmentRepository,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -92,6 +98,13 @@ fun CameraScreen(
     var isSimulatingMovement by remember { mutableStateOf(false) }
     var showSimulationSheet by remember { mutableStateOf(false) }
 
+    // Linked Attachment UI state
+    var showAttachmentsSheet by remember { mutableStateOf(false) }
+    var editingAttachment by remember { mutableStateOf<QrAttachment?>(null) }
+    var viewingAttachment by remember { mutableStateOf<QrAttachment?>(null) }
+    var initialQrForEdit by remember { mutableStateOf("") }
+    var showNewAttachmentDialog by remember { mutableStateOf(false) }
+
     var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
     var cameraInfo by remember { mutableStateOf<CameraInfo?>(null) }
 
@@ -128,7 +141,11 @@ fun CameraScreen(
                     }
                 }
 
-                val updated = qrTracker.update(combined, activeProfile)
+                val updated = qrTracker.update(
+                    detectedScreenBoxes = combined,
+                    profile = activeProfile,
+                    attachmentFinder = { attachmentRepository.findAttachmentForQr(it) }
+                )
                 trackedQrs = updated
             }
         }
@@ -155,7 +172,11 @@ fun CameraScreen(
                     val shifted = RectF(orig.left + dx, orig.top + dy, orig.right + dx, orig.bottom + dy)
                     raw.copy(uprightBoundingBox = shifted)
                 }
-                trackedQrs = qrTracker.update(moved, activeProfile)
+                trackedQrs = qrTracker.update(
+                    detectedScreenBoxes = moved,
+                    profile = activeProfile,
+                    attachmentFinder = { attachmentRepository.findAttachmentForQr(it) }
+                )
             }
         }
     }
@@ -177,7 +198,11 @@ fun CameraScreen(
         while (true) {
             kotlinx.coroutines.delay(50)
             if (trackedQrs.isNotEmpty()) {
-                val updated = qrTracker.update(emptyList(), activeProfile)
+                val updated = qrTracker.update(
+                    detectedScreenBoxes = emptyList<RawDetectedCode>(),
+                    profile = activeProfile,
+                    attachmentFinder = { attachmentRepository.findAttachmentForQr(it) }
+                )
                 trackedQrs = updated
             }
         }
@@ -277,6 +302,7 @@ fun CameraScreen(
                     overlayConfig = activeProfile.overlay.copy(scale = liveOverlayScale),
                     screenWidthPx = screenWidthPx,
                     screenHeightPx = screenHeightPx,
+                    onAttachmentClick = { att -> viewingAttachment = att },
                     modifier = Modifier.fillMaxSize()
                 )
 
@@ -490,15 +516,77 @@ fun CameraScreen(
                 }
             }
 
-            // Bottom action buttons: Simulation Wand & Settings FAB
+            // Quick Attach pill when a QR is currently in camera view
+            val visibleQr = trackedQrs.firstOrNull()
+            if (visibleQr != null) {
+                Surface(
+                    color = Color(0xEE090D16),
+                    shape = RoundedCornerShape(20.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (visibleQr.attachment != null) Color(0xFF00F5D4) else Color(0xFFFFB703)
+                    ),
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                        .padding(bottom = 24.dp, start = 16.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .clickable {
+                            if (visibleQr.attachment != null) {
+                                viewingAttachment = visibleQr.attachment
+                            } else {
+                                initialQrForEdit = visibleQr.rawContent
+                                showNewAttachmentDialog = true
+                            }
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (visibleQr.attachment != null) Icons.Default.CheckCircle else Icons.Default.AttachFile,
+                            contentDescription = null,
+                            tint = if (visibleQr.attachment != null) Color(0xFF00F5D4) else Color(0xFFFFB703),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (visibleQr.attachment != null) {
+                                "📎 ${visibleQr.attachment?.title?.ifBlank { visibleQr.rawContent }?.take(16)}"
+                            } else {
+                                "+ Attach to '${visibleQr.rawContent.take(10)}...'"
+                            },
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            // Bottom action buttons: Linked Data, Simulation Wand & Settings FAB
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .windowInsetsPadding(WindowInsets.navigationBars)
                     .padding(bottom = 24.dp, end = 20.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                FilledTonalButton(
+                    onClick = { showAttachmentsSheet = true },
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = Color(0xDD090D16),
+                        contentColor = Color(0xFFFFB703)
+                    ),
+                    modifier = Modifier.testTag("manage_attachments_btn")
+                ) {
+                    Icon(Icons.Default.AttachFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Linked Data", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+
                 FilledTonalButton(
                     onClick = { showSimulationSheet = true },
                     colors = ButtonDefaults.filledTonalButtonColors(
@@ -508,8 +596,8 @@ fun CameraScreen(
                     modifier = Modifier.testTag("test_ar_simulation_btn")
                 ) {
                     Icon(Icons.Default.Science, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("AR Test Codes", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("AR Codes", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
 
                 FloatingActionButton(
@@ -524,6 +612,59 @@ fun CameraScreen(
                         modifier = Modifier.size(26.dp)
                     )
                 }
+            }
+
+            // Linked Data & Media Management Sheet
+            if (showAttachmentsSheet) {
+                LinkedAttachmentsSheet(
+                    attachmentRepository = attachmentRepository,
+                    onDismiss = { showAttachmentsSheet = false },
+                    onAddNew = {
+                        showAttachmentsSheet = false
+                        initialQrForEdit = trackedQrs.firstOrNull()?.rawContent ?: ""
+                        showNewAttachmentDialog = true
+                    },
+                    onViewDetail = { att ->
+                        showAttachmentsSheet = false
+                        viewingAttachment = att
+                    }
+                )
+            }
+
+            // Edit / Create Attachment Dialog
+            if (showNewAttachmentDialog || editingAttachment != null) {
+                EditAttachmentDialog(
+                    initialAttachment = editingAttachment,
+                    defaultQrCode = initialQrForEdit,
+                    attachmentRepository = attachmentRepository,
+                    onDismiss = {
+                        showNewAttachmentDialog = false
+                        editingAttachment = null
+                        initialQrForEdit = ""
+                    },
+                    onSaved = { _ ->
+                        showNewAttachmentDialog = false
+                        editingAttachment = null
+                        initialQrForEdit = ""
+                        trackedQrs = qrTracker.update(
+                            detectedScreenBoxes = emptyList<RawDetectedCode>(),
+                            profile = activeProfile,
+                            attachmentFinder = { attachmentRepository.findAttachmentForQr(it) }
+                        )
+                    }
+                )
+            }
+
+            // Attachment Detail Lightbox / Viewer
+            if (viewingAttachment != null) {
+                AttachmentDetailDialog(
+                    attachment = viewingAttachment!!,
+                    onDismiss = { viewingAttachment = null },
+                    onEdit = { att ->
+                        viewingAttachment = null
+                        editingAttachment = att
+                    }
+                )
             }
 
             // Simulation Bottom Sheet

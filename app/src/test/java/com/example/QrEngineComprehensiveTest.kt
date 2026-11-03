@@ -594,4 +594,94 @@ class QrEngineComprehensiveTest {
         val formatted2 = ResultFormatter.formatVariable(42.89, var0Decimals, null, includePrefixPostfix = true)
         assertEquals("43 pcs", formatted2)
     }
+
+    // --- QR Attachment & Linked Data Tests ---
+
+    @Test
+    fun testQrAttachmentSerializationAndMatching() {
+        val attachment = QrAttachment(
+            qrContent = "ITEM-9988",
+            title = "Ottoman Antique Amber Tesbih",
+            notes = "Rare 33-bead cherry amber, 19th century.",
+            imageUri = "/data/user/0/com.example/files/qr_media/att_test.jpg",
+            videoUri = "/data/user/0/com.example/files/qr_media/att_test.mp4",
+            customFields = mapOf("Origin" to "Baltic", "Beads" to "33", "Grade" to "A+"),
+            showInOverlay = true,
+            showInTable = true
+        )
+
+        // Matching
+        assertTrue(attachment.matchesQr("ITEM-9988"))
+        assertTrue(attachment.matchesQr("ITEM-9988-SUB"))
+        assertTrue(attachment.matchesQr("PREFIX-ITEM-9988"))
+        assertFalse(attachment.matchesQr("OTHER-CODE"))
+
+        // Serialization & Deserialization
+        val json = attachment.toJson()
+        val parsed = QrAttachment.fromJson(json)
+
+        assertNotNull(parsed)
+        assertEquals(attachment.id, parsed?.id)
+        assertEquals(attachment.qrContent, parsed?.qrContent)
+        assertEquals(attachment.title, parsed?.title)
+        assertEquals(attachment.notes, parsed?.notes)
+        assertEquals(attachment.imageUri, parsed?.imageUri)
+        assertEquals(attachment.videoUri, parsed?.videoUri)
+        assertEquals("Baltic", parsed?.customFields?.get("Origin"))
+        assertEquals("33", parsed?.customFields?.get("Beads"))
+        assertEquals(true, parsed?.showInOverlay)
+        assertEquals(true, parsed?.showInTable)
+    }
+
+    @Test
+    fun testResolveTableRowsWithLinkedAttachment() {
+        val parsedResult = ParsedQrResult(
+            rawText = "150-25",
+            extractedVariables = mapOf("price" to 150.0, "weight" to 25.0),
+            status = CalculationStatus.Success(resultNumber = 6.0, formattedText = "$6.00")
+        )
+
+        val tableConfig = ExcelTableConfig(
+            headerTitle = "Live Specifications",
+            items = listOf(
+                ExcelTableCellItem(
+                    source = TableItemSource.FORMULA_RESULT,
+                    label = "Total",
+                    coordinate = "A1",
+                    isEmphasized = true
+                ),
+                ExcelTableCellItem(
+                    source = TableItemSource.VARIABLE,
+                    variableName = "price",
+                    label = "Price",
+                    coordinate = "A2"
+                )
+            )
+        )
+
+        val attachment = QrAttachment(
+            qrContent = "150-25",
+            title = "Handmade Ring",
+            customFields = mapOf("Material" to "Silver 925", "Gemstone" to "Onyx"),
+            showInTable = true
+        )
+
+        val rows = com.example.ui.resolveTableRows(
+            tableConfig = tableConfig,
+            result = parsedResult,
+            variableDefs = emptyList(),
+            attachment = attachment
+        )
+
+        // Base rows (2) + Attachment rows (Item, Material, Gemstone = 3) -> total 5
+        assertTrue("Rows count should include base rows plus attachment fields", rows.size >= 4)
+
+        val itemPair = rows.find { it.first.label == "Item" }
+        assertNotNull("Expected 'Item' row from attachment", itemPair)
+        assertEquals("Handmade Ring", itemPair?.second)
+
+        val materialPair = rows.find { it.first.label == "Material" }
+        assertNotNull("Expected 'Material' row from attachment", materialPair)
+        assertEquals("Silver 925", materialPair?.second)
+    }
 }

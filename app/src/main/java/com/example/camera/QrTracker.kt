@@ -8,6 +8,7 @@ import com.example.engine.QrParser
 import com.example.engine.ResultFormatter
 import com.example.model.CalculationStatus
 import com.example.model.ParsedQrResult
+import com.example.model.QrAttachment
 import com.example.model.QrProfile
 import com.example.model.TrackedQr
 import java.util.UUID
@@ -29,7 +30,8 @@ class QrTracker {
     fun update(
         detectedScreenBoxes: List<RawDetectedCode>,
         profile: QrProfile,
-        currentTimeMs: Long = System.currentTimeMillis()
+        currentTimeMs: Long = System.currentTimeMillis(),
+        attachmentFinder: ((String) -> QrAttachment?)? = null
     ): List<TrackedQr> {
         val smoothingFactor = profile.tracking.smoothingFactor.coerceIn(0.1f, 1.0f)
         val timeoutMs = profile.tracking.disappearanceTimeoutMs
@@ -52,6 +54,9 @@ class QrTracker {
                 smoothRect(tracked.currentBox, tracked.targetBox, smoothingFactor)
                 tracked.lastSeenMs = currentTimeMs
                 tracked.alpha = 1.0f
+                if (tracked.attachment == null && attachmentFinder != null) {
+                    tracked.attachment = attachmentFinder(tracked.rawContent)
+                }
                 matchedIds.add(tracked.id)
             }
         }
@@ -61,6 +66,7 @@ class QrTracker {
             if (activeTracked.size >= profile.tracking.maxTrackedCodes) break
 
             val initialResult = processQr(unmatched.rawValue, profile)
+            val attachment = attachmentFinder?.invoke(unmatched.rawValue)
             val newTracked = TrackedQr(
                 id = UUID.randomUUID().toString(),
                 rawContent = unmatched.rawValue,
@@ -69,7 +75,8 @@ class QrTracker {
                 result = initialResult,
                 lastSeenMs = currentTimeMs,
                 firstSeenMs = currentTimeMs,
-                alpha = 1.0f
+                alpha = 1.0f,
+                attachment = attachment
             )
             activeTracked.add(newTracked)
             matchedIds.add(newTracked.id)

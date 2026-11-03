@@ -2,10 +2,12 @@ package com.example.ui
 
 import android.graphics.Color as AndroidColor
 import android.graphics.RectF
+import android.net.Uri
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -15,6 +17,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -33,6 +36,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
@@ -42,7 +46,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.model.*
+import java.io.File
 import kotlin.math.roundToInt
 
 @Composable
@@ -51,6 +57,7 @@ fun QrOverlaysCanvas(
     overlayConfig: OverlayAppearance,
     screenWidthPx: Float,
     screenHeightPx: Float,
+    onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -59,7 +66,8 @@ fun QrOverlaysCanvas(
                 tracked = item,
                 overlayConfig = overlayConfig,
                 screenWidthPx = screenWidthPx,
-                screenHeightPx = screenHeightPx
+                screenHeightPx = screenHeightPx,
+                onAttachmentClick = onAttachmentClick
             )
         }
     }
@@ -70,7 +78,8 @@ fun QrTrackingHudElement(
     tracked: TrackedQr,
     overlayConfig: OverlayAppearance,
     screenWidthPx: Float,
-    screenHeightPx: Float
+    screenHeightPx: Float,
+    onAttachmentClick: ((QrAttachment) -> Unit)? = null
 ) {
     val density = LocalDensity.current
     val animatedAlpha by animateFloatAsState(
@@ -156,7 +165,9 @@ fun QrTrackingHudElement(
     ) {
         OverlayCardContent(
             result = tracked.result,
-            config = overlayConfig
+            config = overlayConfig,
+            attachment = tracked.attachment,
+            onAttachmentClick = onAttachmentClick
         )
     }
 }
@@ -168,6 +179,8 @@ fun QrTrackingHudElement(
 fun OverlayCardContent(
     result: ParsedQrResult,
     config: OverlayAppearance,
+    attachment: QrAttachment? = null,
+    onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     when (config.displayMode) {
@@ -175,6 +188,8 @@ fun OverlayCardContent(
             ExcelTableOverlayContent(
                 result = result,
                 config = config,
+                attachment = attachment,
+                onAttachmentClick = onAttachmentClick,
                 modifier = modifier
             )
         }
@@ -182,6 +197,8 @@ fun OverlayCardContent(
             CompactCardOverlayContent(
                 result = result,
                 config = config,
+                attachment = attachment,
+                onAttachmentClick = onAttachmentClick,
                 modifier = modifier
             )
         }
@@ -191,8 +208,18 @@ fun OverlayCardContent(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                CompactCardOverlayContent(result = result, config = config)
-                ExcelTableOverlayContent(result = result, config = config)
+                CompactCardOverlayContent(
+                    result = result,
+                    config = config,
+                    attachment = attachment,
+                    onAttachmentClick = onAttachmentClick
+                )
+                ExcelTableOverlayContent(
+                    result = result,
+                    config = config,
+                    attachment = attachment,
+                    onAttachmentClick = onAttachmentClick
+                )
             }
         }
     }
@@ -293,7 +320,8 @@ fun getExcelThemeColors(theme: ExcelGridTheme): ExcelThemeColors {
 fun resolveTableRows(
     tableConfig: ExcelTableConfig,
     result: ParsedQrResult,
-    variableDefs: List<VariableDefinition> = emptyList()
+    variableDefs: List<VariableDefinition> = emptyList(),
+    attachment: QrAttachment? = null
 ): List<Pair<ExcelTableCellItem, String>> {
     val itemsToUse = if (tableConfig.items.isNotEmpty()) {
         tableConfig.items
@@ -320,7 +348,7 @@ fun resolveTableRows(
         autoList
     }
 
-    return itemsToUse.filter { it.isVisible }.mapIndexed { index, item ->
+    val baseRows = itemsToUse.filter { it.isVisible }.mapIndexed { index, item ->
         val resolvedValue = when (item.source) {
             TableItemSource.VARIABLE, TableItemSource.COMPUTED -> {
                 val numVal = result.extractedVariables[item.variableName]
@@ -372,6 +400,33 @@ fun resolveTableRows(
         } else item
         Pair(effectiveItem, resolvedValue)
     }
+
+    val attachmentRows = mutableListOf<Pair<ExcelTableCellItem, String>>()
+    if (attachment != null && attachment.showInTable) {
+        var attachCoord = baseRows.size + 1
+        if (attachment.title.isNotBlank()) {
+            attachmentRows.add(
+                ExcelTableCellItem(
+                    label = "Item",
+                    coordinate = "M$attachCoord",
+                    isEmphasized = true
+                ) to attachment.title
+            )
+            attachCoord++
+        }
+        attachment.customFields.forEach { (k, v) ->
+            attachmentRows.add(
+                ExcelTableCellItem(
+                    label = k,
+                    coordinate = "M$attachCoord",
+                    isEmphasized = false
+                ) to v
+            )
+            attachCoord++
+        }
+    }
+
+    return baseRows + attachmentRows
 }
 
 /**
@@ -381,13 +436,15 @@ fun resolveTableRows(
 fun ExcelTableOverlayContent(
     result: ParsedQrResult,
     config: OverlayAppearance,
+    attachment: QrAttachment? = null,
+    onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val tableConfig = config.tableConfig
     val themeColors = getExcelThemeColors(tableConfig.gridTheme)
     val shape = RoundedCornerShape(10.dp)
 
-    val rows = resolveTableRows(tableConfig, result)
+    val rows = resolveTableRows(tableConfig, result, attachment = attachment)
 
     Box(
         modifier = modifier
@@ -405,6 +462,66 @@ fun ExcelTableOverlayContent(
         Column(
             modifier = Modifier.fillMaxWidth()
         ) {
+            // Attached Media Banner / Thumbnail
+            if (attachment != null && attachment.showInOverlay) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color.Black.copy(alpha = 0.5f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, themeColors.accent.copy(alpha = 0.6f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp)
+                        .clickable { onAttachmentClick?.invoke(attachment) }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (!attachment.imageUri.isNullOrBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color.Black)
+                            ) {
+                                AsyncImage(
+                                    model = File(attachment.imageUri).takeIf { it.exists() } ?: Uri.parse(attachment.imageUri),
+                                    contentDescription = "Thumbnail",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = attachment.title.ifBlank { "Linked Data" },
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                            if (!attachment.videoUri.isNullOrBlank()) {
+                                Text(
+                                    text = "▶ Video Attached",
+                                    color = themeColors.accent,
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
+                        Icon(
+                            Icons.Default.OpenInNew,
+                            contentDescription = "Open",
+                            tint = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+            }
+
             // 1. Spreadsheet Header Bar (if enabled)
             if (tableConfig.showHeader) {
                 Row(
@@ -677,6 +794,8 @@ fun ExcelTableOverlayContent(
 fun CompactCardOverlayContent(
     result: ParsedQrResult,
     config: OverlayAppearance,
+    attachment: QrAttachment? = null,
+    onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val cornerRadius = config.cornerRadiusDp.dp
@@ -744,6 +863,66 @@ fun CompactCardOverlayContent(
             horizontalAlignment = if (config.textAlignCenter) Alignment.CenterHorizontally else Alignment.Start,
             verticalArrangement = Arrangement.Center
         ) {
+            // Attached Media & Metadata Badge (Photo / Video / Title)
+            if (attachment != null && attachment.showInOverlay) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color.Black.copy(alpha = 0.5f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, borderColor.copy(alpha = 0.6f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp)
+                        .clickable { onAttachmentClick?.invoke(attachment) }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (!attachment.imageUri.isNullOrBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color.Black)
+                            ) {
+                                AsyncImage(
+                                    model = File(attachment.imageUri).takeIf { it.exists() } ?: Uri.parse(attachment.imageUri),
+                                    contentDescription = "Attached Thumbnail",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = attachment.title.ifBlank { "Linked Data" },
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                            if (!attachment.videoUri.isNullOrBlank()) {
+                                Text(
+                                    text = "▶ Video Attached",
+                                    color = Color(0xFF00F5D4),
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
+                        Icon(
+                            Icons.Default.OpenInNew,
+                            contentDescription = "Open",
+                            tint = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                }
+            }
+
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = if (config.textAlignCenter) Arrangement.Center else Arrangement.Start,

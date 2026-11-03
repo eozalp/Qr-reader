@@ -21,12 +21,14 @@ enum class AppScreen {
 class MainActivity : ComponentActivity() {
 
     private lateinit var profileRepository: ProfileRepository
+    private lateinit var attachmentRepository: com.example.data.AttachmentRepository
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         profileRepository = ProfileRepository(applicationContext)
+        attachmentRepository = com.example.data.AttachmentRepository(applicationContext)
 
         setContent {
             QrLiveCalcTheme {
@@ -41,6 +43,7 @@ class MainActivity : ComponentActivity() {
                         AppScreen.CAMERA -> {
                             CameraScreen(
                                 profileRepository = profileRepository,
+                                attachmentRepository = attachmentRepository,
                                 onOpenSettings = { currentScreen = AppScreen.SETTINGS },
                                 modifier = Modifier.fillMaxSize()
                             )

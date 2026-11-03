@@ -34,5 +34,6 @@ data class TrackedQr(
     var result: ParsedQrResult,
     var lastSeenMs: Long,
     var firstSeenMs: Long,
-    var alpha: Float = 1.0f
+    var alpha: Float = 1.0f,
+    var attachment: QrAttachment? = null
 )
