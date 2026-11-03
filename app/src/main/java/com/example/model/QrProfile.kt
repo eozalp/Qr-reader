@@ -475,7 +475,15 @@ data class OverlayAppearance(
     val hiddenPillVariables: List<String> = emptyList(), // Individually hidden variables in pills
     val iconName: String = "calculator", // "calculator", "tag", "qr", "sparkle", "none"
     val displayMode: OverlayDisplayMode = OverlayDisplayMode.EXCEL_TABLE,
-    val tableConfig: ExcelTableConfig = ExcelTableConfig()
+    val tableConfig: ExcelTableConfig = ExcelTableConfig(),
+
+    // Callout & Bonded Leader Line Layout
+    val calloutMode: CalloutLayoutMode = CalloutLayoutMode.SMART_ANTI_COLLISION,
+    val leaderLineStyle: LeaderLineStyle = LeaderLineStyle.DASHED,
+    val showAnchorDot: Boolean = true,
+    val showBarcodeDashedOutline: Boolean = true,
+    val leaderLineWidthDp: Float = 1.5f,
+    val leaderLineColorHex: String = "" // empty = use borderColorHex
 ) {
     fun toJson(): JSONObject {
         return JSONObject().apply {
@@ -517,6 +525,12 @@ data class OverlayAppearance(
             put("iconName", iconName)
             put("displayMode", displayMode.name)
             put("tableConfig", tableConfig.toJson())
+            put("calloutMode", calloutMode.name)
+            put("leaderLineStyle", leaderLineStyle.name)
+            put("showAnchorDot", showAnchorDot)
+            put("showBarcodeDashedOutline", showBarcodeDashedOutline)
+            put("leaderLineWidthDp", leaderLineWidthDp.toDouble())
+            put("leaderLineColorHex", leaderLineColorHex)
         }
     }
 
@@ -577,10 +591,38 @@ data class OverlayAppearance(
                     ExcelTableConfig.fromJson(json.getJSONObject("tableConfig"))
                 } else {
                     ExcelTableConfig()
-                }
+                },
+                calloutMode = runCatching {
+                    CalloutLayoutMode.valueOf(json.optString("calloutMode", CalloutLayoutMode.SMART_ANTI_COLLISION.name))
+                }.getOrDefault(CalloutLayoutMode.SMART_ANTI_COLLISION),
+                leaderLineStyle = runCatching {
+                    LeaderLineStyle.valueOf(json.optString("leaderLineStyle", LeaderLineStyle.DASHED.name))
+                }.getOrDefault(LeaderLineStyle.DASHED),
+                showAnchorDot = json.optBoolean("showAnchorDot", true),
+                showBarcodeDashedOutline = json.optBoolean("showBarcodeDashedOutline", true),
+                leaderLineWidthDp = json.optDouble("leaderLineWidthDp", 1.5).toFloat(),
+                leaderLineColorHex = json.optString("leaderLineColorHex", "")
             )
         }
     }
+}
+
+/**
+ * Callout placement and leader line bonding behavior.
+ */
+enum class CalloutLayoutMode {
+    DIRECT_FOLLOW,          // Attached directly to QR anchor
+    SMART_ANTI_COLLISION,   // Auto-repulsion layout with bonded leader line
+    DOCKED_SIDEBAR          // Pinned neatly to side margin rail with bonded leader line
+}
+
+/**
+ * Visual styling for the bonded leader line connecting the barcode to the data box.
+ */
+enum class LeaderLineStyle {
+    DASHED,                 // Technical HUD dashed line
+    THIN_SOLID,             // Modern glowing continuous line
+    ELBOW_JOINT             // Orthogonal 90-degree HUD elbow
 }
 
 /**

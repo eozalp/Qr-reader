@@ -684,4 +684,87 @@ class QrEngineComprehensiveTest {
         assertNotNull("Expected 'Material' row from attachment", materialPair)
         assertEquals("Silver 925", materialPair?.second)
     }
+
+    // --- Callout Layout & Leader Lines Tests ---
+
+    @Test
+    fun testOverlayAppearanceCalloutSerialization() {
+        val appearance = OverlayAppearance(
+            calloutMode = CalloutLayoutMode.SMART_ANTI_COLLISION,
+            leaderLineStyle = LeaderLineStyle.DASHED,
+            showAnchorDot = true,
+            showBarcodeDashedOutline = true,
+            leaderLineWidthDp = 2.0f,
+            leaderLineColorHex = "#00F5D4"
+        )
+
+        val json = appearance.toJson()
+        val parsed = OverlayAppearance.fromJson(json)
+
+        assertEquals(CalloutLayoutMode.SMART_ANTI_COLLISION, parsed.calloutMode)
+        assertEquals(LeaderLineStyle.DASHED, parsed.leaderLineStyle)
+        assertTrue(parsed.showAnchorDot)
+        assertTrue(parsed.showBarcodeDashedOutline)
+        assertEquals(2.0f, parsed.leaderLineWidthDp, 1e-4f)
+        assertEquals("#00F5D4", parsed.leaderLineColorHex)
+    }
+
+    @Test
+    fun testCalloutLayoutSolverAntiCollisionSeparation() {
+        val density = androidx.compose.ui.unit.Density(2.5f, 1.0f)
+
+        val dummyResult1 = ParsedQrResult(rawText = "100-10", status = CalculationStatus.Success(10.0, "$10.00"))
+        val dummyResult2 = ParsedQrResult(rawText = "200-20", status = CalculationStatus.Success(10.0, "$10.00"))
+
+        // Two closely positioned QR codes whose data cards would collide
+        val qr1 = TrackedQr(
+            id = "qr1",
+            rawContent = "100-10",
+            currentBox = RectF(200f, 600f, 360f, 760f),
+            targetBox = RectF(200f, 600f, 360f, 760f),
+            result = dummyResult1,
+            lastSeenMs = 1000L,
+            firstSeenMs = 500L
+        )
+        val qr2 = TrackedQr(
+            id = "qr2",
+            rawContent = "200-20",
+            currentBox = RectF(220f, 620f, 380f, 780f),
+            targetBox = RectF(220f, 620f, 380f, 780f),
+            result = dummyResult2,
+            lastSeenMs = 1000L,
+            firstSeenMs = 500L
+        )
+
+        val config = OverlayAppearance(
+            calloutMode = CalloutLayoutMode.SMART_ANTI_COLLISION,
+            leaderLineStyle = LeaderLineStyle.DASHED
+        )
+
+        val solved = com.example.ui.CalloutLayoutSolver.solve(
+            items = listOf(qr1, qr2),
+            config = config,
+            screenWidthPx = 1080f,
+            screenHeightPx = 1920f,
+            density = density
+        )
+
+        assertEquals(2, solved.size)
+
+        val card1 = solved[0]
+        val card2 = solved[1]
+
+        // Check that the anti-collision algorithm separated them so they don't overlap
+        val centerDistY = kotlin.math.abs(card1.cardCenterY - card2.cardCenterY)
+        val centerDistX = kotlin.math.abs(card1.cardCenterX - card2.cardCenterX)
+
+        assertTrue(
+            "Cards must be pushed apart vertically or horizontally. DistY: $centerDistY, DistX: $centerDistX",
+            centerDistY >= card1.cardHeight * 0.7f || centerDistX >= card1.cardWidth * 0.7f
+        )
+
+        // Leader line is bonded to barcode boundary
+        assertTrue(card1.hasLeaderLine)
+        assertTrue(card2.hasLeaderLine)
+    }
 }

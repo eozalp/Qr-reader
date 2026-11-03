@@ -1,5 +1,6 @@
 package com.example.ui.settings
 
+import android.graphics.RectF
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,7 +18,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -63,7 +69,7 @@ fun OverlayAppearanceSection(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "LIVE OVERLAY PREVIEW",
+                        text = "LIVE OVERLAY & LEADER LINE PREVIEW",
                         style = MaterialTheme.typography.labelSmall,
                         color = Color(0xFF94A3B8),
                         letterSpacing = 1.2.sp,
@@ -74,11 +80,56 @@ fun OverlayAppearanceSection(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(130.dp)
+                            .height(140.dp)
                             .clip(RoundedCornerShape(12.dp))
                             .background(Color(0xFF020617)),
                         contentAlignment = Alignment.Center
                     ) {
+                        // Render mini demo barcode and bonded leader line when callout mode is enabled
+                        if (overlay.calloutMode != CalloutLayoutMode.DIRECT_FOLLOW) {
+                            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                                val dash = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f)
+                                val strokeCol = parseHexColor(overlay.borderColorHex).copy(alpha = 0.8f)
+
+                                // Demo QR barcode dashed box on left
+                                val qrW = 44.dp.toPx()
+                                val qrH = 44.dp.toPx()
+                                val qrLeft = 18.dp.toPx()
+                                val qrTop = (size.height - qrH) / 2f
+                                val qrRect = RectF(qrLeft, qrTop, qrLeft + qrW, qrTop + qrH)
+
+                                if (overlay.showBarcodeDashedOutline) {
+                                    drawRoundRect(
+                                        color = strokeCol,
+                                        topLeft = Offset(qrRect.left, qrRect.top),
+                                        size = Size(qrRect.width(), qrRect.height()),
+                                        cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx()),
+                                        style = Stroke(width = 1.5.dp.toPx(), pathEffect = dash)
+                                    )
+                                }
+
+                                val barcAnchor = Offset(qrRect.right, qrRect.centerY())
+                                val cardAnchor = Offset(size.width * 0.42f, size.height / 2f)
+
+                                // Anchor pin dot
+                                if (overlay.showAnchorDot) {
+                                    drawCircle(color = strokeCol.copy(alpha = 0.3f), radius = 5.dp.toPx(), center = barcAnchor)
+                                    drawCircle(color = strokeCol, radius = 2.5.dp.toPx(), center = barcAnchor)
+                                }
+
+                                // Bonded leader line
+                                val lineEffect = if (overlay.leaderLineStyle == LeaderLineStyle.DASHED) dash else null
+                                drawLine(
+                                    color = strokeCol,
+                                    start = barcAnchor,
+                                    end = cardAnchor,
+                                    strokeWidth = overlay.leaderLineWidthDp.dp.toPx(),
+                                    pathEffect = lineEffect
+                                )
+                                drawCircle(color = strokeCol, radius = 2.dp.toPx(), center = cardAnchor)
+                            }
+                        }
+
                         OverlayCardContent(
                             result = sampleResult,
                             config = overlay
@@ -148,6 +199,138 @@ fun OverlayAppearanceSection(
                                 } else null
                             )
                         }
+                    }
+                }
+            }
+        }
+
+        // Multi-QR Callout Layout & Bonded Leader Lines (Anti-Overlap)
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("callout_layout_settings_card")
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Callout Layout & Bonded Lines",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Prevents multi-QR data boxes from overlapping by repelling boxes and bonding them with a thin leader line to the barcode dashed line.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text("Layout Placement Mode", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CalloutLayoutMode.entries.forEach { mode ->
+                            val isSelected = overlay.calloutMode == mode
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { onOverlayChanged(overlay.copy(calloutMode = mode)) },
+                                label = {
+                                    Text(
+                                        when (mode) {
+                                            CalloutLayoutMode.SMART_ANTI_COLLISION -> "Anti-Collision (Bonded)"
+                                            CalloutLayoutMode.DOCKED_SIDEBAR -> "Docked Margin Rail"
+                                            CalloutLayoutMode.DIRECT_FOLLOW -> "Direct Follow (Attached)"
+                                        },
+                                        fontSize = 12.sp
+                                    )
+                                },
+                                leadingIcon = if (isSelected) {
+                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                } else null
+                            )
+                        }
+                    }
+
+                    if (overlay.calloutMode != CalloutLayoutMode.DIRECT_FOLLOW) {
+                        Spacer(modifier = Modifier.height(14.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Text("Leader Line Visual Style", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            LeaderLineStyle.entries.forEach { style ->
+                                val isSelected = overlay.leaderLineStyle == style
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = { onOverlayChanged(overlay.copy(leaderLineStyle = style)) },
+                                    label = {
+                                        Text(
+                                            when (style) {
+                                                LeaderLineStyle.DASHED -> "Technical Dashed"
+                                                LeaderLineStyle.THIN_SOLID -> "Thin Glowing Solid"
+                                                LeaderLineStyle.ELBOW_JOINT -> "HUD 90° Elbow"
+                                            },
+                                            fontSize = 12.sp
+                                        )
+                                    },
+                                    leadingIcon = if (isSelected) {
+                                        { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                    } else null
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Barcode Dashed Outline", style = MaterialTheme.typography.bodyMedium)
+                            Switch(
+                                checked = overlay.showBarcodeDashedOutline,
+                                onCheckedChange = { onOverlayChanged(overlay.copy(showBarcodeDashedOutline = it)) }
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Anchor Pin Dot on Barcode", style = MaterialTheme.typography.bodyMedium)
+                            Switch(
+                                checked = overlay.showAnchorDot,
+                                onCheckedChange = { onOverlayChanged(overlay.copy(showAnchorDot = it)) }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Line Thickness: ${"%.1f".format(overlay.leaderLineWidthDp)} dp",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Slider(
+                            value = overlay.leaderLineWidthDp,
+                            onValueChange = { onOverlayChanged(overlay.copy(leaderLineWidthDp = it)) },
+                            valueRange = 1.0f..4.0f,
+                            steps = 5
+                        )
                     }
                 }
             }

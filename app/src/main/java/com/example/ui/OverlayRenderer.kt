@@ -21,6 +21,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -60,15 +61,65 @@ fun QrOverlaysCanvas(
     onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    val density = LocalDensity.current
+
+    val solvedPositions = remember(trackedItems, overlayConfig, screenWidthPx, screenHeightPx, density) {
+        CalloutLayoutSolver.solve(
+            items = trackedItems,
+            config = overlayConfig,
+            screenWidthPx = screenWidthPx,
+            screenHeightPx = screenHeightPx,
+            density = density
+        )
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
-        for (item in trackedItems) {
-            QrTrackingHudElement(
-                tracked = item,
-                overlayConfig = overlayConfig,
-                screenWidthPx = screenWidthPx,
-                screenHeightPx = screenHeightPx,
-                onAttachmentClick = onAttachmentClick
+        // Unified AR background canvas: Leader lines, dashed barcode reticles & anchor pins
+        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+            CalloutLayoutSolver.drawCalloutAtmosphere(
+                scope = this,
+                solvedItems = solvedPositions,
+                config = overlayConfig
             )
+        }
+
+        // Render each data box at its solved non-overlapping position
+        for (solved in solvedPositions) {
+            val animatedX by animateFloatAsState(
+                targetValue = solved.cardCenterX,
+                animationSpec = tween(durationMillis = 180),
+                label = "callout_x_${solved.tracked.id}"
+            )
+            val animatedY by animateFloatAsState(
+                targetValue = solved.cardCenterY,
+                animationSpec = tween(durationMillis = 180),
+                label = "callout_y_${solved.tracked.id}"
+            )
+            val animatedAlpha by animateFloatAsState(
+                targetValue = solved.tracked.alpha,
+                animationSpec = tween(durationMillis = 150),
+                label = "callout_alpha_${solved.tracked.id}"
+            )
+
+            Box(
+                modifier = Modifier
+                    .layout { measurable, constraints ->
+                        val placeable = measurable.measure(constraints)
+                        layout(constraints.maxWidth, constraints.maxHeight) {
+                            val posX = (animatedX - placeable.width / 2f).roundToInt()
+                            val posY = (animatedY - placeable.height / 2f).roundToInt()
+                            placeable.placeRelative(posX, posY)
+                        }
+                    }
+                    .alpha(animatedAlpha)
+            ) {
+                OverlayCardContent(
+                    result = solved.tracked.result,
+                    config = overlayConfig,
+                    attachment = solved.tracked.attachment,
+                    onAttachmentClick = onAttachmentClick
+                )
+            }
         }
     }
 }
@@ -1076,7 +1127,7 @@ fun CompactCardOverlayContent(
 /**
  * Draws high-tech corner brackets around the tracked QR code
  */
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawReticleCorners(
+fun androidx.compose.ui.graphics.drawscope.DrawScope.drawReticleCorners(
     box: RectF,
     color: Color
 ) {

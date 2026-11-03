@@ -725,6 +725,23 @@ fun CameraScreen(
                             }
                         }
 
+                        Button(
+                            onClick = {
+                                val w = screenWidthPx; val h = screenHeightPx
+                                simulatedCodes = listOf(
+                                    RawDetectedCode("150-25", RectF(w * 0.20f, h * 0.40f, w * 0.20f + 160f, h * 0.40f + 160f)),
+                                    RawDetectedCode("200-50", RectF(w * 0.50f, h * 0.42f, w * 0.50f + 160f, h * 0.42f + 160f))
+                                )
+                                showSimulationSheet = false
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                            modifier = Modifier.fillMaxWidth().testTag("simulate_clustered_qr_btn")
+                        ) {
+                            Icon(Icons.Default.CallSplit, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color(0xFF00F5D4))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Clustered Multi-QR (Bonded Lines Test)", fontSize = 11.sp, color = Color.White)
+                        }
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
