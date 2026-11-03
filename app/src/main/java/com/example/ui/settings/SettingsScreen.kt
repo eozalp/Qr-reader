@@ -22,7 +22,6 @@ enum class SettingsTab(val title: String, val icon: ImageVector) {
     VARIABLES("Variables", Icons.Default.QrCodeScanner),
     TABLE("Table", Icons.Default.TableChart),
     OVERLAY("Style", Icons.Default.Layers),
-    FORMAT("Format", Icons.Default.FormatListNumbered),
     TRACKING("Camera", Icons.Default.Tune),
     PROFILES("Profiles", Icons.Default.FolderSpecial)
 }
@@ -139,6 +138,10 @@ fun SettingsScreen(
                         onRulesChanged = { updatedRules ->
                             profileRepository.saveProfile(activeProfile.copy(parsingRules = updatedRules))
                         },
+                        formatting = activeProfile.formatting,
+                        onFormattingChanged = { updatedFormat ->
+                            profileRepository.saveProfile(activeProfile.copy(formatting = updatedFormat))
+                        },
                         triggerSignal = activeProfile.triggerSignal,
                         onTriggerSignalChanged = { updatedSignal ->
                             profileRepository.saveProfile(activeProfile.copy(triggerSignal = updatedSignal))
@@ -150,14 +153,6 @@ fun SettingsScreen(
                         profile = activeProfile,
                         onProfileChanged = { updatedProfile ->
                             profileRepository.saveProfile(updatedProfile)
-                        }
-                    )
-                }
-                SettingsTab.FORMAT -> {
-                    FormattingSettingsSection(
-                        formatting = activeProfile.formatting,
-                        onFormattingChanged = { updatedFormat ->
-                            profileRepository.saveProfile(activeProfile.copy(formatting = updatedFormat))
                         }
                     )
                 }

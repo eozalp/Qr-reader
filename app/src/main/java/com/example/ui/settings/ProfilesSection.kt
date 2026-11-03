@@ -144,42 +144,57 @@ fun ProfilesSection(
             )
         }
 
-        // Action Buttons Row: New Profile, Export, Import
+        // Action Buttons: New Profile, Export, Import (clean layout preventing overflow)
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Button(
-                    onClick = {
-                        newProfileName = ""
-                        newProfileDesc = ""
-                        newProfileSignal = ""
-                        showCreateDialog = true
-                    },
-                    modifier = Modifier.weight(1f).testTag("create_profile_btn")
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("New")
-                }
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Button(
+                        onClick = {
+                            newProfileName = ""
+                            newProfileDesc = ""
+                            newProfileSignal = ""
+                            showCreateDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("create_profile_btn"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Create New Profile", fontWeight = FontWeight.SemiBold)
+                    }
 
-                OutlinedButton(
-                    onClick = { showExportOptionsDialog = true },
-                    modifier = Modifier.weight(1f).testTag("export_profiles_btn")
-                ) {
-                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Export")
-                }
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                OutlinedButton(
-                    onClick = { showImportOptionsDialog = true },
-                    modifier = Modifier.weight(1f).testTag("import_profiles_btn")
-                ) {
-                    Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Import")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = { showExportOptionsDialog = true },
+                            modifier = Modifier.weight(1f).testTag("export_profiles_btn"),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Export", maxLines = 1, softWrap = false)
+                        }
+
+                        FilledTonalButton(
+                            onClick = { showImportOptionsDialog = true },
+                            modifier = Modifier.weight(1f).testTag("import_profiles_btn"),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                        ) {
+                            Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Import", maxLines = 1, softWrap = false)
+                        }
+                    }
                 }
             }
         }
@@ -529,11 +544,12 @@ fun ProfilesSection(
                             exportFileLauncher.launch("all_qr_profiles.json")
                             showExportOptionsDialog = false
                         },
-                        modifier = Modifier.fillMaxWidth().testTag("export_all_file_btn")
+                        modifier = Modifier.fillMaxWidth().testTag("export_all_file_btn"),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
                     ) {
                         Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Save All Profiles to File (.json)")
+                        Text("Save All Profiles (.json)", maxLines = 1, softWrap = false)
                     }
 
                     // Save active profile to file
@@ -545,11 +561,13 @@ fun ProfilesSection(
                             exportFileLauncher.launch("profile_$safeName.json")
                             showExportOptionsDialog = false
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
                     ) {
                         Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Save Active '${activeProfile.name}' to File")
+                        val displayName = if (activeProfile.name.length > 16) "${activeProfile.name.take(14)}…" else activeProfile.name
+                        Text("Save Active '$displayName' (.json)", maxLines = 1, softWrap = false)
                     }
 
                     // Share via Share Sheet (other apps)
@@ -558,11 +576,12 @@ fun ProfilesSection(
                             shareProfileText("QR Live Calc Profiles", allProfilesJson)
                             showExportOptionsDialog = false
                         },
-                        modifier = Modifier.fillMaxWidth().testTag("share_profiles_btn")
+                        modifier = Modifier.fillMaxWidth().testTag("share_profiles_btn"),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
                     ) {
                         Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Share Over Other Apps (WhatsApp, Gmail...)")
+                        Text("Share via Apps (WhatsApp, Mail)", maxLines = 1, softWrap = false)
                     }
 
                     // Copy to clipboard
@@ -572,11 +591,12 @@ fun ProfilesSection(
                             Toast.makeText(context, "All profiles copied to clipboard", Toast.LENGTH_SHORT).show()
                             showExportOptionsDialog = false
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
                     ) {
                         Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Copy JSON to Clipboard")
+                        Text("Copy JSON to Clipboard", maxLines = 1, softWrap = false)
                     }
                 }
             },
