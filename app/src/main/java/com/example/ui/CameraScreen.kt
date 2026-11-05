@@ -355,6 +355,7 @@ fun CameraScreen(
                 onToggleCamera = { isFrontCamera = !isFrontCamera },
                 onOpenSimulation = { showSimulationSheet = true },
                 onOpenBarcodeOptions = { showBarcodeOptionsSheet = true },
+                onOpenSettings = onOpenSettings,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .windowInsetsPadding(WindowInsets.statusBars)
@@ -540,9 +541,9 @@ fun CameraScreen(
                         if (visibleQr.attachment != null) Color(0xFF00F5D4) else Color(0xFFFFB703)
                     ),
                     modifier = Modifier
-                        .align(Alignment.BottomStart)
+                        .align(Alignment.BottomCenter)
                         .windowInsetsPadding(WindowInsets.navigationBars)
-                        .padding(bottom = 24.dp, start = 16.dp)
+                        .padding(bottom = 76.dp)
                         .clip(RoundedCornerShape(20.dp))
                         .clickable {
                             if (visibleQr.attachment != null) {
@@ -554,7 +555,7 @@ fun CameraScreen(
                         }
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -566,85 +567,108 @@ fun CameraScreen(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = if (visibleQr.attachment != null) {
-                                "📎 ${visibleQr.attachment?.title?.ifBlank { visibleQr.rawContent }?.take(16)}"
+                                "📎 ${visibleQr.attachment?.title?.ifBlank { visibleQr.rawContent }?.take(18)}"
                             } else {
-                                "+ Attach to '${visibleQr.rawContent.take(10)}...'"
+                                "+ Attach to '${visibleQr.rawContent.take(12)}...'"
                             },
                             color = Color.White,
                             fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
                         )
                     }
                 }
             }
 
-            // Bottom action buttons: Linked Data, Barcode Formats, Simulation Wand & Settings FAB
+            // Bottom action bar: Barcode Formats, Linked Data & Settings FAB
             Row(
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(bottom = 24.dp, end = 20.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                FilledTonalButton(
-                    onClick = { showBarcodeOptionsSheet = true },
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = Color(0xDD090D16),
-                        contentColor = Color(0xFF60A5FA)
-                    ),
-                    modifier = Modifier.testTag("barcode_reading_options_btn")
+                // Left Quick Controls: Barcode Formats & Linked Data Pills
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = when (activeProfile.tracking.scanPreset) {
-                            BarcodeScanPreset.ALL_FORMATS -> "All Barcodes"
-                            BarcodeScanPreset.TWO_D_ONLY -> "2D / 3D"
-                            BarcodeScanPreset.ONE_D_ONLY -> "1D Barcodes"
-                            BarcodeScanPreset.CUSTOM -> "Custom"
-                        },
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    FilledTonalButton(
+                        onClick = { showBarcodeOptionsSheet = true },
+                        shape = RoundedCornerShape(22.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = Color(0xEE090D16),
+                            contentColor = Color(0xFF60A5FA)
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x3360A5FA)),
+                        modifier = Modifier
+                            .height(44.dp)
+                            .testTag("barcode_reading_options_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.QrCodeScanner,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = when (activeProfile.tracking.scanPreset) {
+                                BarcodeScanPreset.ALL_FORMATS -> "All Barcodes"
+                                BarcodeScanPreset.TWO_D_ONLY -> "2D / 3D"
+                                BarcodeScanPreset.ONE_D_ONLY -> "1D Barcodes"
+                                BarcodeScanPreset.CUSTOM -> "Custom"
+                            },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                    }
+
+                    FilledTonalButton(
+                        onClick = { showAttachmentsSheet = true },
+                        shape = RoundedCornerShape(22.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = Color(0xEE090D16),
+                            contentColor = Color(0xFFFFB703)
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33FFB703)),
+                        modifier = Modifier
+                            .height(44.dp)
+                            .testTag("manage_attachments_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AttachFile,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Linked Data",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                    }
                 }
 
-                FilledTonalButton(
-                    onClick = { showAttachmentsSheet = true },
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = Color(0xDD090D16),
-                        contentColor = Color(0xFFFFB703)
-                    ),
-                    modifier = Modifier.testTag("manage_attachments_btn")
-                ) {
-                    Icon(Icons.Default.AttachFile, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Linked Data", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-
-                FilledTonalButton(
-                    onClick = { showSimulationSheet = true },
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = Color(0xDD090D16),
-                        contentColor = Color(0xFF00F5D4)
-                    ),
-                    modifier = Modifier.testTag("test_ar_simulation_btn")
-                ) {
-                    Icon(Icons.Default.Science, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("AR Codes", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-
+                // Right: Settings FAB
                 FloatingActionButton(
                     onClick = onOpenSettings,
-                    modifier = Modifier.testTag("open_settings_button"),
+                    modifier = Modifier
+                        .size(46.dp)
+                        .testTag("open_settings_button"),
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    shape = CircleShape
                 ) {
                     Icon(
                         imageVector = Icons.Default.Settings,
                         contentDescription = "Settings",
-                        modifier = Modifier.size(26.dp)
+                        modifier = Modifier.size(22.dp)
                     )
                 }
             }
@@ -866,9 +890,11 @@ fun TopHudBar(
     onToggleCamera: () -> Unit,
     onOpenSimulation: () -> Unit,
     onOpenBarcodeOptions: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expandedDropdown by remember { mutableStateOf(false) }
+    var expandedMoreMenu by remember { mutableStateOf(false) }
 
     Row(
         modifier = modifier
@@ -876,12 +902,12 @@ fun TopHudBar(
             .clip(RoundedCornerShape(24.dp))
             .background(Color(0xCC090D16))
             .border(1.dp, Color(0x3300F5D4), RoundedCornerShape(24.dp))
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         // Active Profile Selector
-        Box {
+        Box(modifier = Modifier.weight(1f, fill = false)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -896,17 +922,20 @@ fun TopHudBar(
                         .background(if (isPaused) Color(0xFFF59E0B) else Color(0xFF10B981))
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Column {
+                Column(modifier = Modifier.widthIn(max = 145.dp)) {
                     Text(
                         text = activeProfile.name,
                         color = Color.White,
                         fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                     Text(
                         text = if (activeCount > 0) "$activeCount detected" else if (isPaused) "Paused" else "Scanning...",
                         color = Color(0xFF94A3B8),
-                        fontSize = 10.sp
+                        fontSize = 10.sp,
+                        maxLines = 1
                     )
                 }
                 Icon(
@@ -952,66 +981,130 @@ fun TopHudBar(
             }
         }
 
-        // Action Buttons Row
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // Action Buttons Row (Torch, Pause, Flip, and More Menu)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
             IconButton(
                 onClick = onToggleTorch,
-                modifier = Modifier.size(38.dp)
+                modifier = Modifier.size(36.dp)
             ) {
                 Icon(
                     imageVector = if (isTorchEnabled) Icons.Default.FlashOn else Icons.Default.FlashOff,
                     contentDescription = "Torch Toggle",
                     tint = if (isTorchEnabled) Color(0xFFFACC15) else Color.White.copy(alpha = 0.75f),
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(18.dp)
                 )
             }
 
             IconButton(
                 onClick = onTogglePause,
-                modifier = Modifier.size(38.dp)
+                modifier = Modifier.size(36.dp)
             ) {
                 Icon(
                     imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
                     contentDescription = "Pause/Resume Scanning",
                     tint = if (isPaused) Color(0xFFF59E0B) else Color.White.copy(alpha = 0.75f),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            IconButton(
-                onClick = onOpenBarcodeOptions,
-                modifier = Modifier.size(38.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.QrCodeScanner,
-                    contentDescription = "Barcode Reading Options",
-                    tint = Color(0xFF00F5D4),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            IconButton(
-                onClick = onOpenSimulation,
-                modifier = Modifier.size(38.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Science,
-                    contentDescription = "Test Simulated Codes",
-                    tint = Color.White.copy(alpha = 0.75f),
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(18.dp)
                 )
             }
 
             IconButton(
                 onClick = onToggleCamera,
-                modifier = Modifier.size(38.dp)
+                modifier = Modifier.size(36.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.FlipCameraAndroid,
                     contentDescription = "Switch Camera",
                     tint = Color.White.copy(alpha = 0.75f),
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(18.dp)
                 )
+            }
+
+            // More Options ("Inner Menu" for Testing, Barcode Options, etc.)
+            Box {
+                IconButton(
+                    onClick = { expandedMoreMenu = true },
+                    modifier = Modifier.size(36.dp).testTag("top_hud_more_menu_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "More Options",
+                        tint = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = expandedMoreMenu,
+                    onDismissRequest = { expandedMoreMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Science,
+                                    contentDescription = null,
+                                    tint = Color(0xFF00F5D4),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text("QR & Barcode Simulator", fontWeight = FontWeight.SemiBold)
+                                    Text("Test virtual AR codes on emulator", fontSize = 10.sp, color = Color.Gray)
+                                }
+                            }
+                        },
+                        onClick = {
+                            expandedMoreMenu = false
+                            onOpenSimulation()
+                        }
+                    )
+
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.QrCodeScanner,
+                                    contentDescription = null,
+                                    tint = Color(0xFF60A5FA),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text("Barcode Reading Options", fontWeight = FontWeight.SemiBold)
+                                    Text("Configure 2D, 3D and 1D formats", fontSize = 10.sp, color = Color.Gray)
+                                }
+                            }
+                        },
+                        onClick = {
+                            expandedMoreMenu = false
+                            onOpenBarcodeOptions()
+                        }
+                    )
+
+                    HorizontalDivider()
+
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Settings,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text("All Settings", fontWeight = FontWeight.Medium)
+                            }
+                        },
+                        onClick = {
+                            expandedMoreMenu = false
+                            onOpenSettings()
+                        }
+                    )
+                }
             }
         }
     }
