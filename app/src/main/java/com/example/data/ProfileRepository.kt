@@ -160,6 +160,15 @@ class ProfileRepository(private val context: Context) {
         return targetProfile
     }
 
+    fun saveAllProfiles(list: List<QrProfile>) {
+        if (list.isEmpty()) return
+        _profiles.value = list
+        val currentActiveId = _activeProfile.value.id
+        val newActive = list.find { it.id == currentActiveId } ?: list.first()
+        _activeProfile.value = newActive
+        persistProfiles(list, newActive.id)
+    }
+
     fun findProfileBySignal(rawText: String): QrProfile? {
         return com.example.engine.QrParser.findMatchingProfileBySignal(rawText, _profiles.value)
     }

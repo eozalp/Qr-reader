@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -106,9 +107,22 @@ fun QrOverlaysCanvas(
                     .layout { measurable, constraints ->
                         val placeable = measurable.measure(constraints)
                         layout(constraints.maxWidth, constraints.maxHeight) {
-                            val posX = (animatedX - placeable.width / 2f).roundToInt()
-                            val posY = (animatedY - placeable.height / 2f).roundToInt()
-                            placeable.placeRelative(posX, posY)
+                            val marginPx = with(density) { 14.dp.toPx() }
+                            val topSafePx = with(density) { 70.dp.toPx() }
+                            val bottomSafePx = with(density) { 84.dp.toPx() }
+
+                            val minX = marginPx.roundToInt()
+                            val maxX = (constraints.maxWidth - placeable.width - marginPx).roundToInt().coerceAtLeast(minX)
+                            val minY = topSafePx.roundToInt()
+                            val maxY = (constraints.maxHeight - placeable.height - bottomSafePx).roundToInt().coerceAtLeast(minY)
+
+                            val rawPosX = (animatedX - placeable.width / 2f).roundToInt()
+                            val rawPosY = (animatedY - placeable.height / 2f).roundToInt()
+
+                            val clampedX = rawPosX.coerceIn(minX, maxX)
+                            val clampedY = rawPosY.coerceIn(minY, maxY)
+
+                            placeable.placeRelative(clampedX, clampedY)
                         }
                     }
                     .alpha(animatedAlpha)
@@ -207,9 +221,22 @@ fun QrTrackingHudElement(
             .layout { measurable, constraints ->
                 val placeable = measurable.measure(constraints)
                 layout(constraints.maxWidth, constraints.maxHeight) {
-                    val posX = (finalTargetX - placeable.width / 2f).roundToInt()
-                    val posY = (finalTargetY - placeable.height / 2f).roundToInt()
-                    placeable.placeRelative(posX, posY)
+                    val marginPx = with(density) { 14.dp.toPx() }
+                    val topSafePx = with(density) { 70.dp.toPx() }
+                    val bottomSafePx = with(density) { 84.dp.toPx() }
+
+                    val minX = marginPx.roundToInt()
+                    val maxX = (constraints.maxWidth - placeable.width - marginPx).roundToInt().coerceAtLeast(minX)
+                    val minY = topSafePx.roundToInt()
+                    val maxY = (constraints.maxHeight - placeable.height - bottomSafePx).roundToInt().coerceAtLeast(minY)
+
+                    val rawPosX = (finalTargetX - placeable.width / 2f).roundToInt()
+                    val rawPosY = (finalTargetY - placeable.height / 2f).roundToInt()
+
+                    val clampedX = rawPosX.coerceIn(minX, maxX)
+                    val clampedY = rawPosY.coerceIn(minY, maxY)
+
+                    placeable.placeRelative(clampedX, clampedY)
                 }
             }
             .alpha(animatedAlpha)
@@ -528,7 +555,8 @@ fun ExcelTableOverlayContent(
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (!attachment.imageUri.isNullOrBlank()) {
+                        if (attachment.allImages.isNotEmpty()) {
+                            val firstImg = attachment.allImages.first()
                             Box(
                                 modifier = Modifier
                                     .size(34.dp)
@@ -536,11 +564,26 @@ fun ExcelTableOverlayContent(
                                     .background(Color.Black)
                             ) {
                                 AsyncImage(
-                                    model = File(attachment.imageUri).takeIf { it.exists() } ?: Uri.parse(attachment.imageUri),
+                                    model = File(firstImg).takeIf { it.exists() } ?: Uri.parse(firstImg),
                                     contentDescription = "Thumbnail",
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
+                                if (attachment.allImages.size > 1) {
+                                    Surface(
+                                        color = Color.Black.copy(alpha = 0.75f),
+                                        shape = RoundedCornerShape(topStart = 4.dp),
+                                        modifier = Modifier.align(Alignment.BottomEnd)
+                                    ) {
+                                        Text(
+                                            text = "+${attachment.allImages.size - 1}",
+                                            color = Color.White,
+                                            fontSize = 8.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 2.dp)
+                                        )
+                                    }
+                                }
                             }
                             Spacer(modifier = Modifier.width(6.dp))
                         }
@@ -553,9 +596,9 @@ fun ExcelTableOverlayContent(
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1
                             )
-                            if (!attachment.videoUri.isNullOrBlank()) {
+                            if (attachment.allVideos.isNotEmpty()) {
                                 Text(
-                                    text = "▶ Video Attached",
+                                    text = if (attachment.allVideos.size > 1) "▶ ${attachment.allVideos.size} Videos Attached" else "▶ Video Attached",
                                     color = themeColors.accent,
                                     fontSize = 8.sp,
                                     fontWeight = FontWeight.SemiBold
@@ -564,7 +607,7 @@ fun ExcelTableOverlayContent(
                         }
 
                         Icon(
-                            Icons.Default.OpenInNew,
+                            Icons.AutoMirrored.Filled.OpenInNew,
                             contentDescription = "Open",
                             tint = Color.White.copy(alpha = 0.7f),
                             modifier = Modifier.size(14.dp)
@@ -613,19 +656,40 @@ fun ExcelTableOverlayContent(
                         )
                     }
 
-                    if (tableConfig.headerSubtitle.isNotBlank()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        // Barcode Format Tag Badge
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(Color.Black.copy(alpha = 0.4f))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                .background(themeColors.accent.copy(alpha = 0.22f))
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = tableConfig.headerSubtitle,
-                                color = themeColors.textSecondary,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Medium
+                                text = result.formatName,
+                                color = themeColors.accent,
+                                fontSize = 8.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                letterSpacing = 0.4.sp
                             )
+                        }
+
+                        if (tableConfig.headerSubtitle.isNotBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color.Black.copy(alpha = 0.4f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = tableConfig.headerSubtitle,
+                                    color = themeColors.textSecondary,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
                         }
                     }
                 }
@@ -929,7 +993,8 @@ fun CompactCardOverlayContent(
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (!attachment.imageUri.isNullOrBlank()) {
+                        if (attachment.allImages.isNotEmpty()) {
+                            val firstImg = attachment.allImages.first()
                             Box(
                                 modifier = Modifier
                                     .size(32.dp)
@@ -937,11 +1002,26 @@ fun CompactCardOverlayContent(
                                     .background(Color.Black)
                             ) {
                                 AsyncImage(
-                                    model = File(attachment.imageUri).takeIf { it.exists() } ?: Uri.parse(attachment.imageUri),
+                                    model = File(firstImg).takeIf { it.exists() } ?: Uri.parse(firstImg),
                                     contentDescription = "Attached Thumbnail",
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
+                                if (attachment.allImages.size > 1) {
+                                    Surface(
+                                        color = Color.Black.copy(alpha = 0.75f),
+                                        shape = RoundedCornerShape(topStart = 4.dp),
+                                        modifier = Modifier.align(Alignment.BottomEnd)
+                                    ) {
+                                        Text(
+                                            text = "+${attachment.allImages.size - 1}",
+                                            color = Color.White,
+                                            fontSize = 7.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 2.dp)
+                                        )
+                                    }
+                                }
                             }
                             Spacer(modifier = Modifier.width(6.dp))
                         }
@@ -954,9 +1034,9 @@ fun CompactCardOverlayContent(
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1
                             )
-                            if (!attachment.videoUri.isNullOrBlank()) {
+                            if (attachment.allVideos.isNotEmpty()) {
                                 Text(
-                                    text = "▶ Video Attached",
+                                    text = if (attachment.allVideos.size > 1) "▶ ${attachment.allVideos.size} Videos Attached" else "▶ Video Attached",
                                     color = Color(0xFF00F5D4),
                                     fontSize = 8.sp,
                                     fontWeight = FontWeight.SemiBold
@@ -965,7 +1045,7 @@ fun CompactCardOverlayContent(
                         }
 
                         Icon(
-                            Icons.Default.OpenInNew,
+                            Icons.AutoMirrored.Filled.OpenInNew,
                             contentDescription = "Open",
                             tint = Color.White.copy(alpha = 0.7f),
                             modifier = Modifier.size(13.dp)
@@ -1044,9 +1124,7 @@ fun CompactCardOverlayContent(
                     .filter { (name, _) -> name !in config.hiddenPillVariables && !name.contains("_alias") }
             } else emptyList()
 
-            val hasPills = (config.showCalculationFormulaHint && result.formulaExpression.isNotBlank()) ||
-                    (config.showRawQrPill && result.rawText.isNotBlank()) ||
-                    visibleVariables.isNotEmpty()
+            val hasPills = true
 
             if (hasPills) {
                 Spacer(modifier = Modifier.height(6.dp))
@@ -1057,6 +1135,24 @@ fun CompactCardOverlayContent(
                     horizontalArrangement = if (config.textAlignCenter) Arrangement.Center else Arrangement.Start,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Barcode Format Tag Pill
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(textColor.copy(alpha = 0.16f))
+                            .border(0.5.dp, textColor.copy(alpha = 0.45f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = result.formatName,
+                            color = textColor,
+                            fontSize = 8.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.4.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+
                     // Formula Pill
                     if (config.showCalculationFormulaHint && result.formulaExpression.isNotBlank()) {
                         Box(

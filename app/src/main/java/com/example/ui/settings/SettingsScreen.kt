@@ -30,6 +30,7 @@ enum class SettingsTab(val title: String, val icon: ImageVector) {
 @Composable
 fun SettingsScreen(
     profileRepository: ProfileRepository,
+    attachmentRepository: com.example.data.AttachmentRepository? = null,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -175,7 +176,8 @@ fun SettingsScreen(
                 }
                 SettingsTab.PROFILES -> {
                     ProfilesSection(
-                        profileRepository = profileRepository
+                        profileRepository = profileRepository,
+                        attachmentRepository = attachmentRepository
                     )
                 }
             }

@@ -16,7 +16,9 @@ import kotlin.math.hypot
 
 data class RawDetectedCode(
     val rawValue: String,
-    val uprightBoundingBox: RectF
+    val uprightBoundingBox: RectF,
+    val format: Int = com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE,
+    val formatName: String = "QR CODE"
 )
 
 class QrTracker {
@@ -54,6 +56,8 @@ class QrTracker {
                 smoothRect(tracked.currentBox, tracked.targetBox, smoothingFactor)
                 tracked.lastSeenMs = currentTimeMs
                 tracked.alpha = 1.0f
+                tracked.barcodeFormat = match.format
+                tracked.formatName = match.formatName
                 if (tracked.attachment == null && attachmentFinder != null) {
                     tracked.attachment = attachmentFinder(tracked.rawContent)
                 }
@@ -65,7 +69,7 @@ class QrTracker {
         for (unmatched in unmatchedDetected) {
             if (activeTracked.size >= profile.tracking.maxTrackedCodes) break
 
-            val initialResult = processQr(unmatched.rawValue, profile)
+            val initialResult = processQr(unmatched.rawValue, profile, unmatched.format, unmatched.formatName)
             val attachment = attachmentFinder?.invoke(unmatched.rawValue)
             val newTracked = TrackedQr(
                 id = UUID.randomUUID().toString(),
@@ -76,7 +80,9 @@ class QrTracker {
                 lastSeenMs = currentTimeMs,
                 firstSeenMs = currentTimeMs,
                 alpha = 1.0f,
-                attachment = attachment
+                attachment = attachment,
+                barcodeFormat = unmatched.format,
+                formatName = unmatched.formatName
             )
             activeTracked.add(newTracked)
             matchedIds.add(newTracked.id)
@@ -97,7 +103,7 @@ class QrTracker {
                 }
             } else {
                 // If profile changed, recalculate result
-                item.result = processQr(item.rawContent, profile)
+                item.result = processQr(item.rawContent, profile, item.barcodeFormat, item.formatName)
             }
         }
 
@@ -115,14 +121,21 @@ class QrTracker {
         return hypot((x1 - x2).toDouble(), (y1 - y2).toDouble()).toFloat()
     }
 
-    fun processQr(rawText: String, profile: QrProfile): ParsedQrResult {
+    fun processQr(
+        rawText: String,
+        profile: QrProfile,
+        format: Int = com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE,
+        formatName: String = "QR CODE"
+    ): ParsedQrResult {
         // Step 1: Parse variables & evaluate computed variables
         return when (val parseOutcome = QrParser.parse(rawText, profile.parsingRules)) {
             is QrParseOutcome.Error -> {
                 ParsedQrResult(
                     rawText = rawText,
                     status = CalculationStatus.ParseError(parseOutcome.message),
-                    formulaExpression = ""
+                    formulaExpression = "",
+                    barcodeFormat = format,
+                    formatName = formatName
                 )
             }
             is QrParseOutcome.Success -> {
@@ -163,7 +176,9 @@ class QrTracker {
                         extractedStrings = parseOutcome.stringVariables,
                         variablePillDisplay = pillDisplay,
                         status = CalculationStatus.Success(compValue, formattedResult),
-                        formulaExpression = "${primaryComputed.name} = ${primaryComputed.computationFormula}"
+                        formulaExpression = "${primaryComputed.name} = ${primaryComputed.computationFormula}",
+                        barcodeFormat = format,
+                        formatName = formatName
                     )
                 } else if (profile.formula.expression.isNotBlank()) {
                     // Graceful formula evaluation fallback when no computed variables defined
@@ -176,7 +191,9 @@ class QrTracker {
                                 extractedStrings = parseOutcome.stringVariables,
                                 variablePillDisplay = pillDisplay,
                                 status = CalculationStatus.Success(evalOutcome.value, formatted),
-                                formulaExpression = profile.formula.expression
+                                formulaExpression = profile.formula.expression,
+                                barcodeFormat = format,
+                                formatName = formatName
                             )
                         }
                         is MathResult.Error -> {
@@ -186,7 +203,9 @@ class QrTracker {
                                 extractedStrings = parseOutcome.stringVariables,
                                 variablePillDisplay = pillDisplay,
                                 status = CalculationStatus.EvaluationError(evalOutcome.message),
-                                formulaExpression = profile.formula.expression
+                                formulaExpression = profile.formula.expression,
+                                barcodeFormat = format,
+                                formatName = formatName
                             )
                         }
                     }
@@ -207,7 +226,9 @@ class QrTracker {
                         extractedStrings = parseOutcome.stringVariables,
                         variablePillDisplay = pillDisplay,
                         status = CalculationStatus.Success(numVal, formatted),
-                        formulaExpression = ""
+                        formulaExpression = "",
+                        barcodeFormat = format,
+                        formatName = formatName
                     )
                 }
             }

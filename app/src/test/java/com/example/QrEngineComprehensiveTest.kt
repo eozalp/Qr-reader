@@ -767,4 +767,307 @@ class QrEngineComprehensiveTest {
         assertTrue(card1.hasLeaderLine)
         assertTrue(card2.hasLeaderLine)
     }
+
+    @Test
+    fun testQrAttachmentMultipleImagesAndVideosSerialization() {
+        val attachment = QrAttachment(
+            qrContent = "ITEM-999",
+            title = "Jewelry Piece",
+            notes = "Pure Silver",
+            images = listOf("/data/img1.jpg", "/data/img2.jpg", "/data/img3.jpg"),
+            videos = listOf("/data/vid1.mp4", "/data/vid2.mp4"),
+            customFields = mapOf("Material" to "Silver 925", "Weight" to "45g")
+        )
+
+        assertEquals(3, attachment.allImages.size)
+        assertEquals("/data/img1.jpg", attachment.imageUri)
+        assertEquals(2, attachment.allVideos.size)
+        assertEquals("/data/vid1.mp4", attachment.videoUri)
+
+        val json = attachment.toJson()
+        val restored = QrAttachment.fromJson(json)
+
+        assertEquals("ITEM-999", restored.qrContent)
+        assertEquals("Jewelry Piece", restored.title)
+        assertEquals(3, restored.allImages.size)
+        assertEquals(listOf("/data/img1.jpg", "/data/img2.jpg", "/data/img3.jpg"), restored.allImages)
+        assertEquals(2, restored.allVideos.size)
+        assertEquals(listOf("/data/vid1.mp4", "/data/vid2.mp4"), restored.allVideos)
+        assertEquals("Silver 925", restored.customFields["Material"])
+    }
+
+    @Test
+    fun testQrAttachmentLegacySingleMediaBackwardCompatibility() {
+        val legacyJson = org.json.JSONObject().apply {
+            put("id", "legacy-id")
+            put("qrContent", "OLD-QR")
+            put("title", "Old Entry")
+            put("imageUri", "/data/single_old_photo.jpg")
+            put("videoUri", "/data/single_old_video.mp4")
+        }
+
+        val restored = QrAttachment.fromJson(legacyJson)
+        assertEquals(1, restored.allImages.size)
+        assertEquals("/data/single_old_photo.jpg", restored.allImages[0])
+        assertEquals("/data/single_old_photo.jpg", restored.imageUri)
+        assertEquals(1, restored.allVideos.size)
+        assertEquals("/data/single_old_video.mp4", restored.allVideos[0])
+        assertEquals("/data/single_old_video.mp4", restored.videoUri)
+    }
+
+    @Test
+    fun testImageOptimizationQualityConfigurations() {
+        assertEquals(800, ImageOptimizationQuality.COMPACT.maxDimension)
+        assertEquals(70, ImageOptimizationQuality.COMPACT.compressionQuality)
+
+        assertEquals(1280, ImageOptimizationQuality.BALANCED.maxDimension)
+        assertEquals(80, ImageOptimizationQuality.BALANCED.compressionQuality)
+
+        assertEquals(1920, ImageOptimizationQuality.HIGH.maxDimension)
+        assertEquals(90, ImageOptimizationQuality.HIGH.compressionQuality)
+
+        assertEquals(0, ImageOptimizationQuality.ORIGINAL.maxDimension)
+        assertEquals(100, ImageOptimizationQuality.ORIGINAL.compressionQuality)
+    }
+
+    @Test
+    fun testCalloutLayoutSolverStrictScreenBoundaryContainment() {
+        val density = androidx.compose.ui.unit.Density(2.0f, 1.0f)
+        val dummyResult = ParsedQrResult(rawText = "CORNER-QR", status = CalculationStatus.Success(100.0, "$100"))
+
+        // Place QR right at the extreme top-left screen corner
+        val extremeQr = TrackedQr(
+            id = "corner1",
+            rawContent = "CORNER-QR",
+            currentBox = RectF(0f, 0f, 100f, 100f),
+            targetBox = RectF(0f, 0f, 100f, 100f),
+            result = dummyResult,
+            lastSeenMs = 1000L,
+            firstSeenMs = 500L
+        )
+
+        val config = OverlayAppearance(
+            calloutMode = CalloutLayoutMode.DIRECT_FOLLOW,
+            autoAvoidEdges = true
+        )
+
+        val solved = com.example.ui.CalloutLayoutSolver.solve(
+            items = listOf(extremeQr),
+            config = config,
+            screenWidthPx = 1080f,
+            screenHeightPx = 1920f,
+            density = density
+        )
+
+        assertEquals(1, solved.size)
+        val card = solved[0]
+
+        // Strict margins: card left and top must not bleed off the screen
+        val cardLeft = card.cardCenterX - card.cardWidth / 2f
+        val cardTop = card.cardCenterY - card.cardHeight / 2f
+        val cardRight = card.cardCenterX + card.cardWidth / 2f
+        val cardBottom = card.cardCenterY + card.cardHeight / 2f
+
+        assertTrue("Card left must be >= 0: $cardLeft", cardLeft >= 0f)
+        assertTrue("Card top must be >= 0: $cardTop", cardTop >= 0f)
+        assertTrue("Card right must be <= 1080: $cardRight", cardRight <= 1080f)
+        assertTrue("Card bottom must be <= 1920: $cardBottom", cardBottom <= 1920f)
+    }
+
+    @Test
+    fun testExportAndImportIndividualProfileWithoutMedia() {
+        val profile = QrProfile(
+            name = "Amber Beads Master",
+            triggerSignal = "AMBER-",
+            parsingRules = QrParsingRules(delimiter = "-")
+        )
+        val attachment = QrAttachment(
+            qrContent = "AMBER-99",
+            title = "Cherry Amber 33",
+            images = listOf("/dummy/photo1.jpg"),
+            videos = listOf("/dummy/video1.mp4")
+        )
+
+        // Export WITHOUT media
+        val exportJson = com.example.data.BackupTransferManager.createExportJson(
+            profiles = listOf(profile),
+            attachments = listOf(attachment),
+            includeMedia = false
+        )
+
+        val preview = com.example.data.BackupTransferManager.parseImportPreview(exportJson)
+        assertEquals(1, preview.profiles.size)
+        assertEquals("Amber Beads Master", preview.profiles[0].name)
+        assertEquals("AMBER-", preview.profiles[0].triggerSignal)
+        assertEquals(1, preview.attachments.size)
+        assertEquals("Cherry Amber 33", preview.attachments[0].title)
+
+        // Verify media is stripped when exported without media
+        assertFalse(preview.hasMedia)
+        assertEquals(0, preview.attachments[0].allImages.size)
+        assertEquals(0, preview.attachments[0].allVideos.size)
+    }
+
+    @Test
+    fun testExportAndImportIndividualProfileWithMediaStructure() {
+        val profile1 = QrProfile(name = "Gold Scale", triggerSignal = "GOLD-")
+        val profile2 = QrProfile(name = "Diamond Scale", triggerSignal = "DIA-")
+
+        val attachment = QrAttachment(
+            qrContent = "GOLD-24K",
+            title = "Pure 24K Bar"
+        )
+
+        // Selectively export only profile1 with media
+        val exportJson = com.example.data.BackupTransferManager.createExportJson(
+            profiles = listOf(profile1), // Only profile 1!
+            attachments = listOf(attachment),
+            includeMedia = true
+        )
+
+        val preview = com.example.data.BackupTransferManager.parseImportPreview(exportJson)
+        assertEquals(1, preview.profiles.size)
+        assertEquals("Gold Scale", preview.profiles[0].name)
+        assertEquals(1, preview.attachments.size)
+        assertEquals("Pure 24K Bar", preview.attachments[0].title)
+    }
+
+    @Test
+    fun testParseImportPreviewSupportsLegacyProfilesArray() {
+        val legacyArrayJson = org.json.JSONArray().apply {
+            put(QrProfile(name = "Legacy 1").toJson())
+            put(QrProfile(name = "Legacy 2").toJson())
+        }.toString()
+
+        val preview = com.example.data.BackupTransferManager.parseImportPreview(legacyArrayJson)
+        assertEquals(2, preview.profiles.size)
+        assertEquals("Legacy 1", preview.profiles[0].name)
+        assertEquals("Legacy 2", preview.profiles[1].name)
+        assertEquals(0, preview.attachments.size)
+        assertFalse(preview.hasMedia)
+    }
+
+    // --- Barcode Reading Options & 2D/3D Format Tests ---
+
+    @Test
+    fun testBarcodeCatalogSupportedFormatsAndCategories() {
+        val allItems = BarcodeCatalog.ALL_ITEMS
+        assertTrue("Should support at least 13 barcode formats", allItems.size >= 13)
+
+        // Verify 2D & 3D Stacked formats
+        val twoDItems = allItems.filter { it.category == BarcodeCategory.TWO_D_AND_STACKED }
+        val twoDFormatKeys = twoDItems.map { it.codeKey }
+        assertTrue(twoDFormatKeys.contains("QR_CODE"))
+        assertTrue(twoDFormatKeys.contains("DATA_MATRIX"))
+        assertTrue(twoDFormatKeys.contains("PDF417"))
+        assertTrue(twoDFormatKeys.contains("AZTEC"))
+
+        // Verify PDF417 is badged as 3D Stacked
+        val pdf417 = twoDItems.first { it.codeKey == "PDF417" }
+        assertEquals("3D Stacked", pdf417.badge)
+
+        // Verify 1D Retail formats
+        val retailItems = allItems.filter { it.category == BarcodeCategory.ONE_D_RETAIL }
+        val retailKeys = retailItems.map { it.codeKey }
+        assertTrue(retailKeys.contains("EAN_13"))
+        assertTrue(retailKeys.contains("EAN_8"))
+        assertTrue(retailKeys.contains("UPC_A"))
+        assertTrue(retailKeys.contains("UPC_E"))
+
+        // Verify 1D Industrial & Logistics formats
+        val logisticsItems = allItems.filter { it.category == BarcodeCategory.ONE_D_LOGISTICS }
+        val logisticsKeys = logisticsItems.map { it.codeKey }
+        assertTrue(logisticsKeys.contains("CODE_128"))
+        assertTrue(logisticsKeys.contains("CODE_39"))
+        assertTrue(logisticsKeys.contains("CODE_93"))
+        assertTrue(logisticsKeys.contains("CODABAR"))
+        assertTrue(logisticsKeys.contains("ITF"))
+    }
+
+    @Test
+    fun testBarcodeScanPresetsResolution() {
+        val allEffective = BarcodeCatalog.resolveEffectiveFormats(BarcodeScanPreset.ALL_FORMATS, emptyList())
+        assertEquals(listOf(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_ALL_FORMATS), allEffective)
+
+        val twoDEffective = BarcodeCatalog.resolveEffectiveFormats(BarcodeScanPreset.TWO_D_ONLY, emptyList())
+        assertEquals(4, twoDEffective.size)
+        assertTrue(twoDEffective.contains(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE))
+        assertTrue(twoDEffective.contains(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_DATA_MATRIX))
+        assertTrue(twoDEffective.contains(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_PDF417))
+        assertTrue(twoDEffective.contains(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_AZTEC))
+
+        val oneDEffective = BarcodeCatalog.resolveEffectiveFormats(BarcodeScanPreset.ONE_D_ONLY, emptyList())
+        assertEquals(9, oneDEffective.size)
+        assertTrue(oneDEffective.contains(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_EAN_13))
+        assertTrue(oneDEffective.contains(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_CODE_128))
+
+        val customEffective = BarcodeCatalog.resolveEffectiveFormats(
+            BarcodeScanPreset.CUSTOM,
+            listOf(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_EAN_13, com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE)
+        )
+        assertEquals(2, customEffective.size)
+    }
+
+    @Test
+    fun testTrackingSettingsBarcodeSerialization() {
+        val original = TrackingSettings(
+            smoothingFactor = 0.5f,
+            scanPreset = BarcodeScanPreset.TWO_D_ONLY,
+            enabledFormats = listOf(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE, com.google.mlkit.vision.barcode.common.Barcode.FORMAT_PDF417),
+            enableInvertedDetection = true
+        )
+
+        val json = original.toJson()
+        val deserialized = TrackingSettings.fromJson(json)
+
+        assertEquals(BarcodeScanPreset.TWO_D_ONLY, deserialized.scanPreset)
+        assertEquals(2, deserialized.enabledFormats.size)
+        assertTrue(deserialized.enabledFormats.contains(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_PDF417))
+        assertTrue(deserialized.enableInvertedDetection)
+    }
+
+    @Test
+    fun testQrTrackerWithVariousBarcodeFormats() {
+        val tracker = QrTracker()
+        val profile = QrProfile(
+            name = "Test Profile",
+            parsingRules = QrParsingRules(delimiter = "-")
+        )
+
+        val detectedCodes = listOf(
+            RawDetectedCode(
+                rawValue = "10-20-30-40",
+                uprightBoundingBox = RectF(100f, 100f, 200f, 200f),
+                format = com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE,
+                formatName = "QR CODE"
+            ),
+            RawDetectedCode(
+                rawValue = "8690504018089",
+                uprightBoundingBox = RectF(100f, 300f, 400f, 400f),
+                format = com.google.mlkit.vision.barcode.common.Barcode.FORMAT_EAN_13,
+                formatName = "EAN-13"
+            ),
+            RawDetectedCode(
+                rawValue = "PDF417-PASS-OK",
+                uprightBoundingBox = RectF(100f, 500f, 500f, 600f),
+                format = com.google.mlkit.vision.barcode.common.Barcode.FORMAT_PDF417,
+                formatName = "PDF417"
+            )
+        )
+
+        val tracked = tracker.update(detectedCodes, profile)
+        assertEquals(3, tracked.size)
+
+        val qrTracked = tracked.first { it.rawContent == "10-20-30-40" }
+        assertEquals("QR CODE", qrTracked.formatName)
+        assertEquals(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE, qrTracked.barcodeFormat)
+
+        val eanTracked = tracked.first { it.rawContent == "8690504018089" }
+        assertEquals("EAN-13", eanTracked.formatName)
+        assertEquals(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_EAN_13, eanTracked.barcodeFormat)
+
+        val pdfTracked = tracked.first { it.rawContent == "PDF417-PASS-OK" }
+        assertEquals("PDF417", pdfTracked.formatName)
+        assertEquals(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_PDF417, pdfTracked.barcodeFormat)
+    }
 }

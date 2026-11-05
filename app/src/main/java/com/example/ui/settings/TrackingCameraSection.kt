@@ -1,14 +1,26 @@
 package com.example.ui.settings
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.model.BarcodeCatalog
+import com.example.model.BarcodeScanPreset
 import com.example.model.TrackingSettings
+import com.example.ui.components.BarcodeFormatOptionsSheet
+import com.google.mlkit.vision.barcode.common.Barcode
 
 @Composable
 fun TrackingCameraSection(
@@ -16,12 +28,199 @@ fun TrackingCameraSection(
     onTrackingChanged: (TrackingSettings) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var showBarcodeOptionsSheet by remember { mutableStateOf(false) }
+
+    if (showBarcodeOptionsSheet) {
+        BarcodeFormatOptionsSheet(
+            currentSettings = tracking,
+            onSettingsChanged = onTrackingChanged,
+            onDismiss = { showBarcodeOptionsSheet = false }
+        )
+    }
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Section: Barcode Reading Options (2D, 3D, 1D)
+        item {
+            Text(
+                text = "Barcode Reading Options",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Configure scanner capabilities for 2D matrix, 3D stacked, and 1D retail & industrial barcodes.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Active Scanning Preset",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                text = tracking.scanPreset.label,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Button(
+                            onClick = { showBarcodeOptionsSheet = true },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Options", fontSize = 12.sp)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Preset Chips Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BarcodeScanPreset.entries.forEach { preset ->
+                            val isSelected = tracking.scanPreset == preset
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    val formats = if (preset == BarcodeScanPreset.ALL_FORMATS) {
+                                        listOf(Barcode.FORMAT_ALL_FORMATS)
+                                    } else {
+                                        BarcodeCatalog.resolveEffectiveFormats(preset, tracking.enabledFormats)
+                                    }
+                                    onTrackingChanged(
+                                        tracking.copy(
+                                            scanPreset = preset,
+                                            enabledFormats = formats
+                                        )
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = when (preset) {
+                                            BarcodeScanPreset.ALL_FORMATS -> "All (Auto)"
+                                            BarcodeScanPreset.TWO_D_ONLY -> "2D + 3D"
+                                            BarcodeScanPreset.ONE_D_ONLY -> "1D Only"
+                                            BarcodeScanPreset.CUSTOM -> "Custom"
+                                        },
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Inverted & 3D Scanning Switch
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "3D & Inverted Mode",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+                                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                                ) {
+                                    Text(
+                                        text = "DPM / Laser",
+                                        fontSize = 8.5.sp,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "Dual-pass reading for laser-etched, dot-peen, inverted dark-surface, and high-density barcodes.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = tracking.enableInvertedDetection,
+                            onCheckedChange = { onTrackingChanged(tracking.copy(enableInvertedDetection = it)) }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Status pill showing total supported formats
+                    val effectiveCount = if (tracking.scanPreset == BarcodeScanPreset.ALL_FORMATS) {
+                        "All 13 formats active"
+                    } else if (tracking.scanPreset == BarcodeScanPreset.TWO_D_ONLY) {
+                        "4 formats: QR, Data Matrix, PDF417, Aztec"
+                    } else if (tracking.scanPreset == BarcodeScanPreset.ONE_D_ONLY) {
+                        "9 formats: EAN, UPC, Code 128, 39, 93, Codabar, ITF"
+                    } else {
+                        "${tracking.enabledFormats.size} custom formats active"
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showBarcodeOptionsSheet = true }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = effectiveCount,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Icon(
+                                imageVector = Icons.Default.ChevronRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Section: Tracking & Continuity Engine
         item {
             Text(
                 text = "Tracking & Continuity Engine",
@@ -65,7 +264,7 @@ fun TrackingCameraSection(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Keeps overlay on screen briefly and smoothly fades it out if QR code is temporarily obscured or moving fast.",
+                        text = "Keeps overlay on screen briefly and smoothly fades it out if barcode is temporarily obscured.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -79,7 +278,7 @@ fun TrackingCameraSection(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
-                        text = "Max Concurrent QR Codes: ${tracking.maxTrackedCodes}",
+                        text = "Max Concurrent Codes: ${tracking.maxTrackedCodes}",
                         fontWeight = FontWeight.SemiBold
                     )
                     Slider(
@@ -92,6 +291,7 @@ fun TrackingCameraSection(
             }
         }
 
+        // Section: Hardware Camera Preferences
         item {
             Text(
                 text = "Hardware Camera Preferences",

@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -31,9 +32,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.clickable
+import com.example.data.AttachmentRepository
+import com.example.data.BackupTransferManager
+import com.example.data.ImportPreviewData
 import com.example.data.ProfileRepository
 import com.example.engine.QrCodeGenerator
 import com.example.engine.QrParser
+import com.example.model.QrAttachment
 import com.example.model.QrProfile
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -42,6 +48,7 @@ import java.io.InputStreamReader
 @Composable
 fun ProfilesSection(
     profileRepository: ProfileRepository,
+    attachmentRepository: AttachmentRepository? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -49,6 +56,7 @@ fun ProfilesSection(
 
     val activeProfile by profileRepository.activeProfile.collectAsState()
     val profiles by profileRepository.profiles.collectAsState()
+    val attachments by (attachmentRepository?.attachments?.collectAsState() ?: remember { mutableStateOf(emptyList<QrAttachment>()) })
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf<QrProfile?>(null) }
@@ -56,6 +64,17 @@ fun ProfilesSection(
     var showExportOptionsDialog by remember { mutableStateOf(false) }
     var showImportOptionsDialog by remember { mutableStateOf(false) }
     var showQrDisplayDialog by remember { mutableStateOf<QrProfile?>(null) }
+
+    // Export control state
+    var exportTargetProfile by remember { mutableStateOf<QrProfile?>(null) }
+    var selectedExportProfileIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var exportIncludeMedia by remember { mutableStateOf(true) }
+
+    // Import control state
+    var pendingImportPreview by remember { mutableStateOf<ImportPreviewData?>(null) }
+    var selectedImportProfileIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var importIncludeMedia by remember { mutableStateOf(true) }
+    var importOverwriteExisting by remember { mutableStateOf(false) }
 
     var newProfileName by remember { mutableStateOf("") }
     var newProfileDesc by remember { mutableStateOf("") }
@@ -101,12 +120,13 @@ fun ProfilesSection(
                     }
                 }
                 val content = stringBuilder.toString()
-                val result = profileRepository.importProfilesJson(content)
-                if (result.isSuccess) {
-                    val count = result.getOrNull() ?: 1
-                    Toast.makeText(context, "Imported $count profile(s) from file!", Toast.LENGTH_SHORT).show()
+                val preview = BackupTransferManager.parseImportPreview(content)
+                if (preview.profiles.isNotEmpty() || preview.attachments.isNotEmpty()) {
+                    pendingImportPreview = preview
+                    selectedImportProfileIds = preview.profiles.map { it.id }.toSet()
+                    importIncludeMedia = preview.hasMedia
                 } else {
-                    Toast.makeText(context, "Invalid JSON: ${result.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "No valid profiles found in file", Toast.LENGTH_LONG).show()
                 }
             }.onFailure { e ->
                 Toast.makeText(context, "Failed to read file: ${e.message}", Toast.LENGTH_LONG).show()
@@ -174,7 +194,11 @@ fun ProfilesSection(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         FilledTonalButton(
-                            onClick = { showExportOptionsDialog = true },
+                            onClick = {
+                                exportTargetProfile = null
+                                selectedExportProfileIds = profiles.map { it.id }.toSet()
+                                showExportOptionsDialog = true
+                            },
                             modifier = Modifier.weight(1f).testTag("export_profiles_btn"),
                             shape = RoundedCornerShape(10.dp),
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
@@ -320,16 +344,17 @@ fun ProfilesSection(
                             )
                         }
 
-                        // Share Profile button
+                        // Export/Share Profile button
                         IconButton(
                             onClick = {
-                                val json = profileRepository.exportSingleProfileJson(profile.id)
-                                shareProfileText("QR Live Calc Profile - ${profile.name}", json)
+                                exportTargetProfile = profile
+                                selectedExportProfileIds = setOf(profile.id)
+                                showExportOptionsDialog = true
                             }
                         ) {
                             Icon(
                                 Icons.Default.Share,
-                                contentDescription = "Share Profile",
+                                contentDescription = "Export Profile",
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -521,82 +546,278 @@ fun ProfilesSection(
         )
     }
 
-    // 4. Export Options Dialog (File, Share App, Clipboard)
+    // 4. Export Options Dialog with granular choices: Individual profile(s), All profiles, With or Without Media
     if (showExportOptionsDialog) {
-        val allProfilesJson = remember { profileRepository.exportProfilesJson() }
-        val activeProfileJson = remember { profileRepository.exportSingleProfileJson(activeProfile.id) }
+        val targetExportProfiles = if (selectedExportProfileIds.isEmpty()) {
+            if (exportTargetProfile != null) listOf(exportTargetProfile!!) else profiles
+        } else {
+            profiles.filter { it.id in selectedExportProfileIds }
+        }
+
+        // Relevant attachments that match the chosen profiles
+        val relevantAttachments = remember(targetExportProfiles, attachments) {
+            val signals = targetExportProfiles.map { it.triggerSignal.trim().lowercase() }.filter { it.isNotBlank() }
+            if (signals.isEmpty() || targetExportProfiles.size == profiles.size) {
+                attachments
+            } else {
+                attachments.filter { att ->
+                    val c = att.qrContent.trim().lowercase()
+                    signals.any { s -> c.contains(s) }
+                }
+            }
+        }
+
+        val mediaCount = relevantAttachments.sumOf { it.allImages.size + it.allVideos.size }
 
         AlertDialog(
             onDismissRequest = { showExportOptionsDialog = false },
-            title = { Text("Export Profiles") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Share, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Choose how you want to export your profiles:",
-                        style = MaterialTheme.typography.bodyMedium
+                        if (exportTargetProfile != null && selectedExportProfileIds.size == 1) "Export '${exportTargetProfile?.name}'" else "Export Profiles & Data"
+                    )
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 440.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Customize your export package. Choose individual profiles and whether to include linked media files:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    // Export all to file
+                    // 1. Profile Scope Selection
+                    Text(
+                        text = "1. SELECT PROFILES TO EXPORT (${targetExportProfiles.size}/${profiles.size})",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FilterChip(
+                            selected = selectedExportProfileIds.size == profiles.size,
+                            onClick = {
+                                exportTargetProfile = null
+                                selectedExportProfileIds = profiles.map { it.id }.toSet()
+                            },
+                            label = { Text("All (${profiles.size})", fontSize = 11.sp) }
+                        )
+                        FilterChip(
+                            selected = selectedExportProfileIds.size == 1 && selectedExportProfileIds.contains(activeProfile.id),
+                            onClick = {
+                                exportTargetProfile = activeProfile
+                                selectedExportProfileIds = setOf(activeProfile.id)
+                            },
+                            label = { Text("Active Only", fontSize = 11.sp) }
+                        )
+                    }
+
+                    // Checklist of all individual profiles
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    ) {
+                        Column(modifier = Modifier.padding(6.dp)) {
+                            profiles.forEach { p ->
+                                val isChecked = p.id in selectedExportProfileIds || (selectedExportProfileIds.isEmpty() && (exportTargetProfile == null || exportTargetProfile?.id == p.id))
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            val current = if (selectedExportProfileIds.isEmpty()) {
+                                                profiles.map { it.id }.toMutableSet()
+                                            } else {
+                                                selectedExportProfileIds.toMutableSet()
+                                            }
+                                            if (isChecked) {
+                                                if (current.size > 1) current.remove(p.id)
+                                            } else {
+                                                current.add(p.id)
+                                            }
+                                            selectedExportProfileIds = current
+                                        }
+                                        .padding(vertical = 4.dp, horizontal = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = isChecked,
+                                        onCheckedChange = { checked ->
+                                            val current = if (selectedExportProfileIds.isEmpty()) {
+                                                profiles.map { it.id }.toMutableSet()
+                                            } else {
+                                                selectedExportProfileIds.toMutableSet()
+                                            }
+                                            if (checked) current.add(p.id) else if (current.size > 1) current.remove(p.id)
+                                            selectedExportProfileIds = current
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(p.name, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        Text(
+                                            text = "Formula: ${p.formula.expression.ifBlank { "a+b+c+d" }}${if (p.triggerSignal.isNotBlank()) " • Signal: ${p.triggerSignal}" else ""}",
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. Media Inclusion Choice (With Media vs Without Media)
+                    Text(
+                        text = "2. MEDIA INCLUSION CHOICE",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (exportIncludeMedia) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (exportIncludeMedia) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { exportIncludeMedia = true }
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(
+                                        selected = exportIncludeMedia,
+                                        onClick = { exportIncludeMedia = true },
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("With Media", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = if (mediaCount > 0) "Includes $mediaCount attached photo(s)/video(s). Portable bundle." else "Full bundle with media support.",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (!exportIncludeMedia) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (!exportIncludeMedia) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { exportIncludeMedia = false }
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(
+                                        selected = !exportIncludeMedia,
+                                        onClick = { exportIncludeMedia = false },
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Without Media", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Formulas, rules & settings only. Ultra-lightweight JSON (<20 KB).",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    // 3. Export Actions (Save File, Share, Copy)
+                    Text(
+                        text = "3. CHOOSE EXPORT DESTINATION",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    fun generateExportPayload(): String {
+                        return BackupTransferManager.createExportJson(
+                            profiles = targetExportProfiles,
+                            attachments = relevantAttachments,
+                            includeMedia = exportIncludeMedia
+                        )
+                    }
+
                     FilledTonalButton(
                         onClick = {
-                            pendingExportJson = allProfilesJson
-                            pendingExportFileName = "all_qr_profiles.json"
-                            exportFileLauncher.launch("all_qr_profiles.json")
+                            val json = generateExportPayload()
+                            pendingExportJson = json
+                            val baseName = if (targetExportProfiles.size == 1) {
+                                "profile_${targetExportProfiles.first().name.lowercase().replace("\\s+".toRegex(), "_")}"
+                            } else {
+                                "qr_profiles_export"
+                            }
+                            pendingExportFileName = if (exportIncludeMedia) "${baseName}_with_media.json" else "${baseName}_no_media.json"
+                            exportFileLauncher.launch(pendingExportFileName)
                             showExportOptionsDialog = false
                         },
-                        modifier = Modifier.fillMaxWidth().testTag("export_all_file_btn"),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
+                        modifier = Modifier.fillMaxWidth().testTag("export_save_file_btn"),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                     ) {
                         Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Save All Profiles (.json)", maxLines = 1, softWrap = false)
+                        Text("Save as JSON File", fontSize = 12.sp)
                     }
 
-                    // Save active profile to file
-                    FilledTonalButton(
-                        onClick = {
-                            pendingExportJson = activeProfileJson
-                            val safeName = activeProfile.name.lowercase().replace("\\s+".toRegex(), "_")
-                            pendingExportFileName = "profile_$safeName.json"
-                            exportFileLauncher.launch("profile_$safeName.json")
-                            showExportOptionsDialog = false
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
-                    ) {
-                        Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        val displayName = if (activeProfile.name.length > 16) "${activeProfile.name.take(14)}…" else activeProfile.name
-                        Text("Save Active '$displayName' (.json)", maxLines = 1, softWrap = false)
-                    }
-
-                    // Share via Share Sheet (other apps)
                     Button(
                         onClick = {
-                            shareProfileText("QR Live Calc Profiles", allProfilesJson)
+                            val json = generateExportPayload()
+                            val title = if (targetExportProfiles.size == 1) {
+                                "Profile: ${targetExportProfiles.first().name} (${if (exportIncludeMedia) "With Media" else "Without Media"})"
+                            } else {
+                                "${targetExportProfiles.size} Profiles (${if (exportIncludeMedia) "With Media" else "Without Media"})"
+                            }
+                            shareProfileText(title, json)
                             showExportOptionsDialog = false
                         },
                         modifier = Modifier.fillMaxWidth().testTag("share_profiles_btn"),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                     ) {
                         Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Share via Apps (WhatsApp, Mail)", maxLines = 1, softWrap = false)
+                        Text("Share via Apps (WhatsApp, Drive, Email)", fontSize = 12.sp)
                     }
 
-                    // Copy to clipboard
                     OutlinedButton(
                         onClick = {
-                            clipboardManager.setText(AnnotatedString(allProfilesJson))
-                            Toast.makeText(context, "All profiles copied to clipboard", Toast.LENGTH_SHORT).show()
+                            val json = generateExportPayload()
+                            clipboardManager.setText(AnnotatedString(json))
+                            Toast.makeText(context, "Copied export JSON to clipboard!", Toast.LENGTH_SHORT).show()
                             showExportOptionsDialog = false
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                     ) {
                         Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Copy JSON to Clipboard", maxLines = 1, softWrap = false)
+                        Text("Copy JSON to Clipboard", fontSize = 12.sp)
                     }
                 }
             },
@@ -686,17 +907,19 @@ fun ProfilesSection(
                 if (isPastingMode) {
                     Button(
                         onClick = {
-                            val result = profileRepository.importProfilesJson(importJsonText)
-                            if (result.isSuccess) {
-                                val count = result.getOrNull() ?: 1
-                                Toast.makeText(context, "Imported $count profile(s) successfully!", Toast.LENGTH_SHORT).show()
+                            val preview = BackupTransferManager.parseImportPreview(importJsonText)
+                            if (preview.profiles.isNotEmpty() || preview.attachments.isNotEmpty()) {
                                 showImportOptionsDialog = false
+                                pendingImportPreview = preview
+                                selectedImportProfileIds = preview.profiles.map { it.id }.toSet()
+                                importIncludeMedia = preview.hasMedia
+                                importJsonText = ""
                             } else {
-                                Toast.makeText(context, "Import failed: ${result.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, "Invalid JSON data or empty profile bundle.", Toast.LENGTH_SHORT).show()
                             }
                         }
                     ) {
-                        Text("Import")
+                        Text("Review & Import")
                     }
                 }
             },
@@ -710,6 +933,221 @@ fun ProfilesSection(
                         }
                     }
                 ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // 6. Interactive Import Review & Control Dialog: Select individual profiles, with or without media
+    val preview = pendingImportPreview
+    if (preview != null) {
+        AlertDialog(
+            onDismissRequest = { pendingImportPreview = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Download, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Import Review & Control")
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 440.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Found ${preview.profiles.size} Profile(s)${if (preview.attachments.isNotEmpty()) ", ${preview.attachments.size} Linked Data" else ""}${if (preview.hasMedia) " with embedded media (~${BackupTransferManager.formatBytes(preview.totalMediaBytesEstimate)})" else ""}. Select what to import:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // 1. Profile Checklist
+                    if (preview.profiles.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "SELECT PROFILES (${selectedImportProfileIds.size}/${preview.profiles.size})",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                TextButton(
+                                    onClick = { selectedImportProfileIds = preview.profiles.map { it.id }.toSet() },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text("Select All", fontSize = 11.sp)
+                                }
+                                TextButton(
+                                    onClick = { selectedImportProfileIds = emptySet() },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text("None", fontSize = 11.sp)
+                                }
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        ) {
+                            Column(modifier = Modifier.padding(6.dp)) {
+                                preview.profiles.forEach { p ->
+                                    val isChecked = p.id in selectedImportProfileIds
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                val next = selectedImportProfileIds.toMutableSet()
+                                                if (isChecked) next.remove(p.id) else next.add(p.id)
+                                                selectedImportProfileIds = next
+                                            }
+                                            .padding(vertical = 4.dp, horizontal = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Checkbox(
+                                            checked = isChecked,
+                                            onCheckedChange = { checked ->
+                                                val next = selectedImportProfileIds.toMutableSet()
+                                                if (checked) next.add(p.id) else next.remove(p.id)
+                                                selectedImportProfileIds = next
+                                            },
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(p.name, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                            Text(
+                                                text = "Delimiter: '${p.parsingRules.effectiveDelimiter}' • Formula: ${p.formula.expression.ifBlank { "a+b+c+d" }}",
+                                                fontSize = 10.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. Media Choice (Import with media or without media)
+                    if (preview.hasMedia || preview.attachments.isNotEmpty()) {
+                        Text(
+                            text = "MEDIA IMPORT CHOICE",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (importIncludeMedia) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (importIncludeMedia) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { importIncludeMedia = true }
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        RadioButton(
+                                            selected = importIncludeMedia,
+                                            onClick = { importIncludeMedia = true },
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("With Media", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    }
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text("Restore photos & videos to device storage.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (!importIncludeMedia) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (!importIncludeMedia) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { importIncludeMedia = false }
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        RadioButton(
+                                            selected = !importIncludeMedia,
+                                            onClick = { importIncludeMedia = false },
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Without Media", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    }
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text("Rules & specs only. Skip saving media files.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. Conflict Resolution
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { importOverwriteExisting = !importOverwriteExisting }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = importOverwriteExisting,
+                            onCheckedChange = { importOverwriteExisting = it },
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Overwrite existing profile if ID or name matches",
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val result = BackupTransferManager.executeImport(
+                            preview = preview,
+                            selectedProfileIds = selectedImportProfileIds,
+                            selectedAttachmentIds = preview.attachments.map { it.id }.toSet(),
+                            importMedia = importIncludeMedia,
+                            overwriteExisting = importOverwriteExisting,
+                            profileRepository = profileRepository,
+                            attachmentRepository = attachmentRepository
+                        )
+                        Toast.makeText(
+                            context,
+                            "Successfully imported ${result.profilesCount} profile(s)${if (result.mediaFilesCount > 0) " & ${result.mediaFilesCount} media file(s)" else ""}!",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        pendingImportPreview = null
+                    },
+                    enabled = selectedImportProfileIds.isNotEmpty() || preview.attachments.isNotEmpty()
+                ) {
+                    Text("Import Selected (${selectedImportProfileIds.size})")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingImportPreview = null }) {
                     Text("Cancel")
                 }
             }

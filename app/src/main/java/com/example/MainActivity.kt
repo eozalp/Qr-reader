@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
                         AppScreen.SETTINGS -> {
                             SettingsScreen(
                                 profileRepository = profileRepository,
+                                attachmentRepository = attachmentRepository,
                                 onNavigateBack = { currentScreen = AppScreen.CAMERA },
                                 modifier = Modifier.fillMaxSize()
                             )

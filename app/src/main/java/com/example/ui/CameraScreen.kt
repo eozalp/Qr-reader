@@ -44,9 +44,13 @@ import com.example.data.ProfileRepository
 import com.example.model.QrAttachment
 import com.example.model.QrProfile
 import com.example.model.TrackedQr
+import com.example.model.BarcodeCatalog
+import com.example.model.BarcodeScanPreset
 import com.example.ui.attachments.AttachmentDetailDialog
 import com.example.ui.attachments.EditAttachmentDialog
 import com.example.ui.attachments.LinkedAttachmentsSheet
+import com.example.ui.components.BarcodeFormatOptionsSheet
+import com.google.mlkit.vision.barcode.common.Barcode
 import java.util.concurrent.Executors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -100,6 +104,7 @@ fun CameraScreen(
 
     // Linked Attachment UI state
     var showAttachmentsSheet by remember { mutableStateOf(false) }
+    var showBarcodeOptionsSheet by remember { mutableStateOf(false) }
     var editingAttachment by remember { mutableStateOf<QrAttachment?>(null) }
     var viewingAttachment by remember { mutableStateOf<QrAttachment?>(null) }
     var initialQrForEdit by remember { mutableStateOf("") }
@@ -191,6 +196,13 @@ fun CameraScreen(
     LaunchedEffect(screenWidthPx, screenHeightPx) {
         analyzer.viewWidth = screenWidthPx
         analyzer.viewHeight = screenHeightPx
+    }
+    LaunchedEffect(activeProfile.tracking.scanPreset, activeProfile.tracking.enabledFormats, activeProfile.tracking.enableInvertedDetection) {
+        analyzer.updateBarcodeFormats(
+            preset = activeProfile.tracking.scanPreset,
+            customFormats = activeProfile.tracking.enabledFormats,
+            enableInverted = activeProfile.tracking.enableInvertedDetection
+        )
     }
 
     // Periodic ticker to smoothly fade out lost QRs
@@ -342,6 +354,7 @@ fun CameraScreen(
                 isFrontCamera = isFrontCamera,
                 onToggleCamera = { isFrontCamera = !isFrontCamera },
                 onOpenSimulation = { showSimulationSheet = true },
+                onOpenBarcodeOptions = { showBarcodeOptionsSheet = true },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .windowInsetsPadding(WindowInsets.statusBars)
@@ -565,15 +578,37 @@ fun CameraScreen(
                 }
             }
 
-            // Bottom action buttons: Linked Data, Simulation Wand & Settings FAB
+            // Bottom action buttons: Linked Data, Barcode Formats, Simulation Wand & Settings FAB
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .windowInsetsPadding(WindowInsets.navigationBars)
                     .padding(bottom = 24.dp, end = 20.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                FilledTonalButton(
+                    onClick = { showBarcodeOptionsSheet = true },
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = Color(0xDD090D16),
+                        contentColor = Color(0xFF60A5FA)
+                    ),
+                    modifier = Modifier.testTag("barcode_reading_options_btn")
+                ) {
+                    Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = when (activeProfile.tracking.scanPreset) {
+                            BarcodeScanPreset.ALL_FORMATS -> "All Barcodes"
+                            BarcodeScanPreset.TWO_D_ONLY -> "2D / 3D"
+                            BarcodeScanPreset.ONE_D_ONLY -> "1D Barcodes"
+                            BarcodeScanPreset.CUSTOM -> "Custom"
+                        },
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
                 FilledTonalButton(
                     onClick = { showAttachmentsSheet = true },
                     colors = ButtonDefaults.filledTonalButtonColors(
@@ -628,6 +663,17 @@ fun CameraScreen(
                         showAttachmentsSheet = false
                         viewingAttachment = att
                     }
+                )
+            }
+
+            // Barcode Format Options Sheet
+            if (showBarcodeOptionsSheet) {
+                BarcodeFormatOptionsSheet(
+                    currentSettings = activeProfile.tracking,
+                    onSettingsChanged = { updatedTracking ->
+                        profileRepository.saveProfile(activeProfile.copy(tracking = updatedTracking))
+                    },
+                    onDismiss = { showBarcodeOptionsSheet = false }
                 )
             }
 
@@ -700,28 +746,57 @@ fun CameraScreen(
                                     val centerX = screenWidthPx / 2f
                                     val centerY = screenHeightPx / 2f
                                     simulatedCodes = listOf(
-                                        RawDetectedCode("10-20-30-40", RectF(centerX - 100f, centerY - 100f, centerX + 100f, centerY + 100f))
+                                        RawDetectedCode("10-20-30-40", RectF(centerX - 100f, centerY - 100f, centerX + 100f, centerY + 100f), Barcode.FORMAT_QR_CODE, "QR CODE")
                                     )
                                     showSimulationSheet = false
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("Sum: 10-20-30-40", fontSize = 11.sp)
+                                Text("QR: 10-20-30-40", fontSize = 11.sp)
                             }
 
                             Button(
                                 onClick = {
                                     val w = screenWidthPx; val h = screenHeightPx
                                     simulatedCodes = listOf(
-                                        RawDetectedCode("10-20-30-40", RectF(w * 0.15f, h * 0.25f, w * 0.15f + 160f, h * 0.25f + 160f)),
-                                        RawDetectedCode("5-10-15-20", RectF(w * 0.55f, h * 0.45f, w * 0.55f + 160f, h * 0.45f + 160f)),
-                                        RawDetectedCode("100-200-300-400", RectF(w * 0.25f, h * 0.65f, w * 0.25f + 160f, h * 0.65f + 160f))
+                                        RawDetectedCode("8690504018089", RectF(w * 0.15f, h * 0.35f, w * 0.85f, h * 0.48f), Barcode.FORMAT_EAN_13, "EAN-13")
                                     )
                                     showSimulationSheet = false
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("Multi-QR (3 Codes)", fontSize = 11.sp)
+                                Text("1D: EAN-13", fontSize = 11.sp)
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    val w = screenWidthPx; val h = screenHeightPx
+                                    simulatedCodes = listOf(
+                                        RawDetectedCode("SHIP-984210", RectF(w * 0.15f, h * 0.30f, w * 0.85f, h * 0.44f), Barcode.FORMAT_CODE_128, "CODE 128")
+                                    )
+                                    showSimulationSheet = false
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("1D: Code 128", fontSize = 11.sp)
+                            }
+
+                            Button(
+                                onClick = {
+                                    val w = screenWidthPx; val h = screenHeightPx
+                                    simulatedCodes = listOf(
+                                        RawDetectedCode("PDF417-ID-9941", RectF(w * 0.15f, h * 0.50f, w * 0.85f, h * 0.65f), Barcode.FORMAT_PDF417, "PDF417")
+                                    )
+                                    showSimulationSheet = false
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("3D: PDF417 Stacked", fontSize = 11.sp)
                             }
                         }
 
@@ -729,17 +804,18 @@ fun CameraScreen(
                             onClick = {
                                 val w = screenWidthPx; val h = screenHeightPx
                                 simulatedCodes = listOf(
-                                    RawDetectedCode("150-25", RectF(w * 0.20f, h * 0.40f, w * 0.20f + 160f, h * 0.40f + 160f)),
-                                    RawDetectedCode("200-50", RectF(w * 0.50f, h * 0.42f, w * 0.50f + 160f, h * 0.42f + 160f))
+                                    RawDetectedCode("10-20-30-40", RectF(w * 0.12f, h * 0.22f, w * 0.12f + 160f, h * 0.22f + 160f), Barcode.FORMAT_QR_CODE, "QR CODE"),
+                                    RawDetectedCode("8690504018089", RectF(w * 0.50f, h * 0.38f, w * 0.90f, h * 0.48f), Barcode.FORMAT_EAN_13, "EAN-13"),
+                                    RawDetectedCode("DM-PART-5542", RectF(w * 0.20f, h * 0.60f, w * 0.20f + 150f, h * 0.60f + 150f), Barcode.FORMAT_DATA_MATRIX, "DATA MATRIX")
                                 )
                                 showSimulationSheet = false
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                            modifier = Modifier.fillMaxWidth().testTag("simulate_clustered_qr_btn")
+                            modifier = Modifier.fillMaxWidth().testTag("simulate_multi_format_btn")
                         ) {
                             Icon(Icons.Default.CallSplit, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color(0xFF00F5D4))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Clustered Multi-QR (Bonded Lines Test)", fontSize = 11.sp, color = Color.White)
+                            Text("Mixed Multi-Barcode (QR + EAN-13 + Data Matrix)", fontSize = 11.sp, color = Color.White)
                         }
 
                         Row(
@@ -789,6 +865,7 @@ fun TopHudBar(
     isFrontCamera: Boolean,
     onToggleCamera: () -> Unit,
     onOpenSimulation: () -> Unit,
+    onOpenBarcodeOptions: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expandedDropdown by remember { mutableStateOf(false) }
@@ -902,13 +979,25 @@ fun TopHudBar(
             }
 
             IconButton(
+                onClick = onOpenBarcodeOptions,
+                modifier = Modifier.size(38.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.QrCodeScanner,
+                    contentDescription = "Barcode Reading Options",
+                    tint = Color(0xFF00F5D4),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            IconButton(
                 onClick = onOpenSimulation,
                 modifier = Modifier.size(38.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Science,
                     contentDescription = "Test Simulated Codes",
-                    tint = Color(0xFF00F5D4),
+                    tint = Color.White.copy(alpha = 0.75f),
                     modifier = Modifier.size(20.dp)
                 )
             }

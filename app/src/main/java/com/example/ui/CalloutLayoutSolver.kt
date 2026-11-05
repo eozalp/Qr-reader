@@ -49,15 +49,16 @@ object CalloutLayoutSolver {
         if (items.isEmpty() || screenWidthPx <= 0f || screenHeightPx <= 0f) return emptyList()
 
         val scale = config.scale.coerceIn(0.5f, 3.0f)
-        val rawW = if (config.autoWidth) 210f else config.customWidth
-        val rawH = if (config.autoHeight) 80f else config.customHeight
+        val isTableMode = config.displayMode == OverlayDisplayMode.EXCEL_TABLE || config.displayMode == OverlayDisplayMode.HYBRID
+        val rawW = if (config.autoWidth) (if (isTableMode) 250f else 220f) else config.customWidth
+        val rawH = if (config.autoHeight) (if (isTableMode) 140f else 85f) else config.customHeight
 
         val cardW = with(density) { (rawW * scale).dp.toPx() }
         val cardH = with(density) { (rawH * scale).dp.toPx() }
 
         val margin = with(density) { 16.dp.toPx() }
         val topSafe = with(density) { 72.dp.toPx() }
-        val bottomSafe = with(density) { 84.dp.toPx() }
+        val bottomSafe = with(density) { 86.dp.toPx() }
 
         val offsetXPx = with(density) { config.offsetX.dp.toPx() }
         val offsetYPx = with(density) { config.offsetY.dp.toPx() }

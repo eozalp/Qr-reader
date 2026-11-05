@@ -635,7 +635,10 @@ data class TrackingSettings(
     val useFrontCamera: Boolean = false,
     val enableTorch: Boolean = false,
     val zoomLevel: Float = 1.0f,
-    val isScanningPaused: Boolean = false
+    val isScanningPaused: Boolean = false,
+    val scanPreset: BarcodeScanPreset = BarcodeScanPreset.ALL_FORMATS,
+    val enabledFormats: List<Int> = listOf(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_ALL_FORMATS),
+    val enableInvertedDetection: Boolean = true // Supports 3D engraved / DPM / etched / inverted barcodes
 ) {
     fun toJson(): JSONObject {
         return JSONObject().apply {
@@ -646,11 +649,30 @@ data class TrackingSettings(
             put("enableTorch", enableTorch)
             put("zoomLevel", zoomLevel.toDouble())
             put("isScanningPaused", isScanningPaused)
+            put("scanPreset", scanPreset.name)
+            val fmtArr = JSONArray()
+            enabledFormats.forEach { fmtArr.put(it) }
+            put("enabledFormats", fmtArr)
+            put("enableInvertedDetection", enableInvertedDetection)
         }
     }
 
     companion object {
         fun fromJson(json: JSONObject): TrackingSettings {
+            val preset = runCatching {
+                BarcodeScanPreset.valueOf(json.optString("scanPreset", BarcodeScanPreset.ALL_FORMATS.name))
+            }.getOrDefault(BarcodeScanPreset.ALL_FORMATS)
+
+            val formatsList = mutableListOf<Int>()
+            val fmtArray = json.optJSONArray("enabledFormats")
+            if (fmtArray != null && fmtArray.length() > 0) {
+                for (i in 0 until fmtArray.length()) {
+                    formatsList.add(fmtArray.optInt(i))
+                }
+            } else {
+                formatsList.add(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_ALL_FORMATS)
+            }
+
             return TrackingSettings(
                 smoothingFactor = json.optDouble("smoothingFactor", 0.45).toFloat(),
                 disappearanceTimeoutMs = json.optLong("disappearanceTimeoutMs", 750L),
@@ -658,7 +680,10 @@ data class TrackingSettings(
                 useFrontCamera = json.optBoolean("useFrontCamera", false),
                 enableTorch = json.optBoolean("enableTorch", false),
                 zoomLevel = json.optDouble("zoomLevel", 1.0).toFloat(),
-                isScanningPaused = json.optBoolean("isScanningPaused", false)
+                isScanningPaused = json.optBoolean("isScanningPaused", false),
+                scanPreset = preset,
+                enabledFormats = formatsList,
+                enableInvertedDetection = json.optBoolean("enableInvertedDetection", true)
             )
         }
     }

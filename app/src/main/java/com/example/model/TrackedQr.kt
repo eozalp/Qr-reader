@@ -2,6 +2,8 @@ package com.example.model
 
 import android.graphics.RectF
 
+import com.google.mlkit.vision.barcode.common.Barcode
+
 /**
  * Status of the QR parse and formula calculation.
  */
@@ -12,7 +14,7 @@ sealed class CalculationStatus {
 }
 
 /**
- * Parsed payload of a single QR code.
+ * Parsed payload of a single QR or barcode.
  */
 data class ParsedQrResult(
     val rawText: String,
@@ -20,11 +22,13 @@ data class ParsedQrResult(
     val extractedStrings: Map<String, String> = emptyMap(),
     val variablePillDisplay: Map<String, String> = emptyMap(),
     val status: CalculationStatus,
-    val formulaExpression: String = ""
+    val formulaExpression: String = "",
+    val barcodeFormat: Int = Barcode.FORMAT_QR_CODE,
+    val formatName: String = "QR CODE"
 )
 
 /**
- * Represents an active, tracked QR code on the live camera preview.
+ * Represents an active, tracked QR code or barcode on the live camera preview.
  */
 data class TrackedQr(
     val id: String,
@@ -35,5 +39,7 @@ data class TrackedQr(
     var lastSeenMs: Long,
     var firstSeenMs: Long,
     var alpha: Float = 1.0f,
-    var attachment: QrAttachment? = null
+    var attachment: QrAttachment? = null,
+    var barcodeFormat: Int = Barcode.FORMAT_QR_CODE,
+    var formatName: String = "QR CODE"
 )
