@@ -35,6 +35,12 @@ import com.example.model.ResultFormatting
 import com.example.model.VariableDefinition
 import java.util.UUID
 
+enum class VariableTypeSelection(val label: String) {
+    TOKEN("Barcode Token"),
+    CONSTANT("Constant"),
+    FORMULA("Formula")
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ParsingSettingsSection(
@@ -47,6 +53,9 @@ fun ParsingSettingsSection(
     modifier: Modifier = Modifier
 ) {
     val delimiterPresets = listOf("-", ",", ";", "|", "/", " ")
+
+    var showAddVariableSheet by remember { mutableStateOf(false) }
+    var sheetInitialType by remember { mutableStateOf(VariableTypeSelection.TOKEN) }
 
     // Real-time test input initialized intelligently based on current delimiter & tokens
     var sampleQrText by remember {
@@ -548,17 +557,8 @@ fun ParsingSettingsSection(
                 ) {
                     Button(
                         onClick = {
-                            val tokenCount = rules.variables.count { !it.isComputed && !it.isManual }
-                            val nextName = if (tokenCount < 26) ('a'.code + tokenCount).toChar().toString() else "var$tokenCount"
-                            val newVar = VariableDefinition(
-                                id = UUID.randomUUID().toString(),
-                                position = tokenCount,
-                                name = nextName,
-                                isComputed = false,
-                                isManual = false,
-                                dataType = FieldDataType.DOUBLE
-                            )
-                            onRulesChanged(rules.copy(variables = rules.variables + newVar))
+                            sheetInitialType = VariableTypeSelection.TOKEN
+                            showAddVariableSheet = true
                         },
                         modifier = Modifier.weight(1f).testTag("add_variable_button"),
                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
@@ -570,17 +570,8 @@ fun ParsingSettingsSection(
 
                     FilledTonalButton(
                         onClick = {
-                            val manualIndex = rules.variables.count { it.isManual } + 1
-                            val newVar = VariableDefinition(
-                                id = UUID.randomUUID().toString(),
-                                position = -1,
-                                name = "m$manualIndex",
-                                isComputed = false,
-                                isManual = true,
-                                defaultValue = "1",
-                                dataType = FieldDataType.DOUBLE
-                            )
-                            onRulesChanged(rules.copy(variables = rules.variables + newVar))
+                            sheetInitialType = VariableTypeSelection.CONSTANT
+                            showAddVariableSheet = true
                         },
                         modifier = Modifier.weight(1f).testTag("add_manual_variable_button"),
                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
@@ -592,16 +583,8 @@ fun ParsingSettingsSection(
 
                     FilledTonalButton(
                         onClick = {
-                            val compCount = rules.variables.count { it.isComputed } + 1
-                            val newVar = VariableDefinition(
-                                id = UUID.randomUUID().toString(),
-                                name = "calc$compCount",
-                                isComputed = true,
-                                isManual = false,
-                                computationFormula = "",
-                                dataType = FieldDataType.DOUBLE
-                            )
-                            onRulesChanged(rules.copy(variables = rules.variables + newVar))
+                            sheetInitialType = VariableTypeSelection.FORMULA
+                            showAddVariableSheet = true
                         },
                         modifier = Modifier.weight(1f).testTag("add_computed_button"),
                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
@@ -621,6 +604,10 @@ fun ParsingSettingsSection(
                 index = index,
                 allVariables = rules.variables,
                 globalFormatting = formatting,
+                onRequestAddVariable = {
+                    sheetInitialType = VariableTypeSelection.TOKEN
+                    showAddVariableSheet = true
+                },
                 onUpdate = { updated ->
                     val newList = rules.variables.toMutableList()
                     newList[index] = updated
@@ -634,6 +621,20 @@ fun ParsingSettingsSection(
             )
         }
     }
+
+    // Sliding Bottom Sheet for configuring and adding a new Token or Variable (Never silent adding)
+    if (showAddVariableSheet) {
+        AddVariableBottomSheet(
+            initialType = sheetInitialType,
+            existingVariables = rules.variables,
+            delimiter = rules.effectiveDelimiter,
+            onDismiss = { showAddVariableSheet = false },
+            onAddVariable = { newVar ->
+                onRulesChanged(rules.copy(variables = rules.variables + newVar))
+                showAddVariableSheet = false
+            }
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -643,6 +644,7 @@ fun VariableItemCard(
     index: Int,
     allVariables: List<VariableDefinition> = emptyList(),
     globalFormatting: ResultFormatting? = null,
+    onRequestAddVariable: (() -> Unit)? = null,
     onUpdate: (VariableDefinition) -> Unit,
     onDelete: () -> Unit
 ) {
@@ -948,6 +950,29 @@ fun VariableItemCard(
                                             }
                                         }
 
+                                        // Option to define a new token or variable via sliding sheet
+                                        if (onRequestAddVariable != null) {
+                                            FilledTonalButton(
+                                                onClick = {
+                                                    showTokenBottomSheet = false
+                                                    onRequestAddVariable()
+                                                },
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(42.dp)
+                                                    .testTag("sheet_create_new_token_btn"),
+                                                shape = RoundedCornerShape(12.dp),
+                                                colors = ButtonDefaults.filledTonalButtonColors(
+                                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                                )
+                                            ) {
+                                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Define New Token / Variable (Sliding Sheet)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                            }
+                                        }
+
                                         // Section 1: Profile Tokens & Variables
                                         Text(
                                             text = "PROFILE TOKENS & VARIABLES",
@@ -1244,6 +1269,360 @@ fun VariableItemCard(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Sliding Bottom Sheet for configuring and adding a new Token, Constant, or Formula variable.
+ * Provides user-guided input instead of silent variable addition.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AddVariableBottomSheet(
+    initialType: VariableTypeSelection,
+    existingVariables: List<VariableDefinition>,
+    delimiter: String,
+    onDismiss: () -> Unit,
+    onAddVariable: (VariableDefinition) -> Unit
+) {
+    var selectedType by remember { mutableStateOf(initialType) }
+
+    val nextTokenPos = remember(existingVariables) {
+        val tokenVars = existingVariables.filter { !it.isComputed && !it.isManual }
+        tokenVars.size
+    }
+    val defaultTokenName = remember(existingVariables) {
+        val tokenCount = existingVariables.count { !it.isComputed && !it.isManual }
+        if (tokenCount < 26) ('a'.code + tokenCount).toChar().toString() else "var$tokenCount"
+    }
+    val defaultConstantName = remember(existingVariables) {
+        val manualCount = existingVariables.count { it.isManual } + 1
+        "m$manualCount"
+    }
+    val defaultFormulaName = remember(existingVariables) {
+        val compCount = existingVariables.count { it.isComputed } + 1
+        "calc$compCount"
+    }
+
+    var varName by remember(selectedType) {
+        mutableStateOf(
+            when (selectedType) {
+                VariableTypeSelection.TOKEN -> defaultTokenName
+                VariableTypeSelection.CONSTANT -> defaultConstantName
+                VariableTypeSelection.FORMULA -> defaultFormulaName
+            }
+        )
+    }
+    var varAlias by remember { mutableStateOf("") }
+    var tokenPositionStr by remember { mutableStateOf(nextTokenPos.toString()) }
+    var defaultValueStr by remember { mutableStateOf("0") }
+    var constantValueStr by remember { mutableStateOf("1") }
+    var formulaText by remember { mutableStateOf("") }
+    var prefixStr by remember { mutableStateOf("") }
+    var postfixStr by remember { mutableStateOf("") }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 10.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = when (selectedType) {
+                                VariableTypeSelection.TOKEN -> Icons.Default.QrCodeScanner
+                                VariableTypeSelection.CONSTANT -> Icons.Default.Pin
+                                VariableTypeSelection.FORMULA -> Icons.Default.Calculate
+                            },
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "Add Variable / Token",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Configure new token, constant or formula",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+
+            // Type Segmented Pills
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                VariableTypeSelection.entries.forEach { type ->
+                    val isSelected = selectedType == type
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (isSelected) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { selectedType = type }
+                    ) {
+                        Box(
+                            modifier = Modifier.padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = type.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Name and Alias
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = varName,
+                    onValueChange = { varName = it.filter { c -> c.isLetterOrDigit() || c == '_' }.lowercase() },
+                    label = { Text("Variable Name *") },
+                    placeholder = { Text("e.g. a, price, qty") },
+                    modifier = Modifier.weight(1f).testTag("new_variable_name_input"),
+                    singleLine = true
+                )
+
+                OutlinedTextField(
+                    value = varAlias,
+                    onValueChange = { varAlias = it },
+                    label = { Text("Alias / Label") },
+                    placeholder = { Text("e.g. Unit Price") },
+                    modifier = Modifier.weight(1f).testTag("new_variable_alias_input"),
+                    singleLine = true
+                )
+            }
+
+            // Type-specific inputs
+            when (selectedType) {
+                VariableTypeSelection.TOKEN -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = tokenPositionStr,
+                            onValueChange = { tokenPositionStr = it.filter { c -> c.isDigit() } },
+                            label = { Text("Barcode Token Position") },
+                            placeholder = { Text("0 = 1st token, 1 = 2nd") },
+                            modifier = Modifier.weight(1f).testTag("new_variable_position_input"),
+                            singleLine = true
+                        )
+
+                        OutlinedTextField(
+                            value = defaultValueStr,
+                            onValueChange = { defaultValueStr = it },
+                            label = { Text("Default Fallback Value") },
+                            placeholder = { Text("0") },
+                            modifier = Modifier.weight(1f).testTag("new_variable_default_input"),
+                            singleLine = true
+                        )
+                    }
+                    Text(
+                        text = "Scanned barcodes split by '$delimiter' will map token index ${tokenPositionStr.ifBlank { "0" }} to '$varName'.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                VariableTypeSelection.CONSTANT -> {
+                    OutlinedTextField(
+                        value = constantValueStr,
+                        onValueChange = { constantValueStr = it },
+                        label = { Text("Constant Numeric Value *") },
+                        placeholder = { Text("e.g. 100, 1.18, 0.20") },
+                        modifier = Modifier.fillMaxWidth().testTag("new_constant_value_input"),
+                        singleLine = true
+                    )
+                    Text(
+                        text = "Manual constant not read from barcode. Can be referenced in any formula.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                VariableTypeSelection.FORMULA -> {
+                    OutlinedTextField(
+                        value = formulaText,
+                        onValueChange = { formulaText = it },
+                        label = { Text("Formula Expression *") },
+                        placeholder = { Text("e.g. a * b or a * 1.18") },
+                        modifier = Modifier.fillMaxWidth().testTag("new_formula_expression_input"),
+                        singleLine = true
+                    )
+
+                    // Quick Chips to insert existing variables & operators
+                    if (existingVariables.isNotEmpty()) {
+                        Text(
+                            text = "INSERT VARIABLE / OPERATOR",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            existingVariables.forEach { v ->
+                                AssistChip(
+                                    onClick = {
+                                        formulaText = if (formulaText.isBlank()) v.name else "$formulaText ${v.name}"
+                                    },
+                                    label = { Text(v.name, fontWeight = FontWeight.Bold) }
+                                )
+                            }
+                            listOf("+", "-", "*", "/", "(", ")").forEach { op ->
+                                AssistChip(
+                                    onClick = {
+                                        formulaText = if (formulaText.isBlank()) op else "$formulaText $op "
+                                    },
+                                    label = { Text(op, fontWeight = FontWeight.Bold) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Prefix and Postfix
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = prefixStr,
+                    onValueChange = { prefixStr = it },
+                    label = { Text("Prefix (e.g. $, ₺)") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+
+                OutlinedTextField(
+                    value = postfixStr,
+                    onValueChange = { postfixStr = it },
+                    label = { Text("Postfix (e.g. /g, pcs)") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Action Buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(0.45f)
+                ) {
+                    Text("Cancel")
+                }
+
+                Button(
+                    onClick = {
+                        val trimmedName = varName.trim().ifBlank { defaultTokenName }
+                        val constructed = when (selectedType) {
+                            VariableTypeSelection.TOKEN -> {
+                                val pos = tokenPositionStr.toIntOrNull() ?: nextTokenPos
+                                VariableDefinition(
+                                    id = UUID.randomUUID().toString(),
+                                    position = pos,
+                                    name = trimmedName,
+                                    alias = varAlias.trim(),
+                                    isComputed = false,
+                                    isManual = false,
+                                    defaultValue = defaultValueStr.ifBlank { "0" },
+                                    prefix = prefixStr,
+                                    postfix = postfixStr,
+                                    dataType = FieldDataType.DOUBLE
+                                )
+                            }
+                            VariableTypeSelection.CONSTANT -> {
+                                VariableDefinition(
+                                    id = UUID.randomUUID().toString(),
+                                    position = -1,
+                                    name = trimmedName,
+                                    alias = varAlias.trim(),
+                                    isComputed = false,
+                                    isManual = true,
+                                    defaultValue = constantValueStr.ifBlank { "1" },
+                                    prefix = prefixStr,
+                                    postfix = postfixStr,
+                                    dataType = FieldDataType.DOUBLE
+                                )
+                            }
+                            VariableTypeSelection.FORMULA -> {
+                                VariableDefinition(
+                                    id = UUID.randomUUID().toString(),
+                                    name = trimmedName,
+                                    alias = varAlias.trim(),
+                                    isComputed = true,
+                                    isManual = false,
+                                    computationFormula = formulaText.trim(),
+                                    prefix = prefixStr,
+                                    postfix = postfixStr,
+                                    dataType = FieldDataType.DOUBLE
+                                )
+                            }
+                        }
+                        onAddVariable(constructed)
+                    },
+                    modifier = Modifier.weight(0.55f).testTag("confirm_add_variable_btn")
+                ) {
+                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Add to Profile", fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }

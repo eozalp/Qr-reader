@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
@@ -59,6 +60,7 @@ fun QrOverlaysCanvas(
     overlayConfig: OverlayAppearance,
     screenWidthPx: Float,
     screenHeightPx: Float,
+    showRawQrData: Boolean = false,
     onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -127,12 +129,130 @@ fun QrOverlaysCanvas(
                     }
                     .alpha(animatedAlpha)
             ) {
-                OverlayCardContent(
-                    result = solved.tracked.result,
-                    config = overlayConfig,
-                    attachment = solved.tracked.attachment,
-                    onAttachmentClick = onAttachmentClick
+                if (showRawQrData) {
+                    RawQrOverlayCardContent(
+                        tracked = solved.tracked,
+                        config = overlayConfig
+                    )
+                } else {
+                    OverlayCardContent(
+                        result = solved.tracked.result,
+                        config = overlayConfig,
+                        attachment = solved.tracked.attachment,
+                        onAttachmentClick = onAttachmentClick
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * High-visibility raw barcode/QR data inspection card displayed when the user presses and holds the Raw QR button.
+ */
+@Composable
+fun RawQrOverlayCardContent(
+    tracked: TrackedQr,
+    config: OverlayAppearance,
+    modifier: Modifier = Modifier
+) {
+    val scale = config.scale.coerceIn(0.7f, 2.5f)
+    Surface(
+        shape = RoundedCornerShape((18 * scale).dp),
+        color = Color(0xF2070B14),
+        border = androidx.compose.foundation.BorderStroke((1.5f * scale).dp, Color(0xFF00F5D4)),
+        shadowElevation = 14.dp,
+        modifier = modifier
+            .widthIn(min = (200 * scale).dp, max = (360 * scale).dp)
+    ) {
+        Column(modifier = Modifier.padding((12 * scale).dp)) {
+            // Header: Format Badge & Character count
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = RoundedCornerShape((6 * scale).dp),
+                    color = Color(0x3300F5D4),
+                    border = androidx.compose.foundation.BorderStroke((0.8f * scale).dp, Color(0xFF00F5D4))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = (8 * scale).dp, vertical = (2 * scale).dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size((6 * scale).dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF00F5D4))
+                        )
+                        Spacer(modifier = Modifier.width((4 * scale).dp))
+                        Text(
+                            text = tracked.formatName,
+                            color = Color(0xFF00F5D4),
+                            fontSize = (11 * scale).sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape((6 * scale).dp),
+                    color = Color(0x22818CF8)
+                ) {
+                    Text(
+                        text = "${tracked.rawContent.length} chars",
+                        color = Color(0xFF818CF8),
+                        fontSize = (10 * scale).sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = (6 * scale).dp, vertical = (2 * scale).dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height((8 * scale).dp))
+
+            // Raw Text Content in Monospace
+            Surface(
+                shape = RoundedCornerShape((10 * scale).dp),
+                color = Color(0xFF0D1424),
+                border = androidx.compose.foundation.BorderStroke((1 * scale).dp, Color(0x2800F5D4)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = tracked.rawContent,
+                    color = Color(0xFFF8FAFC),
+                    fontSize = (12 * scale).sp,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding((10 * scale).dp)
                 )
+            }
+
+            // Tokens breakdown if available
+            if (tracked.result.variablePillDisplay.isNotEmpty()) {
+                Spacer(modifier = Modifier.height((6 * scale).dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy((4 * scale).dp)
+                ) {
+                    tracked.result.variablePillDisplay.entries.take(4).forEach { (varName, varVal) ->
+                        Surface(
+                            shape = RoundedCornerShape((6 * scale).dp),
+                            color = Color(0xFF162036),
+                            border = androidx.compose.foundation.BorderStroke(0.5.dp, Color(0x44A3E635))
+                        ) {
+                            Text(
+                                text = "$varName: $varVal",
+                                color = Color(0xFFA3E635),
+                                fontSize = (9.5f * scale).sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = (5 * scale).dp, vertical = (2 * scale).dp)
+                            )
+                        }
+                    }
+                }
             }
         }
     }

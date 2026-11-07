@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import com.example.ui.theme.*
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -131,6 +132,7 @@ fun CameraScreen(
     var viewingAttachment by remember { mutableStateOf<QrAttachment?>(null) }
     var initialQrForEdit by remember { mutableStateOf("") }
     var showNewAttachmentDialog by remember { mutableStateOf(false) }
+    var isHoldingRawQr by remember { mutableStateOf(false) }
 
     var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
     var cameraInfo by remember { mutableStateOf<CameraInfo?>(null) }
@@ -480,6 +482,7 @@ fun CameraScreen(
                     overlayConfig = activeProfile.overlay.copy(scale = liveOverlayScale),
                     screenWidthPx = screenWidthPx,
                     screenHeightPx = screenHeightPx,
+                    showRawQrData = isHoldingRawQr,
                     onAttachmentClick = { att -> viewingAttachment = att },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -527,6 +530,49 @@ fun CameraScreen(
                     .windowInsetsPadding(WindowInsets.statusBars)
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
+
+            // Raw QR Inspection Banner (Active while user holds down the Raw QR button)
+            AnimatedVisibility(
+                visible = isHoldingRawQr,
+                enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(top = 70.dp)
+            ) {
+                Surface(
+                    color = Color(0xF0070B14),
+                    shape = RoundedCornerShape(20.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, NeonCyan),
+                    shadowElevation = 12.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Visibility,
+                            contentDescription = null,
+                            tint = NeonCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "RAW QR DATA INSPECTION",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = NeonCyan
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "(Release to return)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = OnDarkSurfaceVariant
+                        )
+                    }
+                }
+            }
 
             // Auto-switched Profile Notification Banner
             AnimatedVisibility(
@@ -755,79 +801,111 @@ fun CameraScreen(
                 }
             }
 
-            // Expressive Bottom Floating Action Dock
+            // Expressive Bottom Floating Action Dock (Icon-only buttons for visual consistency)
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left Quick Controls: Barcode Formats & Linked Data Expressive Pills
+                // Left Quick Controls: Barcode Formats, Linked Data, Raw QR (Hold), and AR Simulator
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    FilledTonalButton(
+                    // 1. Barcode Formats
+                    FilledTonalIconButton(
                         onClick = { showBarcodeOptionsSheet = true },
-                        shape = RoundedCornerShape(24.dp),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-                        colors = ButtonDefaults.filledTonalButtonColors(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("barcode_reading_options_btn"),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
                             containerColor = GlassmorphicDockBg,
                             contentColor = NeonCyan
-                        ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, GlassmorphicHudBorder),
-                        modifier = Modifier
-                            .height(48.dp)
-                            .testTag("barcode_reading_options_btn")
+                        )
                     ) {
                         Icon(
                             imageVector = Icons.Default.QrCodeScanner,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = when (activeProfile.tracking.scanPreset) {
+                            contentDescription = "Barcode Formats (${when (activeProfile.tracking.scanPreset) {
                                 BarcodeScanPreset.ALL_FORMATS -> "All Barcodes"
                                 BarcodeScanPreset.TWO_D_ONLY -> "2D / 3D"
                                 BarcodeScanPreset.ONE_D_ONLY -> "1D Barcodes"
                                 BarcodeScanPreset.CUSTOM -> "Custom"
-                            },
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            softWrap = false
+                            }})",
+                            modifier = Modifier.size(22.dp)
                         )
                     }
 
-                    FilledTonalButton(
+                    // 2. Linked Data & Attachments
+                    FilledTonalIconButton(
                         onClick = { showAttachmentsSheet = true },
-                        shape = RoundedCornerShape(24.dp),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-                        colors = ButtonDefaults.filledTonalButtonColors(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("manage_attachments_btn"),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
                             containerColor = GlassmorphicDockBg,
                             contentColor = AmberGold
-                        ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, AmberGold.copy(alpha = 0.35f)),
-                        modifier = Modifier
-                            .height(48.dp)
-                            .testTag("manage_attachments_btn")
+                        )
                     ) {
                         Icon(
                             imageVector = Icons.Default.AttachFile,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
+                            contentDescription = "Linked Data & Media",
+                            modifier = Modifier.size(22.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Linked Data",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            softWrap = false
+                    }
+
+                    // 3. Raw QR (Press and Hold to view raw unparsed data)
+                    FilledTonalIconButton(
+                        onClick = { /* Tap hint: Hold down to inspect */ },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("hold_raw_qr_button")
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onPress = {
+                                        isHoldingRawQr = true
+                                        try {
+                                            tryAwaitRelease()
+                                        } finally {
+                                            isHoldingRawQr = false
+                                        }
+                                    }
+                                )
+                            },
+                        shape = RoundedCornerShape(20.dp),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = if (isHoldingRawQr) NeonCyan else GlassmorphicDockBg,
+                            contentColor = if (isHoldingRawQr) Color(0xFF00382E) else CyberLime
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DataObject,
+                            contentDescription = "Hold for Raw QR",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    // 4. AR Simulator
+                    FilledTonalIconButton(
+                        onClick = { showSimulationSheet = true },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("open_simulation_btn"),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = GlassmorphicDockBg,
+                            contentColor = if (simulatedCodes.isNotEmpty()) NeonCyan else Color.White.copy(alpha = 0.85f)
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Science,
+                            contentDescription = "Simulate AR Codes",
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                 }
