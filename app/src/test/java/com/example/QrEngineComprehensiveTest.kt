@@ -497,6 +497,36 @@ class QrEngineComprehensiveTest {
     }
 
     @Test
+    fun testCompressedProfileQrDetectionAndEncoding() {
+        val originalProfile = QrProfile(
+            name = "Amber Beads Workshop",
+            triggerSignal = "AMBER-",
+            parsingRules = QrParsingRules(
+                delimiter = ";",
+                variables = listOf(
+                    VariableDefinition(position = 0, name = "beads"),
+                    VariableDefinition(name = "bead_cost", isManual = true, defaultValue = "12.5")
+                )
+            ),
+            formula = ArithmeticFormula("beads * bead_cost", "Total batch cost")
+        )
+
+        val compressedCode = QrParser.encodeProfileToCompressedQrString(originalProfile)
+        assertTrue(compressedCode.startsWith("ARQR:GZ:"))
+
+        val stats = QrParser.getProfileCompressionStats(originalProfile)
+        assertTrue(stats.second < stats.first) // Compressed size must be strictly smaller than original JSON
+
+        val detected = QrParser.detectEmbeddedProfile(compressedCode)
+        assertNotNull(detected)
+        assertEquals("Amber Beads Workshop", detected!!.name)
+        assertEquals("AMBER-", detected.triggerSignal)
+        assertEquals(";", detected.parsingRules.delimiter)
+        assertEquals(2, detected.parsingRules.variables.size)
+        assertEquals("beads * bead_cost", detected.formula.expression)
+    }
+
+    @Test
     fun testProfileTriggerSignalMatching() {
         val profiles = listOf(
             QrProfile(id = "p1", name = "Tesbih Amber", triggerSignal = "TESBIH-"),

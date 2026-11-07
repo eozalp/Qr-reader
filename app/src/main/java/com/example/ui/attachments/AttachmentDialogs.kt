@@ -879,6 +879,8 @@ fun LinkedAttachmentsSheet(
     var selectedImportIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var importWithMedia by remember { mutableStateOf(true) }
 
+    var pendingExportAttachmentsList by remember { mutableStateOf<List<QrAttachment>>(emptyList()) }
+
     val exportFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri: Uri? ->
@@ -894,23 +896,33 @@ fun LinkedAttachmentsSheet(
         }
     }
 
+    val exportZipLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri: Uri? ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { os ->
+                    BackupTransferManager.writeExportZipToStream(
+                        outputStream = os,
+                        profiles = emptyList(),
+                        attachments = pendingExportAttachmentsList,
+                        includeMedia = exportWithMedia
+                    )
+                }
+                Toast.makeText(context, "Exported attachments ZIP successfully!", Toast.LENGTH_SHORT).show()
+            }.onFailure { e ->
+                Toast.makeText(context, "Failed to save ZIP: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     val importFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
             runCatching {
-                val sb = StringBuilder()
-                context.contentResolver.openInputStream(uri)?.use { stream ->
-                    BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { r ->
-                        var l = r.readLine()
-                        while (l != null) {
-                            sb.append(l).append("\n")
-                            l = r.readLine()
-                        }
-                    }
-                }
-                val preview = BackupTransferManager.parseImportPreview(sb.toString())
-                if (preview.attachments.isNotEmpty()) {
+                val preview = BackupTransferManager.parseImportAuto(context, uri)
+                if (preview.attachments.isNotEmpty() || preview.profiles.isNotEmpty()) {
                     pendingImportPreview = preview
                     selectedImportIds = preview.attachments.map { it.id }.toSet()
                     importWithMedia = preview.hasMedia
@@ -1348,7 +1360,69 @@ fun LinkedAttachmentsSheet(
                         )
                     }
 
+                    // Primary Action: Share via Apps using a single ZIP (with media + JSON) or JSON
+                    Button(
+                        onClick = {
+                            if (exportWithMedia && targetAttachments.any { it.allImages.isNotEmpty() || it.allVideos.isNotEmpty() }) {
+                                val zipFile = BackupTransferManager.createExportZipFile(
+                                    context = context,
+                                    profiles = emptyList(),
+                                    attachments = targetAttachments,
+                                    includeMedia = true,
+                                    filePrefix = "qr_attachments_bundle"
+                                )
+                                val shareIntent = BackupTransferManager.getShareIntentForZip(
+                                    context = context,
+                                    zipFile = zipFile,
+                                    subject = "QR Attachments Archive (with Media)"
+                                )
+                                context.startActivity(Intent.createChooser(shareIntent, "Share Attachments ZIP via"))
+                            } else {
+                                val json = generatePayload()
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_SUBJECT, "QR Attachments Export")
+                                    putExtra(Intent.EXTRA_TEXT, json)
+                                }
+                                context.startActivity(Intent.createChooser(shareIntent, "Share Attachments via"))
+                            }
+                            showExportDialog = false
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        enabled = targetAttachments.isNotEmpty()
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            if (exportWithMedia && targetAttachments.any { it.allImages.isNotEmpty() || it.allVideos.isNotEmpty() })
+                                "Share Single ZIP (Media + JSON)"
+                            else
+                                "Share via Apps",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Save as Single ZIP File
                     FilledTonalButton(
+                        onClick = {
+                            pendingExportAttachmentsList = targetAttachments
+                            val zipName = if (exportWithMedia) "qr_attachments_with_media.zip" else "qr_attachments.zip"
+                            exportZipLauncher.launch(zipName)
+                            showExportDialog = false
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        enabled = targetAttachments.isNotEmpty()
+                    ) {
+                        Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Save as ZIP Archive (.zip)", fontSize = 12.sp)
+                    }
+
+                    // Save as JSON File
+                    OutlinedButton(
                         onClick = {
                             val json = generatePayload()
                             pendingExportJson = json
@@ -1362,27 +1436,7 @@ fun LinkedAttachmentsSheet(
                     ) {
                         Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Save as JSON File", fontSize = 12.sp)
-                    }
-
-                    Button(
-                        onClick = {
-                            val json = generatePayload()
-                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_SUBJECT, "QR Attachments Export")
-                                putExtra(Intent.EXTRA_TEXT, json)
-                            }
-                            context.startActivity(Intent.createChooser(shareIntent, "Share Attachments via"))
-                            showExportDialog = false
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        enabled = targetAttachments.isNotEmpty()
-                    ) {
-                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Share via Apps", fontSize = 12.sp)
+                        Text("Save as JSON File (.json)", fontSize = 12.sp)
                     }
 
                     OutlinedButton(
@@ -1426,13 +1480,13 @@ fun LinkedAttachmentsSheet(
 
                     Button(
                         onClick = {
-                            importFileLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+                            importFileLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/json", "text/*", "*/*"))
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Open JSON File from Storage")
+                        Text("Open ZIP Archive or JSON File")
                     }
 
                     OutlinedTextField(

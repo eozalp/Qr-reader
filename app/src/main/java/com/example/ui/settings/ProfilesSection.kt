@@ -86,6 +86,8 @@ fun ProfilesSection(
     // State for pending file export payload
     var pendingExportJson by remember { mutableStateOf("") }
     var pendingExportFileName by remember { mutableStateOf("qr_profiles.json") }
+    var pendingExportProfiles by remember { mutableStateOf<List<QrProfile>>(emptyList()) }
+    var pendingExportAttachments by remember { mutableStateOf<List<QrAttachment>>(emptyList()) }
 
     // SAF CreateDocument for exporting JSON file
     val exportFileLauncher = rememberLauncherForActivityResult(
@@ -103,24 +105,34 @@ fun ProfilesSection(
         }
     }
 
-    // SAF OpenDocument for importing JSON file
+    // SAF CreateDocument for exporting ZIP archive with media and JSON
+    val exportZipLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri: Uri? ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    BackupTransferManager.writeExportZipToStream(
+                        outputStream = outputStream,
+                        profiles = pendingExportProfiles,
+                        attachments = pendingExportAttachments,
+                        includeMedia = exportIncludeMedia
+                    )
+                }
+                Toast.makeText(context, "Exported ZIP archive successfully!", Toast.LENGTH_SHORT).show()
+            }.onFailure { e ->
+                Toast.makeText(context, "Failed to save ZIP: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    // SAF OpenDocument for importing either ZIP or JSON file
     val importFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
             runCatching {
-                val stringBuilder = StringBuilder()
-                context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                    BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8)).use { reader ->
-                        var line = reader.readLine()
-                        while (line != null) {
-                            stringBuilder.append(line).append("\n")
-                            line = reader.readLine()
-                        }
-                    }
-                }
-                val content = stringBuilder.toString()
-                val preview = BackupTransferManager.parseImportPreview(content)
+                val preview = BackupTransferManager.parseImportAuto(context, uri)
                 if (preview.profiles.isNotEmpty() || preview.attachments.isNotEmpty()) {
                     pendingImportPreview = preview
                     selectedImportProfileIds = preview.profiles.map { it.id }.toSet()
@@ -765,16 +777,75 @@ fun ProfilesSection(
                         )
                     }
 
+                    val baseExportName = if (targetExportProfiles.size == 1) {
+                        "profile_${targetExportProfiles.first().name.lowercase().replace("\\s+".toRegex(), "_")}"
+                    } else {
+                        "qr_profiles_export"
+                    }
+
+                    // Primary Action: Share via Apps using a single ZIP (containing media + JSON) or JSON text
+                    Button(
+                        onClick = {
+                            if (exportIncludeMedia && mediaCount > 0) {
+                                val zipFile = BackupTransferManager.createExportZipFile(
+                                    context = context,
+                                    profiles = targetExportProfiles,
+                                    attachments = relevantAttachments,
+                                    includeMedia = true,
+                                    filePrefix = baseExportName
+                                )
+                                val shareIntent = BackupTransferManager.getShareIntentForZip(
+                                    context = context,
+                                    zipFile = zipFile,
+                                    subject = "QR Live Calc Profiles Export ($mediaCount media files)"
+                                )
+                                context.startActivity(Intent.createChooser(shareIntent, "Share Backup Archive via"))
+                            } else {
+                                val json = generateExportPayload()
+                                val title = if (targetExportProfiles.size == 1) {
+                                    "Profile: ${targetExportProfiles.first().name}"
+                                } else {
+                                    "${targetExportProfiles.size} Profiles"
+                                }
+                                shareProfileText(title, json)
+                            }
+                            showExportOptionsDialog = false
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("share_profiles_btn"),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            if (exportIncludeMedia && mediaCount > 0) "Share Single ZIP (Media + JSON)" else "Share via Apps",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Save as Single ZIP File
                     FilledTonalButton(
+                        onClick = {
+                            pendingExportProfiles = targetExportProfiles
+                            pendingExportAttachments = relevantAttachments
+                            val zipName = if (exportIncludeMedia && mediaCount > 0) "${baseExportName}_with_media.zip" else "${baseExportName}.zip"
+                            exportZipLauncher.launch(zipName)
+                            showExportOptionsDialog = false
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("export_save_zip_btn"),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Save as ZIP Archive (.zip)", fontSize = 12.sp)
+                    }
+
+                    // Save as JSON File
+                    OutlinedButton(
                         onClick = {
                             val json = generateExportPayload()
                             pendingExportJson = json
-                            val baseName = if (targetExportProfiles.size == 1) {
-                                "profile_${targetExportProfiles.first().name.lowercase().replace("\\s+".toRegex(), "_")}"
-                            } else {
-                                "qr_profiles_export"
-                            }
-                            pendingExportFileName = if (exportIncludeMedia) "${baseName}_with_media.json" else "${baseName}_no_media.json"
+                            pendingExportFileName = if (exportIncludeMedia) "${baseExportName}_with_media.json" else "${baseExportName}_no_media.json"
                             exportFileLauncher.launch(pendingExportFileName)
                             showExportOptionsDialog = false
                         },
@@ -783,28 +854,10 @@ fun ProfilesSection(
                     ) {
                         Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Save as JSON File", fontSize = 12.sp)
+                        Text("Save as JSON File (.json)", fontSize = 12.sp)
                     }
 
-                    Button(
-                        onClick = {
-                            val json = generateExportPayload()
-                            val title = if (targetExportProfiles.size == 1) {
-                                "Profile: ${targetExportProfiles.first().name} (${if (exportIncludeMedia) "With Media" else "Without Media"})"
-                            } else {
-                                "${targetExportProfiles.size} Profiles (${if (exportIncludeMedia) "With Media" else "Without Media"})"
-                            }
-                            shareProfileText(title, json)
-                            showExportOptionsDialog = false
-                        },
-                        modifier = Modifier.fillMaxWidth().testTag("share_profiles_btn"),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Share via Apps (WhatsApp, Drive, Email)", fontSize = 12.sp)
-                    }
-
+                    // Copy JSON to clipboard
                     OutlinedButton(
                         onClick = {
                             val json = generateExportPayload()
@@ -857,17 +910,17 @@ fun ProfilesSection(
                             style = MaterialTheme.typography.bodyMedium
                         )
 
-                        // Open Document from device
+                        // Open Document from device: supports ZIP and JSON
                         Button(
                             onClick = {
-                                importFileLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+                                importFileLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/json", "text/*", "*/*"))
                                 showImportOptionsDialog = false
                             },
                             modifier = Modifier.fillMaxWidth().testTag("import_file_btn")
                         ) {
                             Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Open JSON File from Storage")
+                            Text("Open ZIP Archive or JSON File")
                         }
 
                         // Paste JSON
@@ -1154,10 +1207,13 @@ fun ProfilesSection(
         )
     }
 
-    // 6. QR Code Display Dialog (Phone-to-Phone Beam)
+    // 6. QR Code Display Dialog (Phone-to-Phone Compressed Beam)
     showQrDisplayDialog?.let { targetProfile ->
         val qrString = remember(targetProfile.id) {
-            QrParser.encodeProfileToQrString(targetProfile)
+            QrParser.encodeProfileToCompressedQrString(targetProfile)
+        }
+        val compressionStats = remember(targetProfile.id) {
+            QrParser.getProfileCompressionStats(targetProfile)
         }
         val qrBitmap = remember(qrString) {
             QrCodeGenerator.generateQrBitmap(
@@ -1170,11 +1226,15 @@ fun ProfilesSection(
             onDismissRequest = { showQrDisplayDialog = null },
             title = {
                 Column {
-                    Text(
-                        text = "Scan to Import Profile",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.QrCode2, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Beam Profile via QR",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                     Text(
                         text = targetProfile.name,
                         style = MaterialTheme.typography.bodySmall,
@@ -1187,6 +1247,32 @@ fun ProfilesSection(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    // Compression badge
+                    val orig = compressionStats.first
+                    val comp = compressionStats.second
+                    val pct = if (orig > 0) ((1.0 - comp.toDouble() / orig.toDouble()) * 100).toInt() else 0
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
+                        modifier = Modifier.padding(bottom = 10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Bolt, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "GZIP Compressed: $comp B (${pct}% smaller) • Fast Scan",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+
                     if (qrBitmap != null) {
                         Box(
                             modifier = Modifier
@@ -1198,23 +1284,23 @@ fun ProfilesSection(
                         ) {
                             Image(
                                 bitmap = qrBitmap.asImageBitmap(),
-                                contentDescription = "Profile QR Code for ${targetProfile.name}",
+                                contentDescription = "Compressed Profile QR Code for ${targetProfile.name}",
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
                     } else {
                         Text(
-                            text = "Profile is too large to fit in a single QR code. Use File Export or Share Sheet below instead.",
+                            text = "Unable to generate QR code bitmap.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                             textAlign = TextAlign.Center
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     Text(
-                        text = "Open QR Live Calc on any other phone and point its camera at this QR code to beam and activate this profile instantly.",
+                        text = "Point another phone running QR Live Calc at this QR code. The camera will automatically detect, decompress, and offer to activate '${targetProfile.name}'.",
                         style = MaterialTheme.typography.bodySmall,
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1222,15 +1308,27 @@ fun ProfilesSection(
                 }
             },
             confirmButton = {
-                FilledTonalButton(
-                    onClick = {
-                        val json = profileRepository.exportSingleProfileJson(targetProfile.id)
-                        shareProfileText("QR Live Calc Profile - ${targetProfile.name}", json)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(qrString))
+                            Toast.makeText(context, "Copied compressed QR payload to clipboard!", Toast.LENGTH_SHORT).show()
+                        }
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Copy Code", fontSize = 12.sp)
                     }
-                ) {
-                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Share Profile")
+                    FilledTonalButton(
+                        onClick = {
+                            val json = profileRepository.exportSingleProfileJson(targetProfile.id)
+                            shareProfileText("QR Live Calc Profile - ${targetProfile.name}", json)
+                        }
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Share JSON", fontSize = 12.sp)
+                    }
                 }
             },
             dismissButton = {

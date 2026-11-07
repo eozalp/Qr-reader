@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -19,7 +20,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.engine.QrParseOutcome
@@ -793,45 +796,314 @@ fun VariableItemCard(
                     // Specific Type Controls
                     when {
                         varDef.isComputed -> {
+                            var showTokenBottomSheet by remember { mutableStateOf(false) }
+                            var formulaTextFieldValue by remember(varDef.computationFormula) {
+                                mutableStateOf(TextFieldValue(varDef.computationFormula, TextRange(varDef.computationFormula.length)))
+                            }
+
+                            fun insertTextAtCursor(insertion: String, cursorOffsetFromStart: Int? = null) {
+                                val text = formulaTextFieldValue.text
+                                val selStart = formulaTextFieldValue.selection.start.coerceIn(0, text.length)
+                                val selEnd = formulaTextFieldValue.selection.end.coerceIn(0, text.length)
+                                val newText = text.replaceRange(selStart, selEnd, insertion)
+                                val newCursorPos = if (cursorOffsetFromStart != null) {
+                                    (selStart + cursorOffsetFromStart).coerceIn(0, newText.length)
+                                } else {
+                                    selStart + insertion.length
+                                }
+                                formulaTextFieldValue = TextFieldValue(newText, TextRange(newCursorPos))
+                                onUpdate(varDef.copy(computationFormula = newText))
+                            }
+
                             OutlinedTextField(
-                                value = varDef.computationFormula,
-                                onValueChange = { onUpdate(varDef.copy(computationFormula = it)) },
+                                value = formulaTextFieldValue,
+                                onValueChange = {
+                                    formulaTextFieldValue = it
+                                    onUpdate(varDef.copy(computationFormula = it.text))
+                                },
                                 label = { Text("Formula (e.g. price / grams or a * b)") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
+                                modifier = Modifier.fillMaxWidth().testTag("formula_input_${varDef.name}"),
+                                singleLine = true,
+                                trailingIcon = {
+                                    if (formulaTextFieldValue.text.isNotEmpty()) {
+                                        IconButton(onClick = {
+                                            formulaTextFieldValue = TextFieldValue("", TextRange(0))
+                                            onUpdate(varDef.copy(computationFormula = ""))
+                                        }) {
+                                            Icon(Icons.Default.Clear, contentDescription = "Clear Formula", modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
                             )
 
-                            // Quick operators & insert chips
+                            // Quick operators & Add Token Button (cursor advances immediately past operator)
                             val otherVariables = allVariables.filter { it.name != varDef.name }
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
+
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("Insert:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                                otherVariables.forEach { other ->
-                                    AssistChip(
-                                        onClick = {
-                                            val current = varDef.computationFormula
-                                            val sep = if (current.isNotEmpty() && !current.endsWith(" ") && !current.endsWith("+") && !current.endsWith("-") && !current.endsWith("*") && !current.endsWith("/")) " " else ""
-                                            onUpdate(varDef.copy(computationFormula = "$current$sep${other.name}"))
-                                        },
-                                        label = { Text("+ ${other.name}", fontSize = 10.sp) },
-                                        modifier = Modifier.height(28.dp)
-                                    )
+                                // Dedicated Button to open Token Input BottomSheet
+                                Button(
+                                    onClick = { showTokenBottomSheet = true },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                    modifier = Modifier.height(34.dp).testTag("add_token_sheet_btn")
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Add Token / Variable", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
-                                listOf("+", "-", "*", "/", "(", ")").forEach { op ->
-                                    AssistChip(
+
+                                // Quick Operators that advance cursor immediately
+                                listOf("+", "-", "*", "/", "(", ")", "%", "^").forEach { op ->
+                                    FilledTonalButton(
                                         onClick = {
-                                            val current = varDef.computationFormula
-                                            onUpdate(varDef.copy(computationFormula = "$current $op "))
+                                            val currentText = formulaTextFieldValue.text
+                                            val selStart = formulaTextFieldValue.selection.start.coerceIn(0, currentText.length)
+                                            val insertion = when (op) {
+                                                "(" -> if (selStart > 0 && !currentText[selStart - 1].isWhitespace() && currentText[selStart - 1] != '(') " (" else "("
+                                                ")" -> if (selStart < currentText.length && !currentText[selStart].isWhitespace()) ") " else ")"
+                                                else -> {
+                                                    val prefix = if (selStart > 0 && !currentText[selStart - 1].isWhitespace()) " " else ""
+                                                    val suffix = if (selStart < currentText.length && !currentText[selStart].isWhitespace()) " " else " "
+                                                    "$prefix$op$suffix"
+                                                }
+                                            }
+                                            insertTextAtCursor(insertion)
                                         },
-                                        label = { Text(op, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-                                        modifier = Modifier.height(28.dp)
-                                    )
+                                        modifier = Modifier.height(34.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text(op, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                // Backspace helper for convenience
+                                OutlinedButton(
+                                    onClick = {
+                                        val text = formulaTextFieldValue.text
+                                        val selStart = formulaTextFieldValue.selection.start.coerceIn(0, text.length)
+                                        val selEnd = formulaTextFieldValue.selection.end.coerceIn(0, text.length)
+                                        if (selStart != selEnd) {
+                                            val newText = text.removeRange(selStart, selEnd)
+                                            formulaTextFieldValue = TextFieldValue(newText, TextRange(selStart))
+                                            onUpdate(varDef.copy(computationFormula = newText))
+                                        } else if (selStart > 0) {
+                                            val newText = text.removeRange(selStart - 1, selStart)
+                                            formulaTextFieldValue = TextFieldValue(newText, TextRange(selStart - 1))
+                                            onUpdate(varDef.copy(computationFormula = newText))
+                                        }
+                                    },
+                                    modifier = Modifier.height(34.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Backspace, contentDescription = "Backspace", modifier = Modifier.size(16.dp))
+                                }
+                            }
+
+                            // BottomSheet for Choosing Token or Custom Value
+                            if (showTokenBottomSheet) {
+                                ModalBottomSheet(
+                                    onDismissRequest = { showTokenBottomSheet = false },
+                                    containerColor = MaterialTheme.colorScheme.surface
+                                ) {
+                                    var customNumberText by remember { mutableStateOf("") }
+
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 20.dp, vertical = 10.dp)
+                                            .verticalScroll(rememberScrollState()),
+                                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column {
+                                                Text(
+                                                    text = "Insert Token / Variable",
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                                Text(
+                                                    text = "Select a variable or enter a value to insert at the cursor position:",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            IconButton(onClick = { showTokenBottomSheet = false }) {
+                                                Icon(Icons.Default.Close, contentDescription = "Close")
+                                            }
+                                        }
+
+                                        // Section 1: Profile Tokens & Variables
+                                        Text(
+                                            text = "PROFILE TOKENS & VARIABLES",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+
+                                        if (otherVariables.isEmpty()) {
+                                            Text(
+                                                text = "No other variables defined in this profile yet. Add barcode tokens or constants below.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        } else {
+                                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                otherVariables.forEach { other ->
+                                                    Surface(
+                                                        shape = RoundedCornerShape(10.dp),
+                                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                                        border = androidx.compose.foundation.BorderStroke(
+                                                            1.dp,
+                                                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                                        ),
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .clickable {
+                                                                val currentText = formulaTextFieldValue.text
+                                                                val selStart = formulaTextFieldValue.selection.start.coerceIn(0, currentText.length)
+                                                                val prefix = if (selStart > 0 && !currentText[selStart - 1].isWhitespace() && currentText[selStart - 1] != '(') " " else ""
+                                                                val suffix = if (selStart < currentText.length && !currentText[selStart].isWhitespace() && currentText[selStart] != ')') " " else " "
+                                                                insertTextAtCursor("$prefix${other.name}$suffix")
+                                                                showTokenBottomSheet = false
+                                                            }
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(12.dp),
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.SpaceBetween
+                                                        ) {
+                                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                                val typeBadgeText = when {
+                                                                    other.isComputed -> "Formula"
+                                                                    other.isManual -> "Constant"
+                                                                    else -> "Token ${other.position}"
+                                                                }
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .clip(RoundedCornerShape(6.dp))
+                                                                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                                                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                                ) {
+                                                                    Text(
+                                                                        text = typeBadgeText,
+                                                                        fontSize = 10.sp,
+                                                                        fontWeight = FontWeight.Bold,
+                                                                        color = MaterialTheme.colorScheme.primary
+                                                                    )
+                                                                }
+                                                                Spacer(modifier = Modifier.width(10.dp))
+                                                                Column {
+                                                                    Text(other.name, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                                                    if (other.alias.isNotBlank()) {
+                                                                        Text("Alias: ${other.alias}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            Icon(
+                                                                Icons.Default.Input,
+                                                                contentDescription = "Insert",
+                                                                tint = MaterialTheme.colorScheme.primary,
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Section 2: Custom Number / Constant
+                                        Text(
+                                            text = "INSERT NUMERIC CONSTANT",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            OutlinedTextField(
+                                                value = customNumberText,
+                                                onValueChange = { customNumberText = it.filter { c -> c.isDigit() || c == '.' || c == '-' } },
+                                                label = { Text("Constant (e.g. 100, 1.18)") },
+                                                modifier = Modifier.weight(1f),
+                                                singleLine = true
+                                            )
+                                            Button(
+                                                onClick = {
+                                                    if (customNumberText.isNotBlank()) {
+                                                        val currentText = formulaTextFieldValue.text
+                                                        val selStart = formulaTextFieldValue.selection.start.coerceIn(0, currentText.length)
+                                                        val prefix = if (selStart > 0 && !currentText[selStart - 1].isWhitespace() && currentText[selStart - 1] != '(') " " else ""
+                                                        val suffix = if (selStart < currentText.length && !currentText[selStart].isWhitespace() && currentText[selStart] != ')') " " else " "
+                                                        insertTextAtCursor("$prefix$customNumberText$suffix")
+                                                        showTokenBottomSheet = false
+                                                    }
+                                                },
+                                                enabled = customNumberText.isNotBlank()
+                                            ) {
+                                                Text("Insert")
+                                            }
+                                        }
+
+                                        // Section 3: Math Functions
+                                        Text(
+                                            text = "INSERT MATH FUNCTION",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .horizontalScroll(rememberScrollState()),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            listOf(
+                                                "sqrt" to "sqrt()",
+                                                "abs" to "abs()",
+                                                "round" to "round()",
+                                                "min" to "min(a, b)",
+                                                "max" to "max(a, b)",
+                                                "pow" to "pow(a, 2)"
+                                            ).forEach { (fn, label) ->
+                                                AssistChip(
+                                                    onClick = {
+                                                        val currentText = formulaTextFieldValue.text
+                                                        val selStart = formulaTextFieldValue.selection.start.coerceIn(0, currentText.length)
+                                                        val prefix = if (selStart > 0 && !currentText[selStart - 1].isWhitespace() && currentText[selStart - 1] != '(') " " else ""
+                                                        val insertion = "$prefix$fn()"
+                                                        val cursorInside = (prefix.length + fn.length + 1)
+                                                        insertTextAtCursor(insertion, cursorOffsetFromStart = cursorInside)
+                                                        showTokenBottomSheet = false
+                                                    },
+                                                    label = { Text(label, fontSize = 11.sp) }
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(16.dp))
+                                    }
                                 }
                             }
                         }

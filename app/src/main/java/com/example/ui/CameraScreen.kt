@@ -69,12 +69,32 @@ fun CameraScreen(
     val activeProfile by profileRepository.activeProfile.collectAsState()
     val allProfiles by profileRepository.profiles.collectAsState()
 
+    val isRunningOnEmulator = remember {
+        android.os.Build.FINGERPRINT.startsWith("generic") ||
+                android.os.Build.FINGERPRINT.startsWith("unknown") ||
+                android.os.Build.MODEL.contains("google_sdk") ||
+                android.os.Build.MODEL.contains("Emulator") ||
+                android.os.Build.MODEL.contains("Android SDK built for") ||
+                android.os.Build.MANUFACTURER.contains("Genymotion") ||
+                android.os.Build.HARDWARE.contains("goldfish") ||
+                android.os.Build.HARDWARE.contains("ranchu") ||
+                android.os.Build.PRODUCT.contains("sdk") ||
+                android.os.Build.PRODUCT.contains("emulator") ||
+                android.os.Build.BOARD.contains("goldfish") ||
+                android.os.Build.DEVICE.contains("generic")
+    }
+
+    var isAttemptingPhysicalCamera by remember { mutableStateOf(!isRunningOnEmulator) }
+    var cameraInitError by remember {
+        mutableStateOf(if (isRunningOnEmulator) "Virtual AR Simulator Active (Emulator)" else null)
+    }
+
     var hasCameraPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
+            ) == PackageManager.PERMISSION_GRANTED || isRunningOnEmulator
         )
     }
 
@@ -112,6 +132,24 @@ fun CameraScreen(
 
     var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
     var cameraInfo by remember { mutableStateOf<CameraInfo?>(null) }
+
+    val previewView = remember {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+        }
+    }
+    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    DisposableEffect(Unit) {
+        onDispose {
+            try {
+                val providerFuture = ProcessCameraProvider.getInstance(context)
+                if (providerFuture.isDone) {
+                    providerFuture.get().unbindAll()
+                }
+            } catch (_: Exception) {}
+            cameraExecutor.shutdown()
+        }
+    }
 
     val coroutineScope = rememberCoroutineScope()
     var liveOverlayScale by remember(activeProfile.overlay.scale) {
@@ -220,6 +258,89 @@ fun CameraScreen(
         }
     }
 
+    // Safe camera lifecycle binding: checks available lenses and prevents 10000ms reopen loop on emulator
+    LaunchedEffect(hasCameraPermission, isFrontCamera, isAttemptingPhysicalCamera) {
+        if (!hasCameraPermission || !isAttemptingPhysicalCamera) {
+            try {
+                val providerFuture = ProcessCameraProvider.getInstance(context)
+                if (providerFuture.isDone) {
+                    providerFuture.get().unbindAll()
+                }
+            } catch (_: Exception) {}
+            if (!isAttemptingPhysicalCamera && cameraInitError == null) {
+                cameraInitError = "Virtual AR Simulator Active (Emulator)"
+            }
+            return@LaunchedEffect
+        }
+
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        cameraProviderFuture.addListener({
+            try {
+                val cameraProvider = cameraProviderFuture.get()
+                cameraProvider.unbindAll()
+
+                // Verify lens availability before binding to avoid Camera2CameraImpl 10000ms reopening loops
+                val targetSelector = if (isFrontCamera) {
+                    when {
+                        cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
+                        cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
+                        cameraProvider.availableCameraInfos.isNotEmpty() -> cameraProvider.availableCameraInfos.first().cameraSelector
+                        else -> null
+                    }
+                } else {
+                    when {
+                        cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
+                        cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
+                        cameraProvider.availableCameraInfos.isNotEmpty() -> cameraProvider.availableCameraInfos.first().cameraSelector
+                        else -> null
+                    }
+                }
+
+                if (targetSelector == null) {
+                    isAttemptingPhysicalCamera = false
+                    cameraInitError = "Virtual emulator environment detected. Camera hardware sensor is simulated."
+                    return@addListener
+                }
+
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+
+                val imageAnalysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                    .build()
+                    .also {
+                        it.setAnalyzer(cameraExecutor, analyzer)
+                    }
+
+                val cam = cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    targetSelector,
+                    preview,
+                    imageAnalysis
+                )
+                cameraControl = cam.cameraControl
+                cameraInfo = cam.cameraInfo
+                cameraInitError = null
+
+                // Monitor camera state; if an error occurs, unbind cleanly to stop reopen loops immediately
+                cam.cameraInfo.cameraState.observe(lifecycleOwner) { state ->
+                    if (state.error != null) {
+                        try {
+                            cameraProvider.unbindAll()
+                        } catch (_: Exception) {}
+                        isAttemptingPhysicalCamera = false
+                        cameraInitError = "Camera unavailable in emulator (${state.error?.code}). Virtual AR Simulator is active."
+                    }
+                }
+            } catch (e: Exception) {
+                isAttemptingPhysicalCamera = false
+                cameraInitError = "Virtual camera mode: ${e.message ?: "Virtual device"}"
+            }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -232,57 +353,100 @@ fun CameraScreen(
         if (!hasCameraPermission) {
             // Permission request screen
             CameraPermissionPlaceholder(
-                onRequestPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) }
+                onRequestPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                onContinueInEmulator = { hasCameraPermission = true },
+                isEmulator = isRunningOnEmulator
             )
         } else {
-            // Live Camera Preview
-            AndroidView(
-                factory = { ctx ->
-                    val previewView = PreviewView(ctx).apply {
-                        scaleType = PreviewView.ScaleType.FILL_CENTER
-                    }
-                    val cameraExecutor = Executors.newSingleThreadExecutor()
-                    val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-
-                    cameraProviderFuture.addListener({
-                        val cameraProvider = cameraProviderFuture.get()
-                        val preview = Preview.Builder().build().also {
-                            it.setSurfaceProvider(previewView.surfaceProvider)
-                        }
-
-                        val imageAnalysis = ImageAnalysis.Builder()
-                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
-                            .build()
-                            .also {
-                                it.setAnalyzer(cameraExecutor, analyzer)
-                            }
-
-                        val cameraSelector = if (isFrontCamera) {
-                            CameraSelector.DEFAULT_FRONT_CAMERA
-                        } else {
-                            CameraSelector.DEFAULT_BACK_CAMERA
-                        }
-
-                        try {
-                            cameraProvider.unbindAll()
-                            val cam = cameraProvider.bindToLifecycle(
-                                lifecycleOwner,
-                                cameraSelector,
-                                preview,
-                                imageAnalysis
+            // Live Camera Preview or Emulator Virtual Feed
+            if (cameraInitError != null && simulatedCodes.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFF090D16)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(32.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(64.dp)
+                                .clip(CircleShape)
+                                .background(Color(0x2200F5D4)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Science,
+                                contentDescription = null,
+                                tint = Color(0xFF00F5D4),
+                                modifier = Modifier.size(32.dp)
                             )
-                            cameraControl = cam.cameraControl
-                            cameraInfo = cam.cameraInfo
-                        } catch (e: Exception) {
-                            e.printStackTrace()
                         }
-                    }, ContextCompat.getMainExecutor(ctx))
-
-                    previewView
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Virtual Simulator Mode Active",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = cameraInitError ?: "Camera sensor simulated on emulator.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF94A3B8),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = { showSimulationSheet = true },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF00F5D4),
+                                    contentColor = Color(0xFF090D16)
+                                ),
+                                modifier = Modifier.height(48.dp)
+                            ) {
+                                Icon(Icons.Default.Science, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Inject Codes", fontWeight = FontWeight.Bold)
+                            }
+                            if (!isAttemptingPhysicalCamera) {
+                                OutlinedButton(
+                                    onClick = {
+                                        cameraInitError = null
+                                        isAttemptingPhysicalCamera = true
+                                    },
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = Color(0xFF00F5D4)
+                                    ),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00F5D4)),
+                                    modifier = Modifier.height(48.dp)
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Try Camera", fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (cameraInitError != null && simulatedCodes.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFF0A0F1D))
+                )
+            } else {
+                AndroidView(
+                    factory = { previewView },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
 
             // AR Overlay Layer with Multitouch Zoom to resize the overlay
             Box(
@@ -842,6 +1006,37 @@ fun CameraScreen(
                             Text("Mixed Multi-Barcode (QR + EAN-13 + Data Matrix)", fontSize = 11.sp, color = Color.White)
                         }
 
+                        Button(
+                            onClick = {
+                                val w = screenWidthPx; val h = screenHeightPx
+                                val demoProfile = com.example.model.QrProfile(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    name = "Beamed Gold Profile",
+                                    description = "Compressed Profile Beamed via QR",
+                                    formula = com.example.model.ArithmeticFormula("weight * purity", "weight * purity"),
+                                    parsingRules = com.example.model.QrParsingRules(
+                                        delimiter = "-",
+                                        variables = listOf(
+                                            com.example.model.VariableDefinition("weight", position = 0, prefix = "", postfix = "g"),
+                                            com.example.model.VariableDefinition("purity", position = 1, prefix = "", postfix = "k")
+                                        )
+                                    )
+                                )
+                                val compressedCode = com.example.engine.QrParser.encodeProfileToCompressedQrString(demoProfile)
+                                simulatedCodes = listOf(
+                                    RawDetectedCode(compressedCode, RectF(w * 0.20f, h * 0.35f, w * 0.80f, h * 0.60f), Barcode.FORMAT_QR_CODE, "QR CODE")
+                                )
+                                showSimulationSheet = false
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F172A)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00F5D4).copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color(0xFF00F5D4))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Simulate Compressed Profile Beam Scan", fontSize = 11.sp, color = Color.White)
+                        }
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1112,7 +1307,9 @@ fun TopHudBar(
 
 @Composable
 fun CameraPermissionPlaceholder(
-    onRequestPermission: () -> Unit
+    onRequestPermission: () -> Unit,
+    onContinueInEmulator: () -> Unit = {},
+    isEmulator: Boolean = false
 ) {
     Column(
         modifier = Modifier
@@ -1150,7 +1347,7 @@ fun CameraPermissionPlaceholder(
         Spacer(modifier = Modifier.height(12.dp))
 
         Text(
-            text = "QR Live Calculator continuously analyzes QR codes in the physical world to compute your formulas and project AR results directly over each code.",
+            text = "QR Live Calculator continuously analyzes QR codes and barcodes in the physical world to compute your formulas and project AR results directly over each code.",
             style = MaterialTheme.typography.bodyMedium,
             color = Color(0xFF94A3B8),
             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -1164,11 +1361,36 @@ fun CameraPermissionPlaceholder(
                 containerColor = Color(0xFF00F5D4),
                 contentColor = Color(0xFF090D16)
             ),
-            modifier = Modifier.testTag("grant_camera_permission_button")
+            modifier = Modifier
+                .fillMaxWidth(0.85f)
+                .height(48.dp)
+                .testTag("grant_camera_permission_button")
         ) {
             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Grant Permission", fontWeight = FontWeight.Bold)
+            Text("Grant Camera Permission", fontWeight = FontWeight.Bold)
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Bypass / Emulator Simulation Mode Button
+        OutlinedButton(
+            onClick = onContinueInEmulator,
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = Color(0xFF60A5FA)
+            ),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x6660A5FA)),
+            modifier = Modifier
+                .fillMaxWidth(0.85f)
+                .height(48.dp)
+                .testTag("continue_in_emulator_button")
+        ) {
+            Icon(Icons.Default.Science, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (isEmulator) "Continue in Emulator Mode" else "Continue (Bypass Permission)",
+                fontWeight = FontWeight.SemiBold
+            )
         }
     }
 }

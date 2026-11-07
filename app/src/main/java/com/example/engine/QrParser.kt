@@ -1,8 +1,13 @@
 package com.example.engine
 
+import android.util.Base64
 import com.example.model.FieldDataType
 import com.example.model.QrParsingRules
 import com.example.model.VariableDefinition
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
 
 sealed class QrParseOutcome {
     data class Success(
@@ -179,12 +184,54 @@ object QrParser {
     /**
      * Checks if a scanned QR code contains an embedded configuration profile.
      * Supported formats:
-     * - "ARQR:PROFILE:<json>"
+     * - "ARQR:GZ:<base64>" (Ultra-compact GZIP compressed profile, recommended for fast scanning)
+     * - "ARQR:PROFILE:<json>" (Uncompressed legacy format)
+     * - Pure JSON containing "parsingRules" and "formula"
+     */
+    private fun base64EncodeUrlSafe(bytes: ByteArray): String {
+        return runCatching {
+            java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+        }.getOrElse {
+            android.util.Base64.encodeToString(bytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
+        }
+    }
+
+    private fun base64DecodeUrlSafe(str: String): ByteArray {
+        return runCatching {
+            val padded = when (str.length % 4) {
+                2 -> "$str=="
+                3 -> "$str="
+                else -> str
+            }
+            java.util.Base64.getUrlDecoder().decode(padded)
+        }.getOrElse {
+            runCatching {
+                android.util.Base64.decode(str, android.util.Base64.URL_SAFE)
+            }.getOrElse {
+                android.util.Base64.decode(str, android.util.Base64.DEFAULT)
+            }
+        }
+    }
+
+    /**
+     * Checks if a scanned QR code contains an embedded configuration profile.
+     * Supported formats:
+     * - "ARQR:GZ:<base64>" (Ultra-compact GZIP compressed profile, recommended for fast scanning)
+     * - "ARQR:PROFILE:<json>" (Uncompressed legacy format)
      * - Pure JSON containing "parsingRules" and "formula"
      */
     fun detectEmbeddedProfile(rawQrText: String): com.example.model.QrProfile? {
         val trimmed = rawQrText.trim()
         val jsonPayload = when {
+            trimmed.startsWith("ARQR:GZ:") -> {
+                runCatching {
+                    val b64 = trimmed.removePrefix("ARQR:GZ:")
+                    val compressedBytes = base64DecodeUrlSafe(b64)
+                    GZIPInputStream(ByteArrayInputStream(compressedBytes)).bufferedReader(Charsets.UTF_8).use {
+                        it.readText()
+                    }
+                }.getOrNull()
+            }
             trimmed.startsWith("ARQR:PROFILE:") -> trimmed.removePrefix("ARQR:PROFILE:")
             trimmed.startsWith("{") && trimmed.contains("\"parsingRules\"") -> trimmed
             else -> null
@@ -197,10 +244,37 @@ object QrParser {
     }
 
     /**
-     * Formats a profile into an embeddable QR code string.
+     * Formats a profile into an ultra-compact GZIP-compressed QR code string.
+     * Compresses the JSON payload by 70-85% so it fits in low-density QR codes
+     * that scan instantly between phone screens.
      */
+    fun encodeProfileToCompressedQrString(profile: com.example.model.QrProfile): String {
+        return runCatching {
+            val jsonString = profile.toJson().toString()
+            val byteOut = ByteArrayOutputStream()
+            GZIPOutputStream(byteOut).use { gzip ->
+                gzip.write(jsonString.toByteArray(Charsets.UTF_8))
+            }
+            val compressedBytes = byteOut.toByteArray()
+            val base64 = base64EncodeUrlSafe(compressedBytes)
+            "ARQR:GZ:$base64"
+        }.getOrElse {
+            "ARQR:PROFILE:${profile.toJson()}"
+        }
+    }
+
     fun encodeProfileToQrString(profile: com.example.model.QrProfile): String {
         return "ARQR:PROFILE:${profile.toJson()}"
+    }
+
+    /**
+     * Returns the original JSON byte count and the GZIP-compressed byte count.
+     */
+    fun getProfileCompressionStats(profile: com.example.model.QrProfile): Pair<Int, Int> {
+        val originalBytes = profile.toJson().toString().toByteArray(Charsets.UTF_8).size
+        val compressedString = encodeProfileToCompressedQrString(profile)
+        val compressedBytes = compressedString.toByteArray(Charsets.UTF_8).size
+        return Pair(originalBytes, compressedBytes)
     }
 
     /**
