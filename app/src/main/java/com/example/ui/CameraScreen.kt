@@ -26,6 +26,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -507,76 +508,39 @@ fun CameraScreen(
                 }
             }
 
-            // Top HUD Controls & Profile Bar
-            TopHudBar(
-                activeProfile = activeProfile,
-                allProfiles = allProfiles,
-                onSelectProfile = { profileRepository.selectProfile(it) },
-                activeCount = trackedQrs.size,
-                isTorchEnabled = isTorchEnabled,
-                onToggleTorch = {
-                    isTorchEnabled = !isTorchEnabled
-                    cameraControl?.enableTorch(isTorchEnabled)
-                },
-                isPaused = isPaused,
-                onTogglePause = { isPaused = !isPaused },
-                isFrontCamera = isFrontCamera,
-                onToggleCamera = { isFrontCamera = !isFrontCamera },
-                onOpenSimulation = { showSimulationSheet = true },
-                onOpenBarcodeOptions = { showBarcodeOptionsSheet = true },
-                onOpenSettings = onOpenSettings,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .windowInsetsPadding(WindowInsets.statusBars)
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-
-            // Raw QR Inspection Banner (Active while user holds down the Raw QR button)
+            // Top HUD Controls & Profile Bar (Hidden during raw QR hold)
             AnimatedVisibility(
-                visible = isHoldingRawQr,
-                enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
-                exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .windowInsetsPadding(WindowInsets.statusBars)
-                    .padding(top = 70.dp)
+                visible = !isHoldingRawQr,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.TopCenter)
             ) {
-                Surface(
-                    color = Color(0xF0070B14),
-                    shape = RoundedCornerShape(20.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.5.dp, NeonCyan),
-                    shadowElevation = 12.dp
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Visibility,
-                            contentDescription = null,
-                            tint = NeonCyan,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "RAW QR DATA INSPECTION",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = NeonCyan
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "(Release to return)",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = OnDarkSurfaceVariant
-                        )
-                    }
-                }
+                TopHudBar(
+                    activeProfile = activeProfile,
+                    allProfiles = allProfiles,
+                    onSelectProfile = { profileRepository.selectProfile(it) },
+                    activeCount = trackedQrs.size,
+                    isTorchEnabled = isTorchEnabled,
+                    onToggleTorch = {
+                        isTorchEnabled = !isTorchEnabled
+                        cameraControl?.enableTorch(isTorchEnabled)
+                    },
+                    isPaused = isPaused,
+                    onTogglePause = { isPaused = !isPaused },
+                    isFrontCamera = isFrontCamera,
+                    onToggleCamera = { isFrontCamera = !isFrontCamera },
+                    onOpenSimulation = { showSimulationSheet = true },
+                    onOpenBarcodeOptions = { showBarcodeOptionsSheet = true },
+                    onOpenSettings = onOpenSettings,
+                    modifier = Modifier
+                        .windowInsetsPadding(WindowInsets.statusBars)
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                )
             }
 
-            // Auto-switched Profile Notification Banner
+            // Auto-switched Profile Notification Banner (Hidden during raw QR hold)
             AnimatedVisibility(
-                visible = autoSwitchedProfileName != null,
+                visible = autoSwitchedProfileName != null && !isHoldingRawQr,
                 enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
                 exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
                 modifier = Modifier
@@ -610,9 +574,9 @@ fun CameraScreen(
                 }
             }
 
-            // Embedded Profile Detected Bottom Card
+            // Embedded Profile Detected Bottom Card (Hidden during raw QR hold)
             AnimatedVisibility(
-                visible = detectedEmbeddedProfile != null,
+                visible = detectedEmbeddedProfile != null && !isHoldingRawQr,
                 enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
                 exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
                 modifier = Modifier
@@ -700,8 +664,11 @@ fun CameraScreen(
                 }
             }
 
-            // Expressive Floating Zoom Capsule Pill
-            Box(
+            // Expressive Floating Zoom Capsule Pill (Hidden during raw QR hold)
+            AnimatedVisibility(
+                visible = !isHoldingRawQr,
+                enter = fadeIn(),
+                exit = fadeOut(),
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = 12.dp)
@@ -750,9 +717,9 @@ fun CameraScreen(
                 }
             }
 
-            // Quick Attach pill when a QR is currently in camera view
+            // Quick Attach pill when a QR is currently in camera view (Hidden during raw QR hold)
             val visibleQr = trackedQrs.firstOrNull()
-            if (visibleQr != null) {
+            if (visibleQr != null && !isHoldingRawQr) {
                 Surface(
                     color = GlassmorphicHudBg,
                     shape = RoundedCornerShape(24.dp),
@@ -819,8 +786,10 @@ fun CameraScreen(
                     // 1. Barcode Formats
                     FilledTonalIconButton(
                         onClick = { showBarcodeOptionsSheet = true },
+                        enabled = !isHoldingRawQr,
                         modifier = Modifier
                             .size(48.dp)
+                            .alpha(if (isHoldingRawQr) 0f else 1f)
                             .testTag("barcode_reading_options_btn"),
                         shape = RoundedCornerShape(20.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
@@ -843,8 +812,10 @@ fun CameraScreen(
                     // 2. Linked Data & Attachments
                     FilledTonalIconButton(
                         onClick = { showAttachmentsSheet = true },
+                        enabled = !isHoldingRawQr,
                         modifier = Modifier
                             .size(48.dp)
+                            .alpha(if (isHoldingRawQr) 0f else 1f)
                             .testTag("manage_attachments_btn"),
                         shape = RoundedCornerShape(20.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
@@ -893,8 +864,10 @@ fun CameraScreen(
                     // 4. AR Simulator
                     FilledTonalIconButton(
                         onClick = { showSimulationSheet = true },
+                        enabled = !isHoldingRawQr,
                         modifier = Modifier
                             .size(48.dp)
+                            .alpha(if (isHoldingRawQr) 0f else 1f)
                             .testTag("open_simulation_btn"),
                         shape = RoundedCornerShape(20.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
@@ -913,8 +886,10 @@ fun CameraScreen(
                 // Right: Expressive Squircle Settings FAB
                 FilledIconButton(
                     onClick = onOpenSettings,
+                    enabled = !isHoldingRawQr,
                     modifier = Modifier
                         .size(48.dp)
+                        .alpha(if (isHoldingRawQr) 0f else 1f)
                         .testTag("open_settings_button"),
                     shape = RoundedCornerShape(20.dp),
                     colors = IconButtonDefaults.filledIconButtonColors(

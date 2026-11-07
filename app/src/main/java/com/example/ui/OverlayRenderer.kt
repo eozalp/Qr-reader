@@ -77,24 +77,29 @@ fun QrOverlaysCanvas(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // Unified AR background canvas: Leader lines, dashed barcode reticles & anchor pins
-        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-            CalloutLayoutSolver.drawCalloutAtmosphere(
-                scope = this,
-                solvedItems = solvedPositions,
-                config = overlayConfig
-            )
+        // Unified AR background canvas: Leader lines, dashed barcode reticles & anchor pins (Hidden in raw data mode)
+        if (!showRawQrData) {
+            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                CalloutLayoutSolver.drawCalloutAtmosphere(
+                    scope = this,
+                    solvedItems = solvedPositions,
+                    config = overlayConfig
+                )
+            }
         }
 
-        // Render each data box at its solved non-overlapping position
+        // Render each data box at its position (directly centered over the QR when in raw data mode)
         for (solved in solvedPositions) {
+            val targetX = if (showRawQrData) solved.tracked.currentBox.centerX() else solved.cardCenterX
+            val targetY = if (showRawQrData) solved.tracked.currentBox.centerY() else solved.cardCenterY
+
             val animatedX by animateFloatAsState(
-                targetValue = solved.cardCenterX,
+                targetValue = targetX,
                 animationSpec = tween(durationMillis = 180),
                 label = "callout_x_${solved.tracked.id}"
             )
             val animatedY by animateFloatAsState(
-                targetValue = solved.cardCenterY,
+                targetValue = targetY,
                 animationSpec = tween(durationMillis = 180),
                 label = "callout_y_${solved.tracked.id}"
             )
@@ -148,7 +153,8 @@ fun QrOverlaysCanvas(
 }
 
 /**
- * High-visibility raw barcode/QR data inspection card displayed when the user presses and holds the Raw QR button.
+ * Raw barcode/QR data display shown strictly when the user presses and holds the Raw QR button.
+ * Displays ONLY the raw QR data text, nothing else.
  */
 @Composable
 fun RawQrOverlayCardContent(
@@ -158,103 +164,20 @@ fun RawQrOverlayCardContent(
 ) {
     val scale = config.scale.coerceIn(0.7f, 2.5f)
     Surface(
-        shape = RoundedCornerShape((18 * scale).dp),
-        color = Color(0xF2070B14),
+        shape = RoundedCornerShape((10 * scale).dp),
+        color = Color(0xF5050811),
         border = androidx.compose.foundation.BorderStroke((1.5f * scale).dp, Color(0xFF00F5D4)),
-        shadowElevation = 14.dp,
+        shadowElevation = 10.dp,
         modifier = modifier
-            .widthIn(min = (200 * scale).dp, max = (360 * scale).dp)
     ) {
-        Column(modifier = Modifier.padding((12 * scale).dp)) {
-            // Header: Format Badge & Character count
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    shape = RoundedCornerShape((6 * scale).dp),
-                    color = Color(0x3300F5D4),
-                    border = androidx.compose.foundation.BorderStroke((0.8f * scale).dp, Color(0xFF00F5D4))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = (8 * scale).dp, vertical = (2 * scale).dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size((6 * scale).dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF00F5D4))
-                        )
-                        Spacer(modifier = Modifier.width((4 * scale).dp))
-                        Text(
-                            text = tracked.formatName,
-                            color = Color(0xFF00F5D4),
-                            fontSize = (11 * scale).sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                    }
-                }
-
-                Surface(
-                    shape = RoundedCornerShape((6 * scale).dp),
-                    color = Color(0x22818CF8)
-                ) {
-                    Text(
-                        text = "${tracked.rawContent.length} chars",
-                        color = Color(0xFF818CF8),
-                        fontSize = (10 * scale).sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = (6 * scale).dp, vertical = (2 * scale).dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height((8 * scale).dp))
-
-            // Raw Text Content in Monospace
-            Surface(
-                shape = RoundedCornerShape((10 * scale).dp),
-                color = Color(0xFF0D1424),
-                border = androidx.compose.foundation.BorderStroke((1 * scale).dp, Color(0x2800F5D4)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    text = tracked.rawContent,
-                    color = Color(0xFFF8FAFC),
-                    fontSize = (12 * scale).sp,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding((10 * scale).dp)
-                )
-            }
-
-            // Tokens breakdown if available
-            if (tracked.result.variablePillDisplay.isNotEmpty()) {
-                Spacer(modifier = Modifier.height((6 * scale).dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy((4 * scale).dp)
-                ) {
-                    tracked.result.variablePillDisplay.entries.take(4).forEach { (varName, varVal) ->
-                        Surface(
-                            shape = RoundedCornerShape((6 * scale).dp),
-                            color = Color(0xFF162036),
-                            border = androidx.compose.foundation.BorderStroke(0.5.dp, Color(0x44A3E635))
-                        ) {
-                            Text(
-                                text = "$varName: $varVal",
-                                color = Color(0xFFA3E635),
-                                fontSize = (9.5f * scale).sp,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(horizontal = (5 * scale).dp, vertical = (2 * scale).dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
+        Text(
+            text = tracked.rawContent,
+            color = Color.White,
+            fontSize = (13 * scale).sp,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = (12 * scale).dp, vertical = (8 * scale).dp)
+        )
     }
 }
 
