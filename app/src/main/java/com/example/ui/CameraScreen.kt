@@ -9,7 +9,9 @@ import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import com.example.ui.theme.*
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -652,7 +654,7 @@ fun CameraScreen(
                 }
             }
 
-            // Zoom slider overlay (subtle at right side)
+            // Expressive Floating Zoom Capsule Pill
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
@@ -661,8 +663,9 @@ fun CameraScreen(
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(Color.Black.copy(alpha = 0.55f))
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(GlassmorphicHudBg)
+                        .border(1.dp, GlassmorphicHudBorder, RoundedCornerShape(24.dp))
                         .padding(vertical = 8.dp, horizontal = 4.dp)
                 ) {
                     IconButton(
@@ -670,24 +673,31 @@ fun CameraScreen(
                             zoomLevel = (zoomLevel + 0.1f).coerceAtMost(1.0f)
                             cameraControl?.setLinearZoom(zoomLevel)
                         },
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(38.dp)
                     ) {
                         Icon(Icons.Default.ZoomIn, contentDescription = "Zoom In", tint = Color.White)
                     }
 
-                    Text(
-                        text = "${(1.0f + zoomLevel * 3f).toInt()}x",
-                        color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Surface(
+                        color = NeonCyan.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "${(1.0f + zoomLevel * 3f).toInt()}x",
+                            color = NeonCyan,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
 
                     IconButton(
                         onClick = {
                             zoomLevel = (zoomLevel - 0.1f).coerceAtLeast(0.0f)
                             cameraControl?.setLinearZoom(zoomLevel)
                         },
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(38.dp)
                     ) {
                         Icon(Icons.Default.ZoomOut, contentDescription = "Zoom Out", tint = Color.White)
                     }
@@ -698,17 +708,18 @@ fun CameraScreen(
             val visibleQr = trackedQrs.firstOrNull()
             if (visibleQr != null) {
                 Surface(
-                    color = Color(0xEE090D16),
-                    shape = RoundedCornerShape(20.dp),
+                    color = GlassmorphicHudBg,
+                    shape = RoundedCornerShape(24.dp),
                     border = androidx.compose.foundation.BorderStroke(
                         1.dp,
-                        if (visibleQr.attachment != null) Color(0xFF00F5D4) else Color(0xFFFFB703)
+                        if (visibleQr.attachment != null) NeonCyan else AmberGold
                     ),
+                    shadowElevation = 8.dp,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .windowInsetsPadding(WindowInsets.navigationBars)
                         .padding(bottom = 76.dp)
-                        .clip(RoundedCornerShape(20.dp))
+                        .clip(RoundedCornerShape(24.dp))
                         .clickable {
                             if (visibleQr.attachment != null) {
                                 viewingAttachment = visibleQr.attachment
@@ -719,23 +730,23 @@ fun CameraScreen(
                         }
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
                             imageVector = if (visibleQr.attachment != null) Icons.Default.CheckCircle else Icons.Default.AttachFile,
                             contentDescription = null,
-                            tint = if (visibleQr.attachment != null) Color(0xFF00F5D4) else Color(0xFFFFB703),
-                            modifier = Modifier.size(16.dp)
+                            tint = if (visibleQr.attachment != null) NeonCyan else AmberGold,
+                            modifier = Modifier.size(18.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = if (visibleQr.attachment != null) {
                                 "📎 ${visibleQr.attachment?.title?.ifBlank { visibleQr.rawContent }?.take(18)}"
                             } else {
                                 "+ Attach to '${visibleQr.rawContent.take(12)}...'"
                             },
-                            color = Color.White,
+                            color = OnDarkSurface,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 1
@@ -744,7 +755,7 @@ fun CameraScreen(
                 }
             }
 
-            // Bottom action bar: Barcode Formats, Linked Data & Settings FAB
+            // Expressive Bottom Floating Action Dock
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -754,22 +765,22 @@ fun CameraScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left Quick Controls: Barcode Formats & Linked Data Pills
+                // Left Quick Controls: Barcode Formats & Linked Data Expressive Pills
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     FilledTonalButton(
                         onClick = { showBarcodeOptionsSheet = true },
-                        shape = RoundedCornerShape(22.dp),
+                        shape = RoundedCornerShape(24.dp),
                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                         colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = Color(0xEE090D16),
-                            contentColor = Color(0xFF60A5FA)
+                            containerColor = GlassmorphicDockBg,
+                            contentColor = NeonCyan
                         ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x3360A5FA)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, GlassmorphicHudBorder),
                         modifier = Modifier
-                            .height(44.dp)
+                            .height(48.dp)
                             .testTag("barcode_reading_options_btn")
                     ) {
                         Icon(
@@ -786,22 +797,23 @@ fun CameraScreen(
                                 BarcodeScanPreset.CUSTOM -> "Custom"
                             },
                             fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
 
                     FilledTonalButton(
                         onClick = { showAttachmentsSheet = true },
-                        shape = RoundedCornerShape(22.dp),
+                        shape = RoundedCornerShape(24.dp),
                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                         colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = Color(0xEE090D16),
-                            contentColor = Color(0xFFFFB703)
+                            containerColor = GlassmorphicDockBg,
+                            contentColor = AmberGold
                         ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33FFB703)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, AmberGold.copy(alpha = 0.35f)),
                         modifier = Modifier
-                            .height(44.dp)
+                            .height(48.dp)
                             .testTag("manage_attachments_btn")
                     ) {
                         Icon(
@@ -813,26 +825,29 @@ fun CameraScreen(
                         Text(
                             text = "Linked Data",
                             fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }
 
-                // Right: Settings FAB
-                FloatingActionButton(
+                // Right: Expressive Squircle Settings FAB
+                FilledIconButton(
                     onClick = onOpenSettings,
                     modifier = Modifier
-                        .size(46.dp)
+                        .size(48.dp)
                         .testTag("open_settings_button"),
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    shape = CircleShape
+                    shape = RoundedCornerShape(20.dp),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = NeonCyan,
+                        contentColor = Color(0xFF00382E)
+                    )
                 ) {
                     Icon(
                         imageVector = Icons.Default.Settings,
                         contentDescription = "Settings",
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(24.dp)
                     )
                 }
             }
@@ -1091,214 +1106,272 @@ fun TopHudBar(
     var expandedDropdown by remember { mutableStateOf(false) }
     var expandedMoreMenu by remember { mutableStateOf(false) }
 
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(Color(0xCC090D16))
-            .border(1.dp, Color(0x3300F5D4), RoundedCornerShape(24.dp))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+    // Pulsing animation for active scanner indicator
+    val infiniteTransition = rememberInfiniteTransition(label = "hud_pulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
+    )
+
+    Surface(
+        shape = RoundedCornerShape(32.dp),
+        color = GlassmorphicHudBg,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            Brush.linearGradient(
+                listOf(NeonCyan.copy(alpha = 0.45f), ElectricIndigo.copy(alpha = 0.25f))
+            )
+        ),
+        shadowElevation = 12.dp,
+        modifier = modifier.fillMaxWidth()
     ) {
-        // Active Profile Selector
-        Box(modifier = Modifier.weight(1f, fill = false)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable { expandedDropdown = true }
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(if (isPaused) Color(0xFFF59E0B) else Color(0xFF10B981))
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Column(modifier = Modifier.widthIn(max = 145.dp)) {
-                    Text(
-                        text = activeProfile.name,
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = if (activeCount > 0) "$activeCount detected" else if (isPaused) "Paused" else "Scanning...",
-                        color = Color(0xFF94A3B8),
-                        fontSize = 10.sp,
-                        maxLines = 1
-                    )
-                }
-                Icon(
-                    imageVector = Icons.Default.ArrowDropDown,
-                    contentDescription = "Select Profile",
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-
-            DropdownMenu(
-                expanded = expandedDropdown,
-                onDismissRequest = { expandedDropdown = false }
-            ) {
-                allProfiles.forEach { profile ->
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(
-                                    text = profile.name,
-                                    fontWeight = if (profile.id == activeProfile.id) FontWeight.Bold else FontWeight.Normal
-                                )
-                                if (profile.description.isNotBlank()) {
-                                    Text(
-                                        text = profile.description,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        },
-                        trailingIcon = {
-                            if (profile.id == activeProfile.id) {
-                                Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            }
-                        },
-                        onClick = {
-                            onSelectProfile(profile.id)
-                            expandedDropdown = false
-                        }
-                    )
-                }
-            }
-        }
-
-        // Action Buttons Row (Torch, Pause, Flip, and More Menu)
         Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            IconButton(
-                onClick = onToggleTorch,
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    imageVector = if (isTorchEnabled) Icons.Default.FlashOn else Icons.Default.FlashOff,
-                    contentDescription = "Torch Toggle",
-                    tint = if (isTorchEnabled) Color(0xFFFACC15) else Color.White.copy(alpha = 0.75f),
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-
-            IconButton(
-                onClick = onTogglePause,
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                    contentDescription = "Pause/Resume Scanning",
-                    tint = if (isPaused) Color(0xFFF59E0B) else Color.White.copy(alpha = 0.75f),
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-
-            IconButton(
-                onClick = onToggleCamera,
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.FlipCameraAndroid,
-                    contentDescription = "Switch Camera",
-                    tint = Color.White.copy(alpha = 0.75f),
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-
-            // More Options ("Inner Menu" for Testing, Barcode Options, etc.)
-            Box {
-                IconButton(
-                    onClick = { expandedMoreMenu = true },
-                    modifier = Modifier.size(36.dp).testTag("top_hud_more_menu_btn")
+            // Active Profile Selector Pill
+            Box(modifier = Modifier.weight(1f, fill = false)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .clickable { expandedDropdown = true }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (isPaused) AmberGold
+                                else EmeraldGreen.copy(alpha = pulseAlpha)
+                            )
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.widthIn(max = 135.dp)) {
+                        Text(
+                            text = activeProfile.name,
+                            color = OnDarkSurface,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (activeCount > 0) "$activeCount detected" else if (isPaused) "Paused" else "Scanning...",
+                            color = if (activeCount > 0) NeonCyan else OnDarkSurfaceVariant,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
+                    }
                     Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "More Options",
-                        tint = Color.White.copy(alpha = 0.85f),
+                        imageVector = Icons.Default.ArrowDropDown,
+                        contentDescription = "Select Profile",
+                        tint = OnDarkSurfaceVariant,
                         modifier = Modifier.size(18.dp)
                     )
                 }
 
                 DropdownMenu(
-                    expanded = expandedMoreMenu,
-                    onDismissRequest = { expandedMoreMenu = false }
+                    expanded = expandedDropdown,
+                    onDismissRequest = { expandedDropdown = false },
+                    modifier = Modifier.background(DarkSurfaceVariant)
                 ) {
-                    DropdownMenuItem(
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Science,
-                                    contentDescription = null,
-                                    tint = Color(0xFF00F5D4),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
+                    allProfiles.forEach { profile ->
+                        DropdownMenuItem(
+                            text = {
                                 Column {
-                                    Text("QR & Barcode Simulator", fontWeight = FontWeight.SemiBold)
-                                    Text("Test virtual AR codes on emulator", fontSize = 10.sp, color = Color.Gray)
+                                    Text(
+                                        text = profile.name,
+                                        color = OnDarkSurface,
+                                        fontWeight = if (profile.id == activeProfile.id) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                    if (profile.description.isNotBlank()) {
+                                        Text(
+                                            text = profile.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = OnDarkSurfaceVariant
+                                        )
+                                    }
                                 }
-                            }
-                        },
-                        onClick = {
-                            expandedMoreMenu = false
-                            onOpenSimulation()
-                        }
-                    )
-
-                    DropdownMenuItem(
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.QrCodeScanner,
-                                    contentDescription = null,
-                                    tint = Color(0xFF60A5FA),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text("Barcode Reading Options", fontWeight = FontWeight.SemiBold)
-                                    Text("Configure 2D, 3D and 1D formats", fontSize = 10.sp, color = Color.Gray)
+                            },
+                            trailingIcon = {
+                                if (profile.id == activeProfile.id) {
+                                    Icon(Icons.Default.Check, contentDescription = null, tint = NeonCyan)
                                 }
+                            },
+                            onClick = {
+                                onSelectProfile(profile.id)
+                                expandedDropdown = false
                             }
-                        },
-                        onClick = {
-                            expandedMoreMenu = false
-                            onOpenBarcodeOptions()
-                        }
+                        )
+                    }
+                }
+            }
+
+            // Direct Expressive Action Controls
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(1.dp)
+            ) {
+                // Torch
+                IconButton(
+                    onClick = onToggleTorch,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isTorchEnabled) Icons.Default.FlashOn else Icons.Default.FlashOff,
+                        contentDescription = "Torch Toggle",
+                        tint = if (isTorchEnabled) AmberGold else OnDarkSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
                     )
+                }
 
-                    HorizontalDivider()
+                // Pause
+                IconButton(
+                    onClick = onTogglePause,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                        contentDescription = "Pause/Resume Scanning",
+                        tint = if (isPaused) AmberGold else OnDarkSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
 
-                    DropdownMenuItem(
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Settings,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text("All Settings", fontWeight = FontWeight.Medium)
+                // Barcode Format Direct Shortcut
+                IconButton(
+                    onClick = onOpenBarcodeOptions,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.QrCodeScanner,
+                        contentDescription = "Barcode Formats",
+                        tint = NeonCyan,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                // Simulator Direct Shortcut
+                IconButton(
+                    onClick = onOpenSimulation,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Science,
+                        contentDescription = "AR Simulator",
+                        tint = CyberLime,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                // Flip Camera
+                IconButton(
+                    onClick = onToggleCamera,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.FlipCameraAndroid,
+                        contentDescription = "Switch Camera",
+                        tint = OnDarkSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                // More Options Menu
+                Box {
+                    IconButton(
+                        onClick = { expandedMoreMenu = true },
+                        modifier = Modifier.size(36.dp).testTag("top_hud_more_menu_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "More Options",
+                            tint = OnDarkSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = expandedMoreMenu,
+                        onDismissRequest = { expandedMoreMenu = false },
+                        modifier = Modifier.background(DarkSurfaceVariant)
+                    ) {
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Science,
+                                        contentDescription = null,
+                                        tint = NeonCyan,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text("AR Code Simulator", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
+                                        Text("Inject virtual QR/barcodes", fontSize = 11.sp, color = OnDarkSurfaceVariant)
+                                    }
+                                }
+                            },
+                            onClick = {
+                                expandedMoreMenu = false
+                                onOpenSimulation()
                             }
-                        },
-                        onClick = {
-                            expandedMoreMenu = false
-                            onOpenSettings()
-                        }
-                    )
+                        )
+
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.QrCodeScanner,
+                                        contentDescription = null,
+                                        tint = ElectricIndigo,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text("Barcode Formats", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
+                                        Text("Configure 2D, 3D and 1D scanner", fontSize = 11.sp, color = OnDarkSurfaceVariant)
+                                    }
+                                }
+                            },
+                            onClick = {
+                                expandedMoreMenu = false
+                                onOpenBarcodeOptions()
+                            }
+                        )
+
+                        HorizontalDivider(color = DarkCardBorder)
+
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Settings,
+                                        contentDescription = null,
+                                        tint = NeonCyan,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text("All Settings", color = OnDarkSurface, fontWeight = FontWeight.Medium)
+                                }
+                            },
+                            onClick = {
+                                expandedMoreMenu = false
+                                onOpenSettings()
+                            }
+                        )
+                    }
                 }
             }
         }
