@@ -16,11 +16,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material3.*
+import androidx.compose.ui.platform.testTag
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -61,6 +59,8 @@ fun QrOverlaysCanvas(
     screenWidthPx: Float,
     screenHeightPx: Float,
     showRawQrData: Boolean = false,
+    pinnedQr: TrackedQr? = null,
+    onPinClick: ((TrackedQr) -> Unit)? = null,
     onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -77,8 +77,8 @@ fun QrOverlaysCanvas(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // Unified AR background canvas: Leader lines, dashed barcode reticles & anchor pins (Hidden in raw data mode)
-        if (!showRawQrData) {
+        // Unified AR background canvas: Leader lines, dashed barcode reticles & anchor pins (Hidden in raw data mode or when pinned)
+        if (!showRawQrData && pinnedQr == null) {
             androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
                 CalloutLayoutSolver.drawCalloutAtmosphere(
                     scope = this,
@@ -88,65 +88,267 @@ fun QrOverlaysCanvas(
             }
         }
 
-        // Render each data box at its position (directly centered over the QR when in raw data mode)
-        for (solved in solvedPositions) {
-            val targetX = if (showRawQrData) solved.tracked.currentBox.centerX() else solved.cardCenterX
-            val targetY = if (showRawQrData) solved.tracked.currentBox.centerY() else solved.cardCenterY
+        // Render each data box at its position (Hidden when pinned since pinned card is displayed full width)
+        if (pinnedQr == null) {
+            for (solved in solvedPositions) {
+                val targetX = if (showRawQrData) solved.tracked.currentBox.centerX() else solved.cardCenterX
+                val targetY = if (showRawQrData) solved.tracked.currentBox.centerY() else solved.cardCenterY
 
-            val animatedX by animateFloatAsState(
-                targetValue = targetX,
-                animationSpec = tween(durationMillis = 180),
-                label = "callout_x_${solved.tracked.id}"
-            )
-            val animatedY by animateFloatAsState(
-                targetValue = targetY,
-                animationSpec = tween(durationMillis = 180),
-                label = "callout_y_${solved.tracked.id}"
-            )
-            val animatedAlpha by animateFloatAsState(
-                targetValue = solved.tracked.alpha,
-                animationSpec = tween(durationMillis = 150),
-                label = "callout_alpha_${solved.tracked.id}"
-            )
+                val animatedX by animateFloatAsState(
+                    targetValue = targetX,
+                    animationSpec = tween(durationMillis = 180),
+                    label = "callout_x_${solved.tracked.id}"
+                )
+                val animatedY by animateFloatAsState(
+                    targetValue = targetY,
+                    animationSpec = tween(durationMillis = 180),
+                    label = "callout_y_${solved.tracked.id}"
+                )
+                val animatedAlpha by animateFloatAsState(
+                    targetValue = solved.tracked.alpha,
+                    animationSpec = tween(durationMillis = 150),
+                    label = "callout_alpha_${solved.tracked.id}"
+                )
 
-            Box(
-                modifier = Modifier
-                    .layout { measurable, constraints ->
-                        val placeable = measurable.measure(constraints)
-                        layout(constraints.maxWidth, constraints.maxHeight) {
-                            val marginPx = with(density) { 14.dp.toPx() }
-                            val topSafePx = with(density) { 70.dp.toPx() }
-                            val bottomSafePx = with(density) { 84.dp.toPx() }
+                Box(
+                    modifier = Modifier
+                        .layout { measurable, constraints ->
+                            val placeable = measurable.measure(constraints)
+                            layout(constraints.maxWidth, constraints.maxHeight) {
+                                val marginPx = with(density) { 14.dp.toPx() }
+                                val topSafePx = with(density) { 70.dp.toPx() }
+                                val bottomSafePx = with(density) { 84.dp.toPx() }
 
-                            val minX = marginPx.roundToInt()
-                            val maxX = (constraints.maxWidth - placeable.width - marginPx).roundToInt().coerceAtLeast(minX)
-                            val minY = topSafePx.roundToInt()
-                            val maxY = (constraints.maxHeight - placeable.height - bottomSafePx).roundToInt().coerceAtLeast(minY)
+                                val minX = marginPx.roundToInt()
+                                val maxX = (constraints.maxWidth - placeable.width - marginPx).roundToInt().coerceAtLeast(minX)
+                                val minY = topSafePx.roundToInt()
+                                val maxY = (constraints.maxHeight - placeable.height - bottomSafePx).roundToInt().coerceAtLeast(minY)
 
-                            val rawPosX = (animatedX - placeable.width / 2f).roundToInt()
-                            val rawPosY = (animatedY - placeable.height / 2f).roundToInt()
+                                val rawPosX = (animatedX - placeable.width / 2f).roundToInt()
+                                val rawPosY = (animatedY - placeable.height / 2f).roundToInt()
 
-                            val clampedX = rawPosX.coerceIn(minX, maxX)
-                            val clampedY = rawPosY.coerceIn(minY, maxY)
+                                val clampedX = rawPosX.coerceIn(minX, maxX)
+                                val clampedY = rawPosY.coerceIn(minY, maxY)
 
-                            placeable.placeRelative(clampedX, clampedY)
+                                placeable.placeRelative(clampedX, clampedY)
+                            }
+                        }
+                        .alpha(if (showRawQrData) 1f else animatedAlpha)
+                ) {
+                    if (showRawQrData) {
+                        RawQrOverlayCardContent(
+                            tracked = solved.tracked,
+                            config = overlayConfig
+                        )
+                    } else {
+                        Box {
+                            OverlayCardContent(
+                                result = solved.tracked.result,
+                                config = overlayConfig,
+                                attachment = solved.tracked.attachment,
+                                onAttachmentClick = onAttachmentClick
+                            )
+
+                            // Small Pin Icon on the overlay when it appears
+                            IconButton(
+                                onClick = { onPinClick?.invoke(solved.tracked) },
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(2.dp)
+                                    .size(30.dp)
+                                    .testTag("pin_overlay_${solved.tracked.id}")
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = Color.Black.copy(alpha = 0.55f),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00F5D4).copy(alpha = 0.6f)),
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.PushPin,
+                                            contentDescription = "Pin overlay full width",
+                                            tint = Color(0xFF00F5D4),
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
-                    .alpha(if (showRawQrData) 1f else animatedAlpha)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Pinned Full-Width Overlay Card displayed when the user pins an overlay.
+ * Scales to full width, stays on screen, and provides an unpin button to resume scanning.
+ */
+@Composable
+fun PinnedFullWidthOverlayCard(
+    tracked: TrackedQr,
+    config: OverlayAppearance,
+    onUnpin: () -> Unit,
+    onAttachmentClick: ((QrAttachment) -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val themeColors = getExcelThemeColors(config.tableConfig.gridTheme)
+    val shape = RoundedCornerShape(16.dp)
+
+    Card(
+        shape = shape,
+        colors = CardDefaults.cardColors(containerColor = Color(0xF5070D18)),
+        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF00F5D4)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp)
+        ) {
+            // Top Bar: Pinned Badge + Scanning Paused Badge + Pin Icon (Unpin action)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                if (showRawQrData) {
-                    RawQrOverlayCardContent(
-                        tracked = solved.tracked,
-                        config = overlayConfig
-                    )
-                } else {
-                    OverlayCardContent(
-                        result = solved.tracked.result,
-                        config = overlayConfig,
-                        attachment = solved.tracked.attachment,
-                        onAttachmentClick = onAttachmentClick
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF00F5D4).copy(alpha = 0.18f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00F5D4).copy(alpha = 0.5f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PushPin,
+                                contentDescription = null,
+                                tint = Color(0xFF00F5D4),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "PINNED",
+                                color = Color(0xFF00F5D4),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = 0.6.sp
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color.Black.copy(alpha = 0.45f)
+                    ) {
+                        Text(
+                            text = "SCANNING PAUSED",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                // Small Pin Icon Button (Click to unpin and resume scanning)
+                FilledTonalIconButton(
+                    onClick = onUnpin,
+                    shape = CircleShape,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = Color(0xFF00F5D4),
+                        contentColor = Color(0xFF00382E)
+                    ),
+                    modifier = Modifier
+                        .size(36.dp)
+                        .testTag("unpin_overlay_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PushPin,
+                        contentDescription = "Unpin and resume scan",
+                        modifier = Modifier.size(18.dp)
                     )
                 }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Full-width card content according to current display mode
+            when (config.displayMode) {
+                OverlayDisplayMode.EXCEL_TABLE -> {
+                    ExcelTableOverlayContent(
+                        result = tracked.result,
+                        config = config.copy(scale = 1.0f),
+                        attachment = tracked.attachment,
+                        onAttachmentClick = onAttachmentClick,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                OverlayDisplayMode.COMPACT_CARD -> {
+                    CompactCardOverlayContent(
+                        result = tracked.result,
+                        config = config.copy(scale = 1.0f, autoWidth = false, customWidth = 600f),
+                        attachment = tracked.attachment,
+                        onAttachmentClick = onAttachmentClick,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                OverlayDisplayMode.HYBRID -> {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CompactCardOverlayContent(
+                            result = tracked.result,
+                            config = config.copy(scale = 1.0f, autoWidth = false, customWidth = 600f),
+                            attachment = tracked.attachment,
+                            onAttachmentClick = onAttachmentClick,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        ExcelTableOverlayContent(
+                            result = tracked.result,
+                            config = config.copy(scale = 1.0f),
+                            attachment = tracked.attachment,
+                            onAttachmentClick = onAttachmentClick,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Bottom Unpin Button to resume scanning
+            OutlinedButton(
+                onClick = onUnpin,
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00F5D4).copy(alpha = 0.7f)),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = Color(0xFF00F5D4)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("unpin_resume_scan_btn")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Unpin & Resume Scanning",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }

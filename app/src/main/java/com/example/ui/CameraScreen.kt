@@ -152,6 +152,9 @@ fun CameraScreen(
 
     val isRawModeActive = isHoldingRawQr || isRawQrToggled
 
+    // Pinned overlay state (Scales full width and pauses scanning)
+    var pinnedQr by remember { mutableStateOf<TrackedQr?>(null) }
+
     var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
     var cameraInfo by remember { mutableStateOf<CameraInfo?>(null) }
 
@@ -501,6 +504,11 @@ fun CameraScreen(
                     screenWidthPx = screenWidthPx,
                     screenHeightPx = screenHeightPx,
                     showRawQrData = isRawModeActive,
+                    pinnedQr = pinnedQr,
+                    onPinClick = { tracked ->
+                        pinnedQr = tracked
+                        isPaused = true
+                    },
                     onAttachmentClick = { att -> viewingAttachment = att },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -543,7 +551,12 @@ fun CameraScreen(
                         cameraControl?.enableTorch(isTorchEnabled)
                     },
                     isPaused = isPaused,
-                    onTogglePause = { isPaused = !isPaused },
+                    onTogglePause = {
+                        isPaused = !isPaused
+                        if (!isPaused) {
+                            pinnedQr = null
+                        }
+                    },
                     isFrontCamera = isFrontCamera,
                     onToggleCamera = { isFrontCamera = !isFrontCamera },
                     onOpenSimulation = { showSimulationSheet = true },
@@ -731,9 +744,32 @@ fun CameraScreen(
                 }
             }
 
-            // Expressive Floating Zoom Capsule Pill (Hidden during raw QR mode)
+            // Pinned Full-Width Overlay Card (Scales full width, kept on screen, scanning paused)
             AnimatedVisibility(
-                visible = !isRawModeActive,
+                visible = pinnedQr != null && !isRawModeActive,
+                enter = fadeIn() + scaleIn(initialScale = 0.88f),
+                exit = fadeOut() + scaleOut(targetScale = 0.88f),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+            ) {
+                pinnedQr?.let { pinned ->
+                    PinnedFullWidthOverlayCard(
+                        tracked = pinned,
+                        config = activeProfile.overlay,
+                        onUnpin = {
+                            pinnedQr = null
+                            isPaused = false
+                        },
+                        onAttachmentClick = { att -> viewingAttachment = att }
+                    )
+                }
+            }
+
+            // Expressive Floating Zoom Capsule Pill (Hidden during raw QR mode or when pinned)
+            AnimatedVisibility(
+                visible = !isRawModeActive && pinnedQr == null,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier
@@ -784,9 +820,9 @@ fun CameraScreen(
                 }
             }
 
-            // Quick Attach pill when a QR is currently in camera view (Hidden during raw QR mode)
+            // Quick Attach pill when a QR is currently in camera view (Hidden during raw QR mode or when pinned)
             val visibleQr = trackedQrs.firstOrNull()
-            if (visibleQr != null && !isRawModeActive) {
+            if (visibleQr != null && !isRawModeActive && pinnedQr == null) {
                 Surface(
                     color = GlassmorphicHudBg,
                     shape = RoundedCornerShape(24.dp),
