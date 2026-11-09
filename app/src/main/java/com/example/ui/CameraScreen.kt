@@ -16,6 +16,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -134,6 +136,21 @@ fun CameraScreen(
     var initialQrForEdit by remember { mutableStateOf("") }
     var showNewAttachmentDialog by remember { mutableStateOf(false) }
     var isHoldingRawQr by remember { mutableStateOf(false) }
+    var isRawQrToggled by remember { mutableStateOf(false) }
+    val rawQrInteractionSource = remember { MutableInteractionSource() }
+    val isRawQrPressed by rawQrInteractionSource.collectIsPressedAsState()
+    var rawPressStartTime by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(isRawQrPressed) {
+        if (isRawQrPressed) {
+            rawPressStartTime = System.currentTimeMillis()
+            isHoldingRawQr = true
+        } else {
+            isHoldingRawQr = false
+        }
+    }
+
+    val isRawModeActive = isHoldingRawQr || isRawQrToggled
 
     var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
     var cameraInfo by remember { mutableStateOf<CameraInfo?>(null) }
@@ -483,7 +500,7 @@ fun CameraScreen(
                     overlayConfig = activeProfile.overlay.copy(scale = liveOverlayScale),
                     screenWidthPx = screenWidthPx,
                     screenHeightPx = screenHeightPx,
-                    showRawQrData = isHoldingRawQr,
+                    showRawQrData = isRawModeActive,
                     onAttachmentClick = { att -> viewingAttachment = att },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -508,9 +525,9 @@ fun CameraScreen(
                 }
             }
 
-            // Top HUD Controls & Profile Bar (Hidden during raw QR hold)
+            // Top HUD Controls & Profile Bar (Hidden during raw QR mode)
             AnimatedVisibility(
-                visible = !isHoldingRawQr,
+                visible = !isRawModeActive,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.TopCenter)
@@ -538,9 +555,9 @@ fun CameraScreen(
                 )
             }
 
-            // Auto-switched Profile Notification Banner (Hidden during raw QR hold)
+            // Auto-switched Profile Notification Banner (Hidden during raw QR mode)
             AnimatedVisibility(
-                visible = autoSwitchedProfileName != null && !isHoldingRawQr,
+                visible = autoSwitchedProfileName != null && !isRawModeActive,
                 enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
                 exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
                 modifier = Modifier
@@ -574,9 +591,9 @@ fun CameraScreen(
                 }
             }
 
-            // Embedded Profile Detected Bottom Card (Hidden during raw QR hold)
+            // Embedded Profile Detected Bottom Card (Hidden during raw QR mode)
             AnimatedVisibility(
-                visible = detectedEmbeddedProfile != null && !isHoldingRawQr,
+                visible = detectedEmbeddedProfile != null && !isRawModeActive,
                 enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
                 exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
                 modifier = Modifier
@@ -664,9 +681,59 @@ fun CameraScreen(
                 }
             }
 
-            // Expressive Floating Zoom Capsule Pill (Hidden during raw QR hold)
+            // Raw Mode active feedback when no barcode is in view
             AnimatedVisibility(
-                visible = !isHoldingRawQr,
+                visible = isRawModeActive && trackedQrs.isEmpty(),
+                enter = fadeIn() + scaleIn(initialScale = 0.9f),
+                exit = fadeOut() + scaleOut(targetScale = 0.9f),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 24.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color(0xF2070B14),
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, NeonCyan),
+                    shadowElevation = 14.dp
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DataObject,
+                            contentDescription = null,
+                            tint = NeonCyan,
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "RAW QR MODE ACTIVE",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = NeonCyan
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Point camera at a barcode or use AR Simulator",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.85f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Tap or release Raw button to exit",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = OnDarkSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                }
+            }
+
+            // Expressive Floating Zoom Capsule Pill (Hidden during raw QR mode)
+            AnimatedVisibility(
+                visible = !isRawModeActive,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier
@@ -717,9 +784,9 @@ fun CameraScreen(
                 }
             }
 
-            // Quick Attach pill when a QR is currently in camera view (Hidden during raw QR hold)
+            // Quick Attach pill when a QR is currently in camera view (Hidden during raw QR mode)
             val visibleQr = trackedQrs.firstOrNull()
-            if (visibleQr != null && !isHoldingRawQr) {
+            if (visibleQr != null && !isRawModeActive) {
                 Surface(
                     color = GlassmorphicHudBg,
                     shape = RoundedCornerShape(24.dp),
@@ -778,7 +845,7 @@ fun CameraScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left Quick Controls: Barcode Formats, Linked Data, Raw QR (Hold), and AR Simulator
+                // Left Quick Controls: Barcode Formats, Linked Data, Raw QR, and AR Simulator
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -786,10 +853,10 @@ fun CameraScreen(
                     // 1. Barcode Formats
                     FilledTonalIconButton(
                         onClick = { showBarcodeOptionsSheet = true },
-                        enabled = !isHoldingRawQr,
+                        enabled = !isRawModeActive,
                         modifier = Modifier
                             .size(48.dp)
-                            .alpha(if (isHoldingRawQr) 0f else 1f)
+                            .alpha(if (isRawModeActive) 0f else 1f)
                             .testTag("barcode_reading_options_btn"),
                         shape = RoundedCornerShape(20.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
@@ -812,10 +879,10 @@ fun CameraScreen(
                     // 2. Linked Data & Attachments
                     FilledTonalIconButton(
                         onClick = { showAttachmentsSheet = true },
-                        enabled = !isHoldingRawQr,
+                        enabled = !isRawModeActive,
                         modifier = Modifier
                             .size(48.dp)
-                            .alpha(if (isHoldingRawQr) 0f else 1f)
+                            .alpha(if (isRawModeActive) 0f else 1f)
                             .testTag("manage_attachments_btn"),
                         shape = RoundedCornerShape(20.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
@@ -830,33 +897,29 @@ fun CameraScreen(
                         )
                     }
 
-                    // 3. Raw QR (Press and Hold to view raw unparsed data)
+                    // 3. Raw QR (Press and Hold to view raw unparsed data, or Tap to toggle)
                     FilledTonalIconButton(
-                        onClick = { /* Tap hint: Hold down to inspect */ },
+                        onClick = {
+                            val duration = System.currentTimeMillis() - rawPressStartTime
+                            if (duration < 400L) {
+                                isRawQrToggled = !isRawQrToggled
+                            } else {
+                                isRawQrToggled = false
+                            }
+                        },
+                        interactionSource = rawQrInteractionSource,
                         modifier = Modifier
                             .size(48.dp)
-                            .testTag("hold_raw_qr_button")
-                            .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onPress = {
-                                        isHoldingRawQr = true
-                                        try {
-                                            tryAwaitRelease()
-                                        } finally {
-                                            isHoldingRawQr = false
-                                        }
-                                    }
-                                )
-                            },
+                            .testTag("hold_raw_qr_button"),
                         shape = RoundedCornerShape(20.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
-                            containerColor = if (isHoldingRawQr) NeonCyan else GlassmorphicDockBg,
-                            contentColor = if (isHoldingRawQr) Color(0xFF00382E) else CyberLime
+                            containerColor = if (isRawModeActive) NeonCyan else GlassmorphicDockBg,
+                            contentColor = if (isRawModeActive) Color(0xFF00382E) else CyberLime
                         )
                     ) {
                         Icon(
                             imageVector = Icons.Default.DataObject,
-                            contentDescription = "Hold for Raw QR",
+                            contentDescription = "Raw QR Data",
                             modifier = Modifier.size(22.dp)
                         )
                     }
@@ -864,10 +927,10 @@ fun CameraScreen(
                     // 4. AR Simulator
                     FilledTonalIconButton(
                         onClick = { showSimulationSheet = true },
-                        enabled = !isHoldingRawQr,
+                        enabled = !isRawModeActive,
                         modifier = Modifier
                             .size(48.dp)
-                            .alpha(if (isHoldingRawQr) 0f else 1f)
+                            .alpha(if (isRawModeActive) 0f else 1f)
                             .testTag("open_simulation_btn"),
                         shape = RoundedCornerShape(20.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
@@ -886,10 +949,10 @@ fun CameraScreen(
                 // Right: Expressive Squircle Settings FAB
                 FilledIconButton(
                     onClick = onOpenSettings,
-                    enabled = !isHoldingRawQr,
+                    enabled = !isRawModeActive,
                     modifier = Modifier
                         .size(48.dp)
-                        .alpha(if (isHoldingRawQr) 0f else 1f)
+                        .alpha(if (isRawModeActive) 0f else 1f)
                         .testTag("open_settings_button"),
                     shape = RoundedCornerShape(20.dp),
                     colors = IconButtonDefaults.filledIconButtonColors(

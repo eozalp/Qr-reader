@@ -132,7 +132,7 @@ fun QrOverlaysCanvas(
                             placeable.placeRelative(clampedX, clampedY)
                         }
                     }
-                    .alpha(animatedAlpha)
+                    .alpha(if (showRawQrData) 1f else animatedAlpha)
             ) {
                 if (showRawQrData) {
                     RawQrOverlayCardContent(
