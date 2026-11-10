@@ -42,8 +42,8 @@ fun ScanHistorySheet(
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
-    val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-    val dateTimeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+    val timeFormat = SimpleDateFormat("HH:mm:ss", Locale("tr", "TR"))
+    val dateTimeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale("tr", "TR"))
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -81,13 +81,13 @@ fun ScanHistorySheet(
                     }
                     Column {
                         Text(
-                            text = "Scan Session History",
+                            text = "Tarama Oturumu Geçmişi",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
                         Text(
-                            text = "${historyItems.size} ${if (historyItems.size == 1) "code" else "codes"} logged this session",
+                            text = "Bu oturumda ${historyItems.size} barkod kaydedildi",
                             style = MaterialTheme.typography.bodySmall,
                             color = OnDarkSurfaceVariant
                         )
@@ -98,7 +98,7 @@ fun ScanHistorySheet(
                     onClick = onDismiss,
                     modifier = Modifier.size(32.dp)
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = "Close", tint = OnDarkSurfaceVariant)
+                    Icon(Icons.Default.Close, contentDescription = "Kapat", tint = OnDarkSurfaceVariant)
                 }
             }
 
@@ -113,11 +113,11 @@ fun ScanHistorySheet(
                 Button(
                     onClick = {
                         if (historyItems.isEmpty()) {
-                            Toast.makeText(context, "No scan history to export", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Dışa aktarılacak tarama geçmişi bulunmuyor", Toast.LENGTH_SHORT).show()
                             return@Button
                         }
                         val csvBuilder = StringBuilder()
-                        csvBuilder.append("Timestamp,DateTime,Format,Profile,Raw Data,Result,Numeric Value\n")
+                        csvBuilder.append("ZamanDamgasi,TarihSaat,BarkodFormati,Profil,HamVeri,HesaplananSonuc,SayisalDeger\n")
                         historyItems.forEach { item ->
                             val safeRaw = item.rawText.replace("\"", "\"\"")
                             val safeResult = item.resultText.replace("\"", "\"\"")
@@ -129,10 +129,10 @@ fun ScanHistorySheet(
                         val sendIntent = Intent(Intent.ACTION_SEND).apply {
                             type = "text/csv"
                             putExtra(Intent.EXTRA_TEXT, csvContent)
-                            putExtra(Intent.EXTRA_SUBJECT, "Barcode_Scan_History_${System.currentTimeMillis()}.csv")
-                            putExtra(Intent.EXTRA_TITLE, "Export Barcode Scan Session (CSV)")
+                            putExtra(Intent.EXTRA_SUBJECT, "Barkod_Tarama_Gecmisi_${System.currentTimeMillis()}.csv")
+                            putExtra(Intent.EXTRA_TITLE, "Tarama Geçmişini CSV Olarak Dışa Aktar")
                         }
-                        context.startActivity(Intent.createChooser(sendIntent, "Export Scan History CSV"))
+                        context.startActivity(Intent.createChooser(sendIntent, "Tarama Geçmişini Paylaş (CSV)"))
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = NeonCyan,
@@ -151,7 +151,7 @@ fun ScanHistorySheet(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Export CSV",
+                        text = "CSV Olarak Aktar",
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp
                     )
@@ -161,7 +161,7 @@ fun ScanHistorySheet(
                 OutlinedButton(
                     onClick = {
                         onClearHistory()
-                        Toast.makeText(context, "Scan history cleared", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Tarama geçmişi temizlendi", Toast.LENGTH_SHORT).show()
                     },
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = Color(0xFFEF4444)
@@ -179,7 +179,7 @@ fun ScanHistorySheet(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Clear",
+                        text = "Temizle",
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 13.sp
                     )
@@ -207,13 +207,13 @@ fun ScanHistorySheet(
                             modifier = Modifier.size(40.dp)
                         )
                         Text(
-                            text = "No barcodes scanned yet",
+                            text = "Henüz barkod taranmadı",
                             color = OnDarkSurfaceVariant,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = "Point camera at barcodes or use AR Simulator",
+                            text = "Kamerayı barkodlara doğrultun veya AR Simülatörünü kullanın",
                             color = OnDarkSurfaceVariant.copy(alpha = 0.7f),
                             fontSize = 11.sp
                         )
@@ -299,7 +299,7 @@ fun ScanHistorySheet(
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
-                                            text = "Result: ",
+                                            text = "Sonuç: ",
                                             color = OnDarkSurfaceVariant,
                                             fontSize = 11.sp
                                         )
@@ -316,13 +316,13 @@ fun ScanHistorySheet(
                                         IconButton(
                                             onClick = {
                                                 clipboardManager.setText(AnnotatedString(item.rawText))
-                                                Toast.makeText(context, "Copied barcode", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, "Ham barkod kopyalandı", Toast.LENGTH_SHORT).show()
                                             },
                                             modifier = Modifier.size(30.dp)
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.DataObject,
-                                                contentDescription = "Copy Raw",
+                                                contentDescription = "Ham Veriyi Kopyala",
                                                 tint = OnDarkSurfaceVariant,
                                                 modifier = Modifier.size(16.dp)
                                             )
@@ -332,13 +332,13 @@ fun ScanHistorySheet(
                                         IconButton(
                                             onClick = {
                                                 clipboardManager.setText(AnnotatedString(item.resultText))
-                                                Toast.makeText(context, "Copied result: ${item.resultText}", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, "Sonuç kopyalandı: ${item.resultText}", Toast.LENGTH_SHORT).show()
                                             },
                                             modifier = Modifier.size(30.dp)
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.ContentCopy,
-                                                contentDescription = "Copy Result",
+                                                contentDescription = "Sonucu Kopyala",
                                                 tint = NeonCyan,
                                                 modifier = Modifier.size(16.dp)
                                             )

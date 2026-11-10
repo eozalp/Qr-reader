@@ -26,11 +26,11 @@ import com.example.data.ProfileRepository
 import com.example.model.QrProfile
 
 enum class SettingsTab(val title: String, val icon: ImageVector) {
-    VARIABLES("Variables", Icons.Default.QrCodeScanner),
-    TABLE("Table", Icons.Default.TableChart),
-    OVERLAY("Style", Icons.Default.Layers),
-    TRACKING("Camera", Icons.Default.Tune),
-    PROFILES("Profiles", Icons.Default.FolderSpecial)
+    VARIABLES("Değişkenler & Formül", Icons.Default.QrCodeScanner),
+    TABLE("Veri Tablosu", Icons.Default.TableChart),
+    OVERLAY("Stil & Görünüm", Icons.Default.Layers),
+    TRACKING("Kamera & Barkod", Icons.Default.Tune),
+    PROFILES("Profiller", Icons.Default.FolderSpecial)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -64,7 +64,7 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Text(
-                                text = "Settings",
+                                text = "Ayarlar",
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.ExtraBold
                             )
@@ -90,7 +90,7 @@ fun SettingsScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back to Scanner"
+                                contentDescription = "Kameraya Dön"
                             )
                         }
                     },

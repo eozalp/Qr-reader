@@ -36,9 +36,9 @@ import com.example.model.VariableDefinition
 import java.util.UUID
 
 enum class VariableTypeSelection(val label: String) {
-    TOKEN("Barcode Token"),
-    CONSTANT("Constant"),
-    FORMULA("Formula")
+    TOKEN("Barkod Belirteci (Token)"),
+    CONSTANT("Sabit Değer"),
+    FORMULA("Hesaplanan Formül")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -27,6 +27,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Set default language to Turkish (tr-TR)
+        val turkishLocale = java.util.Locale("tr", "TR")
+        java.util.Locale.setDefault(turkishLocale)
+        val config = resources.configuration
+        config.setLocale(turkishLocale)
+        @Suppress("DEPRECATION")
+        resources.updateConfiguration(config, resources.displayMetrics)
+
         profileRepository = ProfileRepository(applicationContext)
         attachmentRepository = com.example.data.AttachmentRepository(applicationContext)
 

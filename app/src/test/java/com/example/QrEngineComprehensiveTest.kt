@@ -281,7 +281,7 @@ class QrEngineComprehensiveTest {
     @Test
     fun testMultiQrTrackingEngine() {
         val tracker = QrTracker()
-        val profile = ProfileRepository.createDefaultPresets().first()
+        val profile = ProfileRepository.createDefaultPresets().first { it.id == "preset_default_sum" }
 
         val codes = listOf(
             RawDetectedCode("10-20-30-40", RectF(0f, 0f, 100f, 100f)),

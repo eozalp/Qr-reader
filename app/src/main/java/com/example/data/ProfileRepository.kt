@@ -83,11 +83,11 @@ class ProfileRepository(private val context: Context) {
     fun createProfile(name: String, description: String = ""): QrProfile {
         val newProfile = QrProfile(
             id = UUID.randomUUID().toString(),
-            name = name.ifBlank { "New Profile" },
+            name = name.ifBlank { "Yeni Profil" },
             description = description,
             parsingRules = QrParsingRules(),
-            formula = ArithmeticFormula("a + b", "Sum of a and b"),
-            formatting = ResultFormatting(),
+            formula = ArithmeticFormula("a + b", "a ve b toplamı"),
+            formatting = ResultFormatting(prefix = "₺", postfix = " TL", decimalSeparator = ",", thousandsSeparator = "."),
             overlay = OverlayAppearance(),
             tracking = TrackingSettings()
         )
@@ -102,7 +102,7 @@ class ProfileRepository(private val context: Context) {
         val source = _profiles.value.find { it.id == profileId } ?: return null
         val copy = source.copy(
             id = UUID.randomUUID().toString(),
-            name = "${source.name} (Copy)"
+            name = "${source.name} (Kopya)"
         )
         val updated = _profiles.value + copy
         _profiles.value = updated
@@ -233,105 +233,21 @@ class ProfileRepository(private val context: Context) {
     companion object {
         fun createDefaultPresets(): List<QrProfile> {
             return listOf(
-                QrProfile(
-                    id = "preset_default_sum",
-                    name = "Quick Sum (a-b-c-d)",
-                    description = "Splits by '-' and calculates a+b+c+d",
-                    parsingRules = QrParsingRules(
-                        delimiter = "-",
-                        variables = listOf(
-                            VariableDefinition(position = 0, name = "a"),
-                            VariableDefinition(position = 1, name = "b"),
-                            VariableDefinition(position = 2, name = "c"),
-                            VariableDefinition(position = 3, name = "d")
-                        )
-                    ),
-                    formula = ArithmeticFormula(expression = "a + b + c + d", description = "Sum of four tokens"),
-                    formatting = ResultFormatting(
-                        decimalPrecision = 2,
-                        prefix = "",
-                        postfix = " pts",
-                        roundingMode = AppRoundingMode.ROUND_HALF_UP
-                    ),
-                    overlay = OverlayAppearance(
-                        textColorHex = "#00F5D4",
-                        borderColorHex = "#00F5D4",
-                        backgroundColorHex = "#090D16",
-                        fillMode = OverlayFillMode.SEMI_TRANSPARENT,
-                        iconName = "calculator",
-                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
-                        tableConfig = ExcelTableConfig(
-                            headerTitle = "QUICK SUM",
-                            headerSubtitle = "DATA SHEET",
-                            gridTheme = ExcelGridTheme.NEON_CYAN,
-                            items = listOf(
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "a", label = "Token A", coordinate = "A1"),
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "b", label = "Token B", coordinate = "A2"),
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "c", label = "Token C", coordinate = "A3"),
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "d", label = "Token D", coordinate = "A4"),
-                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "TOTAL", postfix = " pts", coordinate = "A5", isEmphasized = true)
-                            )
-                        )
-                    )
-                ),
-                QrProfile(
-                    id = "preset_price_tax_qty",
-                    name = "Price & Tax Calculator",
-                    description = "Format: 'Price,TaxRate,Quantity' (e.g., 49.99,18,2)",
-                    parsingRules = QrParsingRules(
-                        delimiter = ",",
-                        variables = listOf(
-                            VariableDefinition(position = 0, name = "price", alias = "p", prefix = "$"),
-                            VariableDefinition(position = 1, name = "tax", alias = "t", postfix = "%", defaultValue = "18"),
-                            VariableDefinition(position = 2, name = "qty", alias = "q", postfix = " pcs", defaultValue = "1", isOptional = true)
-                        )
-                    ),
-                    formula = ArithmeticFormula(
-                        expression = "(price * qty) * (1 + tax / 100)",
-                        description = "Total cost including percentage tax"
-                    ),
-                    formatting = ResultFormatting(
-                        decimalPrecision = 2,
-                        prefix = "$",
-                        postfix = "",
-                        thousandsSeparator = ",",
-                        roundingMode = AppRoundingMode.ROUND_HALF_UP
-                    ),
-                    overlay = OverlayAppearance(
-                        textColorHex = "#10B981",
-                        borderColorHex = "#10B981",
-                        backgroundColorHex = "#022C22",
-                        gradientColorEndHex = "#064E3B",
-                        fillMode = OverlayFillMode.FILLED_GRADIENT,
-                        iconName = "tag",
-                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
-                        tableConfig = ExcelTableConfig(
-                            headerTitle = "PRICE & TAX SHEET",
-                            headerSubtitle = "INVOICE CALC",
-                            gridTheme = ExcelGridTheme.EXCEL_CLASSIC,
-                            items = listOf(
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "price", label = "Unit Price", prefix = "$", coordinate = "A1"),
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "qty", label = "Quantity", postfix = " pcs", coordinate = "A2"),
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "tax", label = "Tax Rate", postfix = "%", coordinate = "A3"),
-                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "TOTAL DUE", prefix = "$", coordinate = "A4", isEmphasized = true)
-                            )
-                        )
-                    )
-                ),
+                // 1. Varsayılan Birincil Profil: İndirim & Net Fiyat (₺ TL)
                 QrProfile(
                     id = "preset_turkish_discount",
-                    name = "Discount Calculator (₺ TL)",
-                    description = "Format: 'Price-Discount%' (e.g., 250-20)",
+                    name = "İndirim & Net Fiyat (₺ TL)",
+                    description = "Format: 'Fiyat-İndirim%' (örn: 250-20), indirimli net tutarı hesaplar",
                     parsingRules = QrParsingRules(
                         delimiter = "-",
                         variables = listOf(
-                            VariableDefinition(position = 0, name = "price", alias = "a", prefix = "₺"),
-                            VariableDefinition(position = 1, name = "disc", alias = "b", postfix = "%")
+                            VariableDefinition(position = 0, name = "fiyat", alias = "a", prefix = "₺"),
+                            VariableDefinition(position = 1, name = "indirim", alias = "b", postfix = "%")
                         )
                     ),
                     formula = ArithmeticFormula(
-                        expression = "price * (1 - disc / 100)",
-                        description = "Discounted final price"
+                        expression = "fiyat * (1 - indirim / 100)",
+                        description = "İndirimli net ödenecek tutar"
                     ),
                     formatting = ResultFormatting(
                         decimalPrecision = 2,
@@ -350,36 +266,173 @@ class ProfileRepository(private val context: Context) {
                         iconName = "sparkle",
                         displayMode = OverlayDisplayMode.EXCEL_TABLE,
                         tableConfig = ExcelTableConfig(
-                            headerTitle = "DISCOUNT BREAKDOWN",
-                            headerSubtitle = "₺ PRICING",
+                            headerTitle = "İNDİRİM TABLOSU",
+                            headerSubtitle = "₺ FİYATLANDIRMA",
                             gridTheme = ExcelGridTheme.AMBER_GOLD,
                             items = listOf(
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "price", label = "Original Price", prefix = "₺", coordinate = "A1"),
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "disc", label = "Discount %", postfix = "%", coordinate = "A2"),
-                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "FINAL PRICE", prefix = "₺", postfix = " TL", coordinate = "A3", isEmphasized = true)
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "fiyat", label = "Liste Fiyatı", prefix = "₺", coordinate = "A1"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "indirim", label = "İndirim Oranı", postfix = "%", coordinate = "A2"),
+                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "NET TUTAR", prefix = "₺", postfix = " TL", coordinate = "A3", isEmphasized = true)
                             )
                         )
                     )
                 ),
+                // 2. Hızlı Toplam (a-b-c-d)
                 QrProfile(
-                    id = "preset_package_volume",
-                    name = "Volume & Dimensions (L-W-H)",
-                    description = "Format: 'Length-Width-Height' in cm, calculates Liters",
+                    id = "preset_default_sum",
+                    name = "Hızlı Toplam (a-b-c-d)",
+                    description = "'-' ile ayrılmış 4 değeri toplar (a+b+c+d)",
                     parsingRules = QrParsingRules(
                         delimiter = "-",
                         variables = listOf(
-                            VariableDefinition(position = 0, name = "l", postfix = "cm"),
-                            VariableDefinition(position = 1, name = "w", postfix = "cm"),
-                            VariableDefinition(position = 2, name = "h", postfix = "cm")
+                            VariableDefinition(position = 0, name = "a"),
+                            VariableDefinition(position = 1, name = "b"),
+                            VariableDefinition(position = 2, name = "c"),
+                            VariableDefinition(position = 3, name = "d")
+                        )
+                    ),
+                    formula = ArithmeticFormula(expression = "a + b + c + d", description = "Dört değerin toplamı"),
+                    formatting = ResultFormatting(
+                        decimalPrecision = 2,
+                        prefix = "",
+                        postfix = " adet",
+                        decimalSeparator = ",",
+                        thousandsSeparator = ".",
+                        roundingMode = AppRoundingMode.ROUND_HALF_UP
+                    ),
+                    overlay = OverlayAppearance(
+                        textColorHex = "#00F5D4",
+                        borderColorHex = "#00F5D4",
+                        backgroundColorHex = "#090D16",
+                        fillMode = OverlayFillMode.SEMI_TRANSPARENT,
+                        iconName = "calculator",
+                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
+                        tableConfig = ExcelTableConfig(
+                            headerTitle = "HIZLI TOPLAM",
+                            headerSubtitle = "VERİ TABLOSU",
+                            gridTheme = ExcelGridTheme.NEON_CYAN,
+                            items = listOf(
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "a", label = "Değer A", coordinate = "A1"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "b", label = "Değer B", coordinate = "A2"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "c", label = "Değer C", coordinate = "A3"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "d", label = "Değer D", coordinate = "A4"),
+                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "TOPLAM", postfix = " adet", coordinate = "A5", isEmphasized = true)
+                            )
+                        )
+                    )
+                ),
+                // 3. Fiyat, KDV ve Adet Hesabı
+                QrProfile(
+                    id = "preset_price_tax_qty",
+                    name = "Fiyat, KDV ve Adet Hesabı",
+                    description = "Format: 'Fiyat,KDV,Adet' (örn: 50,20,2), KDV dahil toplam tutarı bulur",
+                    parsingRules = QrParsingRules(
+                        delimiter = ",",
+                        variables = listOf(
+                            VariableDefinition(position = 0, name = "fiyat", alias = "f", prefix = "₺"),
+                            VariableDefinition(position = 1, name = "kdv", alias = "k", postfix = "%", defaultValue = "20"),
+                            VariableDefinition(position = 2, name = "adet", alias = "q", postfix = " adet", defaultValue = "1", isOptional = true)
                         )
                     ),
                     formula = ArithmeticFormula(
-                        expression = "(l * w * h) / 1000",
-                        description = "Cubic volume in Liters"
+                        expression = "(fiyat * adet) * (1 + kdv / 100)",
+                        description = "KDV ve adet dahil genel toplam"
+                    ),
+                    formatting = ResultFormatting(
+                        decimalPrecision = 2,
+                        prefix = "₺",
+                        postfix = " TL",
+                        decimalSeparator = ",",
+                        thousandsSeparator = ".",
+                        roundingMode = AppRoundingMode.ROUND_HALF_UP
+                    ),
+                    overlay = OverlayAppearance(
+                        textColorHex = "#10B981",
+                        borderColorHex = "#10B981",
+                        backgroundColorHex = "#022C22",
+                        gradientColorEndHex = "#064E3B",
+                        fillMode = OverlayFillMode.FILLED_GRADIENT,
+                        iconName = "tag",
+                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
+                        tableConfig = ExcelTableConfig(
+                            headerTitle = "FİYAT & KDV TABLOSU",
+                            headerSubtitle = "FATURA HESAPLAMA",
+                            gridTheme = ExcelGridTheme.EXCEL_CLASSIC,
+                            items = listOf(
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "fiyat", label = "Birim Fiyat", prefix = "₺", coordinate = "A1"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "adet", label = "Miktar", postfix = " adet", coordinate = "A2"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "kdv", label = "KDV Oranı", postfix = "%", coordinate = "A3"),
+                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "GENEL TOPLAM", prefix = "₺", postfix = " TL", coordinate = "A4", isEmphasized = true)
+                            )
+                        )
+                    )
+                ),
+                // 4. Kuyumcu & Has Altın Hesabı
+                QrProfile(
+                    id = "preset_gold_calc",
+                    name = "Kuyumcu & Has Altın Hesabı",
+                    description = "Format: 'Gram-Ayar' (örn: 15.5-22), 24 ayar has altın karşılığını hesaplar",
+                    parsingRules = QrParsingRules(
+                        delimiter = "-",
+                        variables = listOf(
+                            VariableDefinition(position = 0, name = "gram", alias = "g", postfix = " gr"),
+                            VariableDefinition(position = 1, name = "ayar", alias = "k", postfix = " K", defaultValue = "22")
+                        )
+                    ),
+                    formula = ArithmeticFormula(
+                        expression = "gram * (ayar / 24)",
+                        description = "24K Has Altın Gramajı"
+                    ),
+                    formatting = ResultFormatting(
+                        decimalPrecision = 3,
+                        prefix = "",
+                        postfix = " gr (Has 24K)",
+                        decimalSeparator = ",",
+                        thousandsSeparator = ".",
+                        roundingMode = AppRoundingMode.ROUND_HALF_UP
+                    ),
+                    overlay = OverlayAppearance(
+                        textColorHex = "#FBBF24",
+                        borderColorHex = "#F59E0B",
+                        backgroundColorHex = "#351502",
+                        gradientColorEndHex = "#78350F",
+                        fillMode = OverlayFillMode.FILLED_GRADIENT,
+                        iconName = "sparkle",
+                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
+                        tableConfig = ExcelTableConfig(
+                            headerTitle = "HAS ALTIN HESAPLAMA",
+                            headerSubtitle = "KUYUMCU HESAP TABLOSU",
+                            gridTheme = ExcelGridTheme.AMBER_GOLD,
+                            items = listOf(
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "gram", label = "Tartılan Gram", postfix = " gr", coordinate = "A1"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "ayar", label = "Bilezik/Takı Ayarı", postfix = " K", coordinate = "A2"),
+                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "HAS KARŞILIĞI", postfix = " gr", coordinate = "A3", isEmphasized = true)
+                            )
+                        )
+                    )
+                ),
+                // 5. Koli & Paket Hacmi (E-B-Y cm -> Litre)
+                QrProfile(
+                    id = "preset_package_volume",
+                    name = "Koli & Paket Hacmi (E-B-Y)",
+                    description = "Format: 'Boy-En-Yükseklik' (cm cinsinden), Litre hacmini hesaplar",
+                    parsingRules = QrParsingRules(
+                        delimiter = "-",
+                        variables = listOf(
+                            VariableDefinition(position = 0, name = "boy", postfix = " cm"),
+                            VariableDefinition(position = 1, name = "en", postfix = " cm"),
+                            VariableDefinition(position = 2, name = "yukseklik", postfix = " cm")
+                        )
+                    ),
+                    formula = ArithmeticFormula(
+                        expression = "(boy * en * yukseklik) / 1000",
+                        description = "Litre cinsinden kübik koli hacmi"
                     ),
                     formatting = ResultFormatting(
                         decimalPrecision = 1,
-                        postfix = " L",
+                        postfix = " Litre",
+                        decimalSeparator = ",",
+                        thousandsSeparator = ".",
                         roundingMode = AppRoundingMode.ROUND_HALF_UP
                     ),
                     overlay = OverlayAppearance(
@@ -390,44 +443,47 @@ class ProfileRepository(private val context: Context) {
                         iconName = "qr",
                         displayMode = OverlayDisplayMode.EXCEL_TABLE,
                         tableConfig = ExcelTableConfig(
-                            headerTitle = "PACKAGE VOLUME",
-                            headerSubtitle = "METRIC SPREADSHEET",
+                            headerTitle = "KOLİ HACİM TABLOSU",
+                            headerSubtitle = "METRİK HESAPLAMA",
                             gridTheme = ExcelGridTheme.MODERN_SLATE,
                             items = listOf(
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "l", label = "Length", postfix = " cm", coordinate = "A1"),
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "w", label = "Width", postfix = " cm", coordinate = "A2"),
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "h", label = "Height", postfix = " cm", coordinate = "A3"),
-                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "VOLUME (L)", postfix = " L", coordinate = "A4", isEmphasized = true)
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "boy", label = "Boy", postfix = " cm", coordinate = "A1"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "en", label = "En", postfix = " cm", coordinate = "A2"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "yukseklik", label = "Yükseklik", postfix = " cm", coordinate = "A3"),
+                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "HACİM (LİTRE)", postfix = " L", coordinate = "A4", isEmphasized = true)
                             )
                         )
                     )
                 ),
+                // 6. Birim Fiyat & Gramaj (Fiyat/Gram)
                 QrProfile(
                     id = "preset_price_per_gram",
-                    name = "Price per Gram (Unit Price)",
-                    description = "Format: 'Price-Weight' (e.g., 50-250) with computed price per gram",
+                    name = "Birim Fiyat & Gramaj (Fiyat/Gram)",
+                    description = "Format: 'Fiyat-Gram' (örn: 100-250), gram başına birim fiyatı bulur",
                     parsingRules = QrParsingRules(
                         delimiter = "-",
                         variables = listOf(
-                            VariableDefinition(position = 0, name = "price", prefix = "$", defaultValue = "50"),
-                            VariableDefinition(position = 1, name = "grams", postfix = "g", defaultValue = "250"),
+                            VariableDefinition(position = 0, name = "fiyat", prefix = "₺", defaultValue = "100"),
+                            VariableDefinition(position = 1, name = "gram", postfix = " gr", defaultValue = "250"),
                             VariableDefinition(
-                                name = "ppg",
+                                name = "b_fiyat",
                                 isComputed = true,
-                                computationFormula = "price / grams",
-                                prefix = "$",
-                                postfix = "/g"
+                                computationFormula = "fiyat / gram",
+                                prefix = "₺",
+                                postfix = "/gr"
                             )
                         )
                     ),
                     formula = ArithmeticFormula(
-                        expression = "price / grams",
-                        description = "Unit price per gram"
+                        expression = "fiyat / gram",
+                        description = "Gram başına düşen birim fiyat"
                     ),
                     formatting = ResultFormatting(
-                        decimalPrecision = 4,
-                        prefix = "$",
-                        postfix = " / g",
+                        decimalPrecision = 3,
+                        prefix = "₺",
+                        postfix = " / gr",
+                        decimalSeparator = ",",
+                        thousandsSeparator = ".",
                         roundingMode = AppRoundingMode.ROUND_HALF_UP
                     ),
                     overlay = OverlayAppearance(
@@ -438,14 +494,14 @@ class ProfileRepository(private val context: Context) {
                         iconName = "calculator",
                         displayMode = OverlayDisplayMode.EXCEL_TABLE,
                         tableConfig = ExcelTableConfig(
-                            headerTitle = "UNIT PRICE SHEET",
-                            headerSubtitle = "EXCEL SPREADSHEET",
+                            headerTitle = "BİRİM FİYAT TABLOSU",
+                            headerSubtitle = "FİYAT / GRAM",
                             gridTheme = ExcelGridTheme.EXCEL_CLASSIC,
                             items = listOf(
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "price", label = "Total Price", prefix = "$", coordinate = "A1"),
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "grams", label = "Weight", postfix = " g", coordinate = "A2"),
-                                ExcelTableCellItem(source = TableItemSource.COMPUTED, variableName = "ppg", label = "Price / Gram", prefix = "$", postfix = "/g", coordinate = "A3", isEmphasized = true),
-                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "RATE", prefix = "$", postfix = "/g", coordinate = "A4", isEmphasized = true)
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "fiyat", label = "Paket Fiyatı", prefix = "₺", coordinate = "A1"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "gram", label = "Net Ağırlık", postfix = " gr", coordinate = "A2"),
+                                ExcelTableCellItem(source = TableItemSource.COMPUTED, variableName = "b_fiyat", label = "Birim Fiyat", prefix = "₺", postfix = "/gr", coordinate = "A3", isEmphasized = true),
+                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "BİRİM ORAN", prefix = "₺", postfix = "/gr", coordinate = "A4", isEmphasized = true)
                             )
                         )
                     )

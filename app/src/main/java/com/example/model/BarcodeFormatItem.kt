@@ -4,16 +4,16 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import org.json.JSONArray
 
 enum class BarcodeCategory(val title: String, val subtitle: String) {
-    TWO_D_AND_STACKED("2D & Stacked Matrix", "High capacity matrix and stacked barcodes"),
-    ONE_D_RETAIL("1D Retail & Consumer", "Standard supermarket and product identification"),
-    ONE_D_LOGISTICS("1D Industrial & Logistics", "Warehousing, shipping, supply chain & tracking")
+    TWO_D_AND_STACKED("2D & Yığılı Matris Barkodlar", "Yüksek kapasiteli 2D matris ve yığılı barkodlar"),
+    ONE_D_RETAIL("1D Perakende & Tüketici", "Standart süpermarket ve ürün tanımlama kodları"),
+    ONE_D_LOGISTICS("1D Endüstriyel & Lojistik", "Depolama, kargo, sevkiyat ve takip kodları")
 }
 
 enum class BarcodeScanPreset(val label: String, val description: String) {
-    ALL_FORMATS("All Barcodes (Auto-Detect)", "Scans all 2D, 3D/stacked, and 1D barcode formats"),
-    TWO_D_ONLY("2D & 3D Stacked Only", "QR Code, Data Matrix (DPM), PDF417, and Aztec"),
-    ONE_D_ONLY("1D Barcodes Only", "EAN, UPC, Code 128, Code 39, Codabar, and ITF"),
-    CUSTOM("Custom Formats", "Select individual barcode formats manually")
+    ALL_FORMATS("Tüm Barkodlar (Otomatik Algıla)", "Tüm 2D, 3D/yığılı ve 1D barkod formatlarını tarar"),
+    TWO_D_ONLY("Yalnızca 2D ve 3D Matris", "QR Kod, Data Matrix (DPM), PDF417 ve Aztec"),
+    ONE_D_ONLY("Yalnızca 1D Çizgikodlar", "EAN, UPC, Code 128, Code 39, Codabar ve ITF"),
+    CUSTOM("Özel Formatlar", "Barkod formatlarını manuel olarak tek tek seçin")
 }
 
 data class BarcodeFormatItem(

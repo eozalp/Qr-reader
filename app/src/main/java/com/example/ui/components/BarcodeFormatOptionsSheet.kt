@@ -96,13 +96,13 @@ fun BarcodeFormatOptionsSheet(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
-                            text = "Barcode Reading Options",
+                            text = "Barkod Okuma Seçenekleri",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
                         Text(
-                            text = "2D, 3D Stacked, and 1D Barcode Formats",
+                            text = "2D, 3D Matris ve 1D Çizgikod Formatları",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF94A3B8)
                         )
@@ -110,7 +110,7 @@ fun BarcodeFormatOptionsSheet(
                 }
 
                 IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, contentDescription = "Close", tint = Color(0xFF94A3B8))
+                    Icon(Icons.Default.Close, contentDescription = "Kapat", tint = Color(0xFF94A3B8))
                 }
             }
 
@@ -125,7 +125,7 @@ fun BarcodeFormatOptionsSheet(
                 // Preset Selection Cards
                 item {
                     Text(
-                        text = "SCANNING PRESET",
+                        text = "TARAMA ÖN AYARI",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF00F5D4),
@@ -216,7 +216,7 @@ fun BarcodeFormatOptionsSheet(
                             Column(modifier = Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        text = "3D & Inverted Barcode Mode",
+                                        text = "3D & Ters Renkli Barkod Modu",
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 13.sp,
                                         color = Color.White
@@ -232,7 +232,7 @@ fun BarcodeFormatOptionsSheet(
                                     }
                                 }
                                 Text(
-                                    text = "Dual-pass luminance analysis for laser-etched, dot-peen, inverted dark surfaces, and embossed 3D barcodes.",
+                                    text = "Lazer kazıma, koyu zemin üzerine beyaz ve kabartmalı 3D barkodlar için çift geçişli parlaklık analizi.",
                                     fontSize = 10.5.sp,
                                     color = Color(0xFF94A3B8)
                                 )
@@ -260,7 +260,7 @@ fun BarcodeFormatOptionsSheet(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "SUPPORTED FORMATS & SPECIFICATIONS",
+                            text = "DESTEKLENEN FORMATLAR & DETAYLAR",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF00F5D4),
@@ -276,7 +276,7 @@ fun BarcodeFormatOptionsSheet(
                                     },
                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
-                                    Text("Select All", fontSize = 11.sp, color = Color(0xFF00F5D4))
+                                    Text("Tümünü Seç", fontSize = 11.sp, color = Color(0xFF00F5D4))
                                 }
                                 TextButton(
                                     onClick = {
@@ -285,7 +285,7 @@ fun BarcodeFormatOptionsSheet(
                                     },
                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
-                                    Text("Clear", fontSize = 11.sp, color = Color(0xFFF87171))
+                                    Text("Temizle", fontSize = 11.sp, color = Color(0xFFF87171))
                                 }
                             }
                         }
@@ -456,7 +456,7 @@ fun BarcodeFormatOptionsSheet(
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF94A3B8))
                 ) {
-                    Text("Reset Defaults", fontSize = 12.sp)
+                    Text("Varsayılana Sıfırla", fontSize = 12.sp)
                 }
 
                 Button(
@@ -464,7 +464,7 @@ fun BarcodeFormatOptionsSheet(
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00F5D4), contentColor = Color(0xFF0F172A))
                 ) {
-                    Text("Done", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("Tamam", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
         }

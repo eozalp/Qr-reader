@@ -272,7 +272,7 @@ fun PinnedFullWidthOverlayCard(
                             )
                             Spacer(modifier = Modifier.width(5.dp))
                             Text(
-                                text = "PINNED",
+                                text = "SABİTLENDİ",
                                 color = Color(0xFF00F5D4),
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.ExtraBold,
@@ -286,7 +286,7 @@ fun PinnedFullWidthOverlayCard(
                         color = Color.Black.copy(alpha = 0.45f)
                     ) {
                         Text(
-                            text = "SCANNING PAUSED",
+                            text = "TARAMA DURAKLATILDI",
                             color = Color.White.copy(alpha = 0.7f),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -312,7 +312,7 @@ fun PinnedFullWidthOverlayCard(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Unpin and resume scan",
+                        contentDescription = "Sabitlemeyi kaldır ve taramaya dön",
                         modifier = Modifier.size(18.dp)
                     )
                 }
@@ -375,7 +375,7 @@ fun PinnedFullWidthOverlayCard(
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         clipboardManager.setText(AnnotatedString(resultText))
-                        Toast.makeText(context, "Copied result: $resultText", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Sonuç kopyalandı: $resultText", Toast.LENGTH_SHORT).show()
                     },
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
@@ -395,7 +395,7 @@ fun PinnedFullWidthOverlayCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Copy Result",
+                        text = "Sonucu Kopyala",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1
@@ -407,7 +407,7 @@ fun PinnedFullWidthOverlayCard(
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         clipboardManager.setText(AnnotatedString(tracked.rawContent))
-                        Toast.makeText(context, "Copied raw barcode", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Ham barkod kopyalandı", Toast.LENGTH_SHORT).show()
                     },
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
@@ -427,7 +427,7 @@ fun PinnedFullWidthOverlayCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Copy Raw",
+                        text = "Ham Veri",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1
@@ -440,20 +440,20 @@ fun PinnedFullWidthOverlayCard(
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         val varsBreakdown = tracked.result.extractedVariables.entries.joinToString("\n") { (k, v) -> "• $k: $v" }
                         val shareContent = buildString {
-                            appendLine("📊 QR Code Calculation Breakdown")
+                            appendLine("📊 QR Barkod Canlı Hesaplama Özeti")
                             appendLine("Format: ${tracked.result.formatName}")
-                            appendLine("Raw Data: ${tracked.rawContent}")
+                            appendLine("Ham Barkod Verisi: ${tracked.rawContent}")
                             if (varsBreakdown.isNotBlank()) {
-                                appendLine("\nVariables:\n$varsBreakdown")
+                                appendLine("\nDeğişkenler:\n$varsBreakdown")
                             }
-                            appendLine("\nFinal Result: $resultText")
+                            appendLine("\nHesaplanan Nihai Sonuç: $resultText")
                         }
                         val shareIntent = Intent(Intent.ACTION_SEND).apply {
                             type = "text/plain"
                             putExtra(Intent.EXTRA_TEXT, shareContent)
-                            putExtra(Intent.EXTRA_SUBJECT, "QR Calculation - $resultText")
+                            putExtra(Intent.EXTRA_SUBJECT, "Barkod Hesaplama - $resultText")
                         }
-                        context.startActivity(Intent.createChooser(shareIntent, "Share QR Result"))
+                        context.startActivity(Intent.createChooser(shareIntent, "Barkod Sonucunu Paylaş"))
                     },
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
@@ -473,7 +473,7 @@ fun PinnedFullWidthOverlayCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Share",
+                        text = "Paylaş",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1
@@ -505,7 +505,7 @@ fun PinnedFullWidthOverlayCard(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Unpin & Resume Scanning (Swipe Down)",
+                    text = "Sabitlemeyi Kaldır ve Taramaya Dön (Aşağı Kaydır)",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -1053,7 +1053,7 @@ fun ExcelTableOverlayContent(
                         }
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = tableConfig.headerTitle.ifBlank { "DATA SHEET" }.uppercase(),
+                            text = tableConfig.headerTitle.ifBlank { "VERİ TABLOSU" }.uppercase(),
                             color = Color.White,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -1123,7 +1123,7 @@ fun ExcelTableOverlayContent(
                         )
                     }
                     Text(
-                        text = "CELL / PARAMETER",
+                        text = "HÜCRE / PARAMETRE",
                         color = themeColors.textSecondary.copy(alpha = 0.8f),
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
@@ -1131,7 +1131,7 @@ fun ExcelTableOverlayContent(
                         modifier = Modifier.weight(1.1f)
                     )
                     Text(
-                        text = "VALUE",
+                        text = "DEĞER",
                         color = themeColors.textSecondary.copy(alpha = 0.8f),
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,

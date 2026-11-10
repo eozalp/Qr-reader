@@ -100,7 +100,7 @@ fun CameraScreen(
 
     var isAttemptingPhysicalCamera by remember { mutableStateOf(!isRunningOnEmulator) }
     var cameraInitError by remember {
-        mutableStateOf(if (isRunningOnEmulator) "Virtual AR Simulator Active (Emulator)" else null)
+        mutableStateOf(if (isRunningOnEmulator) "Sanal AR Simülatörü Aktif (Emülatör)" else null)
     }
 
     var hasCameraPermission by remember {
@@ -301,8 +301,8 @@ fun CameraScreen(
             val status = item.result.status
             val formattedResult = when (status) {
                 is CalculationStatus.Success -> status.formattedText
-                is CalculationStatus.ParseError -> "Parse Error"
-                is CalculationStatus.EvaluationError -> "Evaluation Error"
+                is CalculationStatus.ParseError -> "Ayrıştırma Hatası"
+                is CalculationStatus.EvaluationError -> "Hesaplama Hatası"
             }
             val numericVal = (status as? CalculationStatus.Success)?.resultNumber
             val lastLogged = recentLoggedQrs[item.rawContent] ?: 0L
@@ -362,7 +362,7 @@ fun CameraScreen(
                 }
             } catch (_: Exception) {}
             if (!isAttemptingPhysicalCamera && cameraInitError == null) {
-                cameraInitError = "Virtual AR Simulator Active (Emulator)"
+                cameraInitError = "Sanal AR Simülatörü Aktif (Emülatör)"
             }
             return@LaunchedEffect
         }
@@ -392,7 +392,7 @@ fun CameraScreen(
 
                 if (targetSelector == null) {
                     isAttemptingPhysicalCamera = false
-                    cameraInitError = "Virtual emulator environment detected. Camera hardware sensor is simulated."
+                    cameraInitError = "Sanal emülatör ortamı algılandı. Kamera sensörü simüle ediliyor."
                     return@addListener
                 }
 
@@ -425,12 +425,12 @@ fun CameraScreen(
                             cameraProvider.unbindAll()
                         } catch (_: Exception) {}
                         isAttemptingPhysicalCamera = false
-                        cameraInitError = "Camera unavailable in emulator (${state.error?.code}). Virtual AR Simulator is active."
+                        cameraInitError = "Emülatörde kamera kullanılamıyor (${state.error?.code}). Sanal AR Simülatörü aktif."
                     }
                 }
             } catch (e: Exception) {
                 isAttemptingPhysicalCamera = false
-                cameraInitError = "Virtual camera mode: ${e.message ?: "Virtual device"}"
+                cameraInitError = "Sanal kamera modu: ${e.message ?: "Sanal cihaz"}"
             }
         }, ContextCompat.getMainExecutor(context))
     }
@@ -480,14 +480,14 @@ fun CameraScreen(
                         }
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = "Virtual Simulator Mode Active",
+                            text = "Sanal Simülatör Modu Aktif",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = cameraInitError ?: "Camera sensor simulated on emulator.",
+                            text = cameraInitError ?: "Emülatörde kamera sensörü simüle ediliyor.",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF94A3B8),
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -507,7 +507,7 @@ fun CameraScreen(
                             ) {
                                 Icon(Icons.Default.Science, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Inject Codes", fontWeight = FontWeight.Bold)
+                                Text("Kodları Enjekte Et", fontWeight = FontWeight.Bold)
                             }
                             if (!isAttemptingPhysicalCamera) {
                                 OutlinedButton(
@@ -523,7 +523,7 @@ fun CameraScreen(
                                 ) {
                                     Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Try Camera", fontWeight = FontWeight.Medium)
+                                    Text("Kamerayı Dene", fontWeight = FontWeight.Medium)
                                 }
                             }
                         }
@@ -594,7 +594,7 @@ fun CameraScreen(
                             .padding(horizontal = 16.dp, vertical = 8.dp)
                     ) {
                         Text(
-                            text = "Overlay Size: ${(liveOverlayScale * 100).toInt()}%",
+                            text = "Görünüm Boyutu: %${(liveOverlayScale * 100).toInt()}",
                             color = Color(0xFF00F5D4),
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp
@@ -635,7 +635,7 @@ fun CameraScreen(
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         android.widget.Toast.makeText(
                             context,
-                            if (isBatterySaverEnabled) "Battery Saver Mode ON (~5.5 FPS)" else "Battery Saver Mode OFF (Full Performance)",
+                            if (isBatterySaverEnabled) "Pil Tasarrufu Modu AÇIK (~5.5 FPS)" else "Pil Tasarrufu Modu KAPALI (Tam Performans)",
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
                     },
@@ -667,9 +667,9 @@ fun CameraScreen(
                     modifier = Modifier
                         .clickable {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            val formattedSum = String.format(java.util.Locale.US, "%.2f", multiCodeSum)
+                            val formattedSum = String.format(java.util.Locale("tr", "TR"), "%.2f", multiCodeSum)
                             clipboardManager.setText(AnnotatedString(formattedSum))
-                            android.widget.Toast.makeText(context, "Copied in-view sum: $formattedSum", android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, "Görünümdeki toplam kopyalandı: $formattedSum", android.widget.Toast.LENGTH_SHORT).show()
                         }
                         .testTag("multi_code_sum_pill")
                 ) {
@@ -693,7 +693,7 @@ fun CameraScreen(
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Σ IN VIEW (${multiCodeItems.size} CODES):",
+                            text = "Σ GÖRÜNÜMDE (${multiCodeItems.size} KOD):",
                             color = OnDarkSurfaceVariant,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -701,7 +701,7 @@ fun CameraScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = String.format(java.util.Locale.US, "%.2f", multiCodeSum),
+                            text = String.format(java.util.Locale("tr", "TR"), "%.2f", multiCodeSum),
                             color = NeonCyan,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.ExtraBold,
@@ -710,7 +710,7 @@ fun CameraScreen(
                         Spacer(modifier = Modifier.width(6.dp))
                         Icon(
                             imageVector = Icons.Default.ContentCopy,
-                            contentDescription = "Copy Total",
+                            contentDescription = "Toplamı Kopyala",
                             tint = NeonCyan.copy(alpha = 0.65f),
                             modifier = Modifier.size(13.dp)
                         )
@@ -745,7 +745,7 @@ fun CameraScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Auto-Switched to '$autoSwitchedProfileName'${if (autoSwitchedSignal.isNotBlank()) " ($autoSwitchedSignal)" else ""}",
+                            text = "'$autoSwitchedProfileName' profiline otomatik geçildi${if (autoSwitchedSignal.isNotBlank()) " ($autoSwitchedSignal)" else ""}",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -786,7 +786,7 @@ fun CameraScreen(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Embedded Profile Scanned",
+                                        text = "Gömülü Profil Algılandı",
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold
                                     )
@@ -795,20 +795,20 @@ fun CameraScreen(
                                     onClick = { detectedEmbeddedProfile = null },
                                     modifier = Modifier.size(28.dp)
                                 ) {
-                                    Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Default.Close, contentDescription = "Kapat", modifier = Modifier.size(18.dp))
                                 }
                             }
 
                             Spacer(modifier = Modifier.height(6.dp))
 
                             Text(
-                                text = "Profile: ${detected.name}",
+                                text = "Profil: ${detected.name}",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
                             )
                             Text(
-                                text = "Formula: ${detected.formula.expression} · Delimiter: '${detected.parsingRules.effectiveDelimiter}' · ${detected.parsingRules.variables.size} variables",
+                                text = "Formül: ${detected.formula.expression} · Ayırıcı: '${detected.parsingRules.effectiveDelimiter}' · ${detected.parsingRules.variables.size} değişken",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -822,21 +822,21 @@ fun CameraScreen(
                                 Button(
                                     onClick = {
                                         profileRepository.importSingleProfile(detected, activate = true)
-                                        android.widget.Toast.makeText(context, "Profile '${detected.name}' imported & activated!", android.widget.Toast.LENGTH_SHORT).show()
+                                        android.widget.Toast.makeText(context, "'${detected.name}' profili içe aktarıldı ve aktifleştirildi!", android.widget.Toast.LENGTH_SHORT).show()
                                         detectedEmbeddedProfile = null
                                     },
                                     modifier = Modifier.weight(1f).testTag("import_embedded_profile_btn")
                                 ) {
                                     Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Import & Activate")
+                                    Text("İçe Aktar ve Aktifleştir")
                                 }
 
                                 OutlinedButton(
                                     onClick = { detectedEmbeddedProfile = null },
                                     modifier = Modifier.weight(0.6f)
                                 ) {
-                                    Text("Dismiss")
+                                    Text("Kapat")
                                 }
                             }
                         }
@@ -871,21 +871,21 @@ fun CameraScreen(
                         )
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "RAW QR MODE ACTIVE",
+                            text = "HAM BARKOD MODU AKTİF",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.ExtraBold,
                             color = NeonCyan
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Point camera at a barcode or use AR Simulator",
+                            text = "Kamerayı bir barkoda doğrultun veya AR Simülatörünü kullanın",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.White.copy(alpha = 0.85f),
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Tap or release Raw button to exit",
+                            text = "Çıkmak için Ham Veri butonuna dokunun veya bırakın",
                             style = MaterialTheme.typography.labelSmall,
                             color = OnDarkSurfaceVariant,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -1099,7 +1099,7 @@ fun CameraScreen(
                             text = if (visibleQr.attachment != null) {
                                 "📎 ${visibleQr.attachment?.title?.ifBlank { visibleQr.rawContent }?.take(18)}"
                             } else {
-                                "+ Attach to '${visibleQr.rawContent.take(12)}...'"
+                                "+ '${visibleQr.rawContent.take(12)}...' için Veri Ekle"
                             },
                             color = OnDarkSurface,
                             fontSize = 12.sp,
@@ -1141,11 +1141,11 @@ fun CameraScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.QrCodeScanner,
-                            contentDescription = "Barcode Formats (${when (activeProfile.tracking.scanPreset) {
-                                BarcodeScanPreset.ALL_FORMATS -> "All Barcodes"
+                            contentDescription = "Barkod Formatları (${when (activeProfile.tracking.scanPreset) {
+                                BarcodeScanPreset.ALL_FORMATS -> "Tüm Barkodlar"
                                 BarcodeScanPreset.TWO_D_ONLY -> "2D / 3D"
-                                BarcodeScanPreset.ONE_D_ONLY -> "1D Barcodes"
-                                BarcodeScanPreset.CUSTOM -> "Custom"
+                                BarcodeScanPreset.ONE_D_ONLY -> "1D Barkodlar"
+                                BarcodeScanPreset.CUSTOM -> "Özel"
                             }})",
                             modifier = Modifier.size(22.dp)
                         )
@@ -1167,7 +1167,7 @@ fun CameraScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.AttachFile,
-                            contentDescription = "Linked Data & Media",
+                            contentDescription = "Bağlantılı Veriler & Medya",
                             modifier = Modifier.size(22.dp)
                         )
                     }
@@ -1194,7 +1194,7 @@ fun CameraScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.DataObject,
-                            contentDescription = "Raw QR Data",
+                            contentDescription = "Ham Barkod Verisi",
                             modifier = Modifier.size(22.dp)
                         )
                     }
@@ -1215,7 +1215,7 @@ fun CameraScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Science,
-                            contentDescription = "Simulate AR Codes",
+                            contentDescription = "AR Kodlarını Simüle Et",
                             modifier = Modifier.size(22.dp)
                         )
                     }
@@ -1252,7 +1252,7 @@ fun CameraScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.History,
-                                contentDescription = "Scan Session History",
+                                contentDescription = "Tarama Oturumu Geçmişi",
                                 modifier = Modifier.size(22.dp)
                             )
                         }
@@ -1275,7 +1275,7 @@ fun CameraScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Settings,
-                        contentDescription = "Settings",
+                        contentDescription = "Ayarlar",
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -1370,13 +1370,13 @@ fun CameraScreen(
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                         Text(
-                            text = "Emulator AR Code Simulation",
+                            text = "Emülatör AR Kod Simülasyonu",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
                         Text(
-                            text = "Since emulator cameras display a virtual mosaic pattern, inject test QR coordinates directly onto the live feed to test tracking, formulas, and CSS overlay styling:",
+                            text = "Emülatör kamerası sanal bir desen gösterdiğinden, takip mekanizmasını, formülleri ve bindirme stilini test etmek için doğrudan test barkod koordinatları enjekte edebilirsiniz:",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF94A3B8)
                         )
@@ -1440,7 +1440,7 @@ fun CameraScreen(
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("3D: PDF417 Stacked", fontSize = 11.sp)
+                                Text("3D: PDF417 Yığın", fontSize = 11.sp)
                             }
                         }
 
@@ -1459,7 +1459,7 @@ fun CameraScreen(
                         ) {
                             Icon(Icons.Default.CallSplit, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color(0xFF00F5D4))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Mixed Multi-Barcode (QR + EAN-13 + Data Matrix)", fontSize = 11.sp, color = Color.White)
+                            Text("Karışık Çoklu Barkod (QR + EAN-13 + Data Matrix)", fontSize = 11.sp, color = Color.White)
                         }
 
                         Button(
@@ -1467,8 +1467,8 @@ fun CameraScreen(
                                 val w = screenWidthPx; val h = screenHeightPx
                                 val demoProfile = com.example.model.QrProfile(
                                     id = java.util.UUID.randomUUID().toString(),
-                                    name = "Beamed Gold Profile",
-                                    description = "Compressed Profile Beamed via QR",
+                                    name = "Işınlanan Altın Profili",
+                                    description = "QR İle Işınlanan Sıkıştırılmış Profil",
                                     formula = com.example.model.ArithmeticFormula("weight * purity", "weight * purity"),
                                     parsingRules = com.example.model.QrParsingRules(
                                         delimiter = "-",
@@ -1490,7 +1490,7 @@ fun CameraScreen(
                         ) {
                             Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color(0xFF00F5D4))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Simulate Compressed Profile Beam Scan", fontSize = 11.sp, color = Color.White)
+                            Text("Sıkıştırılmış Profil Işınlama Taraması", fontSize = 11.sp, color = Color.White)
                         }
 
                         Row(
@@ -1498,7 +1498,7 @@ fun CameraScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Simulate Spatial Movement (Drift)", color = Color.White)
+                            Text("Mekansal Hareketi Simüle Et (Kayma)", color = Color.White)
                             Switch(
                                 checked = isSimulatingMovement,
                                 onCheckedChange = { isSimulatingMovement = it }
@@ -1517,7 +1517,7 @@ fun CameraScreen(
                             ) {
                                 Icon(Icons.Default.Clear, contentDescription = null)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Clear Simulated Codes")
+                                Text("Simüle Kodları Temizle")
                             }
                         }
                     }
@@ -1610,7 +1610,7 @@ fun TopHudBar(
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
                         Text(
-                            text = if (activeCount > 0) "$activeCount detected" else if (isPaused) "Paused" else "Scanning...",
+                            text = if (activeCount > 0) "$activeCount algılandı" else if (isPaused) "Duraklatıldı" else "Taranıyor...",
                             color = if (activeCount > 0) NeonCyan else OnDarkSurfaceVariant,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium,
@@ -1619,7 +1619,7 @@ fun TopHudBar(
                     }
                     Icon(
                         imageVector = Icons.Default.ArrowDropDown,
-                        contentDescription = "Select Profile",
+                        contentDescription = "Profil Seç",
                         tint = OnDarkSurfaceVariant,
                         modifier = Modifier.size(18.dp)
                     )
@@ -1674,7 +1674,7 @@ fun TopHudBar(
                 ) {
                     Icon(
                         imageVector = if (isTorchEnabled) Icons.Default.FlashOn else Icons.Default.FlashOff,
-                        contentDescription = "Torch Toggle",
+                        contentDescription = "Flaş Aç/Kapat",
                         tint = if (isTorchEnabled) AmberGold else OnDarkSurfaceVariant,
                         modifier = Modifier.size(18.dp)
                     )
@@ -1687,7 +1687,7 @@ fun TopHudBar(
                 ) {
                     Icon(
                         imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                        contentDescription = "Pause/Resume Scanning",
+                        contentDescription = "Taramayı Duraklat/Devam Ettir",
                         tint = if (isPaused) AmberGold else OnDarkSurfaceVariant,
                         modifier = Modifier.size(18.dp)
                     )
@@ -1700,7 +1700,7 @@ fun TopHudBar(
                 ) {
                     Icon(
                         imageVector = Icons.Default.BatterySaver,
-                        contentDescription = if (isBatterySaverEnabled) "Battery Saver ON" else "Battery Saver OFF",
+                        contentDescription = if (isBatterySaverEnabled) "Pil Tasarrufu AÇIK" else "Pil Tasarrufu KAPALI",
                         tint = if (isBatterySaverEnabled) CyberLime else OnDarkSurfaceVariant,
                         modifier = Modifier.size(18.dp)
                     )
@@ -1713,7 +1713,7 @@ fun TopHudBar(
                 ) {
                     Icon(
                         imageVector = Icons.Default.FlipCameraAndroid,
-                        contentDescription = "Switch Camera",
+                        contentDescription = "Kamerayı Değiştir",
                         tint = OnDarkSurfaceVariant,
                         modifier = Modifier.size(18.dp)
                     )
@@ -1727,7 +1727,7 @@ fun TopHudBar(
                     ) {
                         Icon(
                             imageVector = Icons.Default.MoreVert,
-                            contentDescription = "More Options",
+                            contentDescription = "Daha Fazla Seçenek",
                             tint = OnDarkSurfaceVariant,
                             modifier = Modifier.size(18.dp)
                         )
@@ -1750,8 +1750,8 @@ fun TopHudBar(
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
-                                        Text("Scan Session History", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
-                                        Text("View and export CSV log", fontSize = 11.sp, color = OnDarkSurfaceVariant)
+                                        Text("Tarama Oturumu Geçmişi", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
+                                        Text("CSV günlüğünü görüntüle ve aktar", fontSize = 11.sp, color = OnDarkSurfaceVariant)
                                     }
                                 }
                             },
@@ -1774,11 +1774,11 @@ fun TopHudBar(
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
                                         Text(
-                                            text = if (isBatterySaverEnabled) "Battery Saver: ON" else "Battery Saver: OFF",
+                                            text = if (isBatterySaverEnabled) "Pil Tasarrufu: AÇIK" else "Pil Tasarrufu: KAPALI",
                                             color = OnDarkSurface,
                                             fontWeight = FontWeight.SemiBold
                                         )
-                                        Text("Throttle scanner to ~5.5 FPS", fontSize = 11.sp, color = OnDarkSurfaceVariant)
+                                        Text("Tarayıcıyı ~5.5 FPS'ye sınırla", fontSize = 11.sp, color = OnDarkSurfaceVariant)
                                     }
                                 }
                             },
@@ -1799,8 +1799,8 @@ fun TopHudBar(
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
-                                        Text("AR Code Simulator", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
-                                        Text("Inject virtual QR/barcodes", fontSize = 11.sp, color = OnDarkSurfaceVariant)
+                                        Text("AR Kod Simülatörü", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
+                                        Text("Sanal QR ve barkod enjekte et", fontSize = 11.sp, color = OnDarkSurfaceVariant)
                                     }
                                 }
                             },
@@ -1821,8 +1821,8 @@ fun TopHudBar(
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
-                                        Text("Barcode Formats", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
-                                        Text("Configure 2D, 3D and 1D scanner", fontSize = 11.sp, color = OnDarkSurfaceVariant)
+                                        Text("Barkod Formatları", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
+                                        Text("2D, 3D ve 1D tarayıcıyı yapılandır", fontSize = 11.sp, color = OnDarkSurfaceVariant)
                                     }
                                 }
                             },
@@ -1844,7 +1844,7 @@ fun TopHudBar(
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
-                                    Text("All Settings", color = OnDarkSurface, fontWeight = FontWeight.Medium)
+                                    Text("Tüm Ayarlar", color = OnDarkSurface, fontWeight = FontWeight.Medium)
                                 }
                             },
                             onClick = {
@@ -1892,7 +1892,7 @@ fun CameraPermissionPlaceholder(
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = "Camera Access Required",
+            text = "Kamera İzni Gerekli",
             style = MaterialTheme.typography.headlineSmall,
             color = Color.White,
             fontWeight = FontWeight.Bold
@@ -1901,7 +1901,7 @@ fun CameraPermissionPlaceholder(
         Spacer(modifier = Modifier.height(12.dp))
 
         Text(
-            text = "QR Live Calculator continuously analyzes QR codes and barcodes in the physical world to compute your formulas and project AR results directly over each code.",
+            text = "QR Canlı Hesaplayıcı, fiziksel dünyadaki QR kodlarını ve barkodları sürekli analiz ederek formüllerinizi hesaplar ve AR sonuçlarını doğrudan her kodun üzerine yansıtır.",
             style = MaterialTheme.typography.bodyMedium,
             color = Color(0xFF94A3B8),
             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -1922,7 +1922,7 @@ fun CameraPermissionPlaceholder(
         ) {
             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Grant Camera Permission", fontWeight = FontWeight.Bold)
+            Text("Kamera İznini Ver", fontWeight = FontWeight.Bold)
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -1942,7 +1942,7 @@ fun CameraPermissionPlaceholder(
             Icon(Icons.Default.Science, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = if (isEmulator) "Continue in Emulator Mode" else "Continue (Bypass Permission)",
+                text = if (isEmulator) "Emülatör Modunda Devam Et" else "Devam Et (İzni Atla)",
                 fontWeight = FontWeight.SemiBold
             )
         }
