@@ -16,6 +16,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
@@ -52,10 +53,17 @@ import com.example.model.QrProfile
 import com.example.model.TrackedQr
 import com.example.model.BarcodeCatalog
 import com.example.model.BarcodeScanPreset
+import com.example.model.CalculationStatus
+import com.example.model.ScanHistoryItem
 import com.example.ui.attachments.AttachmentDetailDialog
 import com.example.ui.attachments.EditAttachmentDialog
 import com.example.ui.attachments.LinkedAttachmentsSheet
 import com.example.ui.components.BarcodeFormatOptionsSheet
+import com.example.ui.components.ScanHistorySheet
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.AnnotatedString
 import com.google.mlkit.vision.barcode.common.Barcode
 import java.util.concurrent.Executors
 import kotlinx.coroutines.delay
@@ -115,6 +123,8 @@ fun CameraScreen(
     var isTorchEnabled by remember { mutableStateOf(false) }
     var isPaused by remember { mutableStateOf(false) }
     var zoomLevel by remember { mutableFloatStateOf(0.0f) }
+    var showZoomBadge by remember { mutableStateOf(false) }
+    var hideZoomBadgeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var showProfileDropdown by remember { mutableStateOf(false) }
 
     // Screen dimensions
@@ -151,6 +161,18 @@ fun CameraScreen(
     }
 
     val isRawModeActive = isHoldingRawQr || isRawQrToggled
+
+    // Haptics & Clipboard
+    val haptic = LocalHapticFeedback.current
+    val clipboardManager = LocalClipboardManager.current
+
+    // Battery Saver & Performance state
+    var isBatterySaverEnabled by remember { mutableStateOf(false) }
+
+    // Scan Session History state
+    var scanHistory by remember { mutableStateOf<List<ScanHistoryItem>>(emptyList()) }
+    var showHistorySheet by remember { mutableStateOf(false) }
+    val recentLoggedQrs = remember { mutableMapOf<String, Long>() }
 
     // Pinned overlay state (Scales full width and pauses scanning)
     var pinnedQr by remember { mutableStateOf<TrackedQr?>(null) }
@@ -266,6 +288,53 @@ fun CameraScreen(
             customFormats = activeProfile.tracking.enabledFormats,
             enableInverted = activeProfile.tracking.enableInvertedDetection
         )
+    }
+    LaunchedEffect(isBatterySaverEnabled) {
+        analyzer.isBatterySaverEnabled = isBatterySaverEnabled
+    }
+
+    // Automatically record scanned codes into session history (deduplicated by 3.5s window)
+    LaunchedEffect(trackedQrs) {
+        val now = System.currentTimeMillis()
+        val newEntries = mutableListOf<ScanHistoryItem>()
+        for (item in trackedQrs) {
+            val status = item.result.status
+            val formattedResult = when (status) {
+                is CalculationStatus.Success -> status.formattedText
+                is CalculationStatus.ParseError -> "Parse Error"
+                is CalculationStatus.EvaluationError -> "Evaluation Error"
+            }
+            val numericVal = (status as? CalculationStatus.Success)?.resultNumber
+            val lastLogged = recentLoggedQrs[item.rawContent] ?: 0L
+            if (now - lastLogged > 3500L) {
+                recentLoggedQrs[item.rawContent] = now
+                newEntries.add(
+                    ScanHistoryItem(
+                        rawText = item.rawContent,
+                        profileName = activeProfile.name,
+                        resultText = formattedResult,
+                        numericValue = numericVal,
+                        formatName = item.result.formatName
+                    )
+                )
+            }
+        }
+        if (newEntries.isNotEmpty()) {
+            scanHistory = scanHistory + newEntries
+        }
+    }
+
+    // Real-time Multi-Code Sum / Aggregate calculation when 2 or more codes are in view
+    val multiCodeItems = remember(trackedQrs) {
+        trackedQrs.mapNotNull { item ->
+            val success = item.result.status as? CalculationStatus.Success
+            if (success != null) {
+                Pair(item, success.resultNumber)
+            } else null
+        }
+    }
+    val multiCodeSum = remember(multiCodeItems) {
+        if (multiCodeItems.size >= 2) multiCodeItems.sumOf { it.second } else null
     }
 
     // Periodic ticker to smoothly fade out lost QRs
@@ -506,6 +575,7 @@ fun CameraScreen(
                     showRawQrData = isRawModeActive,
                     pinnedQr = pinnedQr,
                     onPinClick = { tracked ->
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         pinnedQr = tracked
                         isPaused = true
                     },
@@ -559,6 +629,17 @@ fun CameraScreen(
                     },
                     isFrontCamera = isFrontCamera,
                     onToggleCamera = { isFrontCamera = !isFrontCamera },
+                    isBatterySaverEnabled = isBatterySaverEnabled,
+                    onToggleBatterySaver = {
+                        isBatterySaverEnabled = !isBatterySaverEnabled
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        android.widget.Toast.makeText(
+                            context,
+                            if (isBatterySaverEnabled) "Battery Saver Mode ON (~5.5 FPS)" else "Battery Saver Mode OFF (Full Performance)",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    },
+                    onOpenHistory = { showHistorySheet = true },
                     onOpenSimulation = { showSimulationSheet = true },
                     onOpenBarcodeOptions = { showBarcodeOptionsSheet = true },
                     onOpenSettings = onOpenSettings,
@@ -566,6 +647,75 @@ fun CameraScreen(
                         .windowInsetsPadding(WindowInsets.statusBars)
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 )
+            }
+
+            // Real-Time Multi-Code Sum / Aggregate Pill (When 2+ codes are detected with valid calculations)
+            AnimatedVisibility(
+                visible = multiCodeSum != null && !isRawModeActive && pinnedQr == null,
+                enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(top = 70.dp)
+            ) {
+                Surface(
+                    color = Color(0xF2070D18),
+                    shape = RoundedCornerShape(20.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.2.dp, NeonCyan),
+                    shadowElevation = 10.dp,
+                    modifier = Modifier
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val formattedSum = String.format(java.util.Locale.US, "%.2f", multiCodeSum)
+                            clipboardManager.setText(AnnotatedString(formattedSum))
+                            android.widget.Toast.makeText(context, "Copied in-view sum: $formattedSum", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                        .testTag("multi_code_sum_pill")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(NeonCyan.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Functions,
+                                contentDescription = null,
+                                tint = NeonCyan,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Σ IN VIEW (${multiCodeItems.size} CODES):",
+                            color = OnDarkSurfaceVariant,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = String.format(java.util.Locale.US, "%.2f", multiCodeSum),
+                            color = NeonCyan,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "Copy Total",
+                            tint = NeonCyan.copy(alpha = 0.65f),
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                }
             }
 
             // Auto-switched Profile Notification Banner (Hidden during raw QR mode)
@@ -576,7 +726,7 @@ fun CameraScreen(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .windowInsetsPadding(WindowInsets.statusBars)
-                    .padding(top = 70.dp)
+                    .padding(top = if (multiCodeSum != null) 115.dp else 70.dp)
             ) {
                 Surface(
                     color = MaterialTheme.colorScheme.primaryContainer,
@@ -767,55 +917,144 @@ fun CameraScreen(
                 }
             }
 
-            // Expressive Floating Zoom Capsule Pill (Hidden during raw QR mode or when pinned)
+            // Thin Vertical Line Zoom Control (Swipe vertically to zoom in and out)
             AnimatedVisibility(
                 visible = !isRawModeActive && pinnedQr == null,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(end = 12.dp)
+                    .padding(end = 4.dp)
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(GlassmorphicHudBg)
-                        .border(1.dp, GlassmorphicHudBorder, RoundedCornerShape(24.dp))
-                        .padding(vertical = 8.dp, horizontal = 4.dp)
+                val trackHeightDp = 180.dp
+                val density = LocalDensity.current
+                val trackHeightPx = with(density) { trackHeightDp.toPx() }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End
                 ) {
-                    IconButton(
-                        onClick = {
-                            zoomLevel = (zoomLevel + 0.1f).coerceAtMost(1.0f)
-                            cameraControl?.setLinearZoom(zoomLevel)
-                        },
-                        modifier = Modifier.size(38.dp)
+                    // Floating Zoom Multiplier Badge (Appears while swiping/tapping)
+                    AnimatedVisibility(
+                        visible = showZoomBadge,
+                        enter = fadeIn() + slideInHorizontally(initialOffsetX = { it / 2 }),
+                        exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it / 2 })
                     ) {
-                        Icon(Icons.Default.ZoomIn, contentDescription = "Zoom In", tint = Color.White)
+                        Surface(
+                            color = Color(0xF2070B14),
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, NeonCyan.copy(alpha = 0.85f)),
+                            shadowElevation = 8.dp,
+                            modifier = Modifier.padding(end = 2.dp)
+                        ) {
+                            Text(
+                                text = String.format(java.util.Locale.US, "%.1fx", 1.0f + zoomLevel * 3.0f),
+                                color = NeonCyan,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
                     }
 
-                    Surface(
-                        color = NeonCyan.copy(alpha = 0.15f),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.padding(vertical = 2.dp)
+                    // Thin Vertical Swipe Line Container (48dp touch width for accessible swiping)
+                    Box(
+                        modifier = Modifier
+                            .width(48.dp)
+                            .height(trackHeightDp)
+                            .testTag("vertical_zoom_slider")
+                            .pointerInput(trackHeightPx) {
+                                detectTapGestures(
+                                    onPress = { offset ->
+                                        showZoomBadge = true
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        val targetZoom = (1.0f - (offset.y / trackHeightPx)).coerceIn(0.0f, 1.0f)
+                                        zoomLevel = targetZoom
+                                        cameraControl?.setLinearZoom(zoomLevel)
+                                        try {
+                                            tryAwaitRelease()
+                                        } finally {
+                                            hideZoomBadgeJob?.cancel()
+                                            hideZoomBadgeJob = coroutineScope.launch {
+                                                delay(1600)
+                                                showZoomBadge = false
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                            .pointerInput(trackHeightPx) {
+                                detectVerticalDragGestures(
+                                    onDragStart = { offset ->
+                                        showZoomBadge = true
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        hideZoomBadgeJob?.cancel()
+                                        val targetZoom = (1.0f - (offset.y / trackHeightPx)).coerceIn(0.0f, 1.0f)
+                                        zoomLevel = targetZoom
+                                        cameraControl?.setLinearZoom(zoomLevel)
+                                    },
+                                    onDragEnd = {
+                                        hideZoomBadgeJob?.cancel()
+                                        hideZoomBadgeJob = coroutineScope.launch {
+                                            delay(1600)
+                                            showZoomBadge = false
+                                        }
+                                    },
+                                    onDragCancel = {
+                                        hideZoomBadgeJob?.cancel()
+                                        hideZoomBadgeJob = coroutineScope.launch {
+                                            delay(1600)
+                                            showZoomBadge = false
+                                        }
+                                    },
+                                    onVerticalDrag = { change, dragAmount ->
+                                        change.consume()
+                                        showZoomBadge = true
+                                        hideZoomBadgeJob?.cancel()
+                                        val deltaZoom = -dragAmount / trackHeightPx
+                                        val prevZoom = zoomLevel
+                                        val newZoom = (zoomLevel + deltaZoom).coerceIn(0.0f, 1.0f)
+                                        if (kotlin.math.abs(newZoom - prevZoom) > 0.05f) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        }
+                                        zoomLevel = newZoom
+                                        cameraControl?.setLinearZoom(zoomLevel)
+                                    }
+                                )
+                            },
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = "${(1.0f + zoomLevel * 3f).toInt()}x",
-                            color = NeonCyan,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        // Background Track: Thin vertical line (3.5dp wide)
+                        Box(
+                            modifier = Modifier
+                                .width(3.5.dp)
+                                .height(trackHeightDp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(Color.White.copy(alpha = 0.22f))
+                                .border(0.5.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(2.dp))
                         )
-                    }
 
-                    IconButton(
-                        onClick = {
-                            zoomLevel = (zoomLevel - 0.1f).coerceAtLeast(0.0f)
-                            cameraControl?.setLinearZoom(zoomLevel)
-                        },
-                        modifier = Modifier.size(38.dp)
-                    ) {
-                        Icon(Icons.Default.ZoomOut, contentDescription = "Zoom Out", tint = Color.White)
+                        // Active Zoom Level Fill (Neon Cyan line from bottom up)
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .width(3.5.dp)
+                                .height((trackHeightDp * zoomLevel).coerceAtLeast(3.dp))
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(NeonCyan)
+                        )
+
+                        // Sleek Slider Thumb Handle on the line
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color.White,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, NeonCyan),
+                            shadowElevation = 6.dp,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .offset(y = -((trackHeightDp - 12.dp) * zoomLevel))
+                                .size(width = 12.dp, height = 8.dp)
+                        ) {}
                     }
                 }
             }
@@ -980,6 +1219,44 @@ fun CameraScreen(
                             modifier = Modifier.size(22.dp)
                         )
                     }
+
+                    // 5. Scan Session History (CSV Export & Log)
+                    FilledTonalIconButton(
+                        onClick = { showHistorySheet = true },
+                        enabled = !isRawModeActive,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .alpha(if (isRawModeActive) 0f else 1f)
+                            .testTag("scan_history_btn"),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = GlassmorphicDockBg,
+                            contentColor = if (scanHistory.isNotEmpty()) NeonCyan else Color.White.copy(alpha = 0.85f)
+                        )
+                    ) {
+                        BadgedBox(
+                            badge = {
+                                if (scanHistory.isNotEmpty()) {
+                                    Badge(
+                                        containerColor = NeonCyan,
+                                        contentColor = Color(0xFF00382E)
+                                    ) {
+                                        Text(
+                                            text = if (scanHistory.size > 99) "99+" else scanHistory.size.toString(),
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.History,
+                                contentDescription = "Scan Session History",
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
                 }
 
                 // Right: Expressive Squircle Settings FAB
@@ -1002,6 +1279,18 @@ fun CameraScreen(
                         modifier = Modifier.size(24.dp)
                     )
                 }
+            }
+
+            // Scan Session History Sheet
+            if (showHistorySheet) {
+                ScanHistorySheet(
+                    historyItems = scanHistory,
+                    onClearHistory = {
+                        scanHistory = emptyList()
+                        recentLoggedQrs.clear()
+                    },
+                    onDismiss = { showHistorySheet = false }
+                )
             }
 
             // Linked Data & Media Management Sheet
@@ -1250,6 +1539,9 @@ fun TopHudBar(
     onTogglePause: () -> Unit,
     isFrontCamera: Boolean,
     onToggleCamera: () -> Unit,
+    isBatterySaverEnabled: Boolean,
+    onToggleBatterySaver: () -> Unit,
+    onOpenHistory: () -> Unit,
     onOpenSimulation: () -> Unit,
     onOpenBarcodeOptions: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -1401,28 +1693,15 @@ fun TopHudBar(
                     )
                 }
 
-                // Barcode Format Direct Shortcut
+                // Battery Saver Mode Toggle
                 IconButton(
-                    onClick = onOpenBarcodeOptions,
-                    modifier = Modifier.size(36.dp)
+                    onClick = onToggleBatterySaver,
+                    modifier = Modifier.size(36.dp).testTag("battery_saver_toggle_btn")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.QrCodeScanner,
-                        contentDescription = "Barcode Formats",
-                        tint = NeonCyan,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-
-                // Simulator Direct Shortcut
-                IconButton(
-                    onClick = onOpenSimulation,
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Science,
-                        contentDescription = "AR Simulator",
-                        tint = CyberLime,
+                        imageVector = Icons.Default.BatterySaver,
+                        contentDescription = if (isBatterySaverEnabled) "Battery Saver ON" else "Battery Saver OFF",
+                        tint = if (isBatterySaverEnabled) CyberLime else OnDarkSurfaceVariant,
                         modifier = Modifier.size(18.dp)
                     )
                 }
@@ -1459,6 +1738,56 @@ fun TopHudBar(
                         onDismissRequest = { expandedMoreMenu = false },
                         modifier = Modifier.background(DarkSurfaceVariant)
                     ) {
+                        // Scan History Item
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.History,
+                                        contentDescription = null,
+                                        tint = NeonCyan,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text("Scan Session History", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
+                                        Text("View and export CSV log", fontSize = 11.sp, color = OnDarkSurfaceVariant)
+                                    }
+                                }
+                            },
+                            onClick = {
+                                expandedMoreMenu = false
+                                onOpenHistory()
+                            }
+                        )
+
+                        // Battery Saver Item
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.BatterySaver,
+                                        contentDescription = null,
+                                        tint = if (isBatterySaverEnabled) CyberLime else OnDarkSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = if (isBatterySaverEnabled) "Battery Saver: ON" else "Battery Saver: OFF",
+                                            color = OnDarkSurface,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text("Throttle scanner to ~5.5 FPS", fontSize = 11.sp, color = OnDarkSurfaceVariant)
+                                    }
+                                }
+                            },
+                            onClick = {
+                                expandedMoreMenu = false
+                                onToggleBatterySaver()
+                            }
+                        )
+
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {

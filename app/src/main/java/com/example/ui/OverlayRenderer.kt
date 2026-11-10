@@ -1,13 +1,16 @@
 package com.example.ui
 
+import android.content.Intent
 import android.graphics.Color as AndroidColor
 import android.graphics.RectF
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -18,10 +21,18 @@ import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.*
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -141,39 +152,17 @@ fun QrOverlaysCanvas(
                             config = overlayConfig
                         )
                     } else {
-                        Box {
+                        Box(
+                            modifier = Modifier
+                                .testTag("overlay_label_${solved.tracked.id}")
+                                .clickable { onPinClick?.invoke(solved.tracked) }
+                        ) {
                             OverlayCardContent(
                                 result = solved.tracked.result,
                                 config = overlayConfig,
                                 attachment = solved.tracked.attachment,
                                 onAttachmentClick = onAttachmentClick
                             )
-
-                            // Small Pin Icon on the overlay when it appears
-                            IconButton(
-                                onClick = { onPinClick?.invoke(solved.tracked) },
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(2.dp)
-                                    .size(30.dp)
-                                    .testTag("pin_overlay_${solved.tracked.id}")
-                            ) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = Color.Black.copy(alpha = 0.55f),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00F5D4).copy(alpha = 0.6f)),
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.PushPin,
-                                            contentDescription = "Pin overlay full width",
-                                            tint = Color(0xFF00F5D4),
-                                            modifier = Modifier.size(13.dp)
-                                        )
-                                    }
-                                }
-                            }
                         }
                     }
                 }
@@ -184,7 +173,8 @@ fun QrOverlaysCanvas(
 
 /**
  * Pinned Full-Width Overlay Card displayed when the user pins an overlay.
- * Scales to full width, stays on screen, and provides an unpin button to resume scanning.
+ * Scales to full width, stays on screen, provides swipe-down to dismiss, 1-tap Copy & Share actions,
+ * and an unpin button to resume live scanning.
  */
 @Composable
 fun PinnedFullWidthOverlayCard(
@@ -194,22 +184,68 @@ fun PinnedFullWidthOverlayCard(
     onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val haptic = LocalHapticFeedback.current
     val themeColors = getExcelThemeColors(config.tableConfig.gridTheme)
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(18.dp)
+
+    // Vertical drag offset for swipe-down to dismiss
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+
+    val resultText = when (val st = tracked.result.status) {
+        is CalculationStatus.Success -> st.formattedText
+        is CalculationStatus.ParseError -> "Parse Error"
+        is CalculationStatus.EvaluationError -> "Evaluation Error"
+    }
 
     Card(
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = Color(0xF5070D18)),
         border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF00F5D4)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
-        modifier = modifier.fillMaxWidth()
+        elevation = CardDefaults.cardElevation(defaultElevation = 18.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .offset { IntOffset(0, dragOffsetY.roundToInt()) }
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        if (dragAmount > 0 || dragOffsetY > 0) {
+                            dragOffsetY = (dragOffsetY + dragAmount).coerceAtLeast(0f)
+                        }
+                    },
+                    onDragEnd = {
+                        if (dragOffsetY > 110f) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onUnpin()
+                        }
+                        dragOffsetY = 0f
+                    },
+                    onDragCancel = {
+                        dragOffsetY = 0f
+                    }
+                )
+            }
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp)
+                .padding(14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Top Bar: Pinned Badge + Scanning Paused Badge + Pin Icon (Unpin action)
+            // Drag handle to visually indicate swipe-down gesture
+            Box(
+                modifier = Modifier
+                    .width(40.dp)
+                    .height(4.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.35f))
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Top Bar: Pinned Badge + Scanning Paused Badge + Close/Unpin button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -259,9 +295,12 @@ fun PinnedFullWidthOverlayCard(
                     }
                 }
 
-                // Small Pin Icon Button (Click to unpin and resume scanning)
+                // Dismiss / Unpin Button (Click to unpin and resume scanning)
                 FilledTonalIconButton(
-                    onClick = onUnpin,
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onUnpin()
+                    },
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledTonalIconButtonColors(
                         containerColor = Color(0xFF00F5D4),
@@ -272,7 +311,7 @@ fun PinnedFullWidthOverlayCard(
                         .testTag("unpin_overlay_button")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.PushPin,
+                        imageVector = Icons.Default.Close,
                         contentDescription = "Unpin and resume scan",
                         modifier = Modifier.size(18.dp)
                     )
@@ -324,11 +363,132 @@ fun PinnedFullWidthOverlayCard(
                 }
             }
 
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 1-Tap Copy & Share Actions Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Copy Result Button
+                FilledTonalButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        clipboardManager.setText(AnnotatedString(resultText))
+                        Toast.makeText(context, "Copied result: $resultText", Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = Color(0xFF0E222E),
+                        contentColor = Color(0xFF00F5D4)
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(38.dp)
+                        .testTag("copy_result_button"),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Copy Result",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                }
+
+                // Copy Raw Barcode Button
+                FilledTonalButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        clipboardManager.setText(AnnotatedString(tracked.rawContent))
+                        Toast.makeText(context, "Copied raw barcode", Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = Color(0xFF0E222E),
+                        contentColor = Color(0xFF38BDF8)
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(38.dp)
+                        .testTag("copy_raw_button"),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DataObject,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Copy Raw",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                }
+
+                // Share Button
+                FilledTonalButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        val varsBreakdown = tracked.result.extractedVariables.entries.joinToString("\n") { (k, v) -> "• $k: $v" }
+                        val shareContent = buildString {
+                            appendLine("📊 QR Code Calculation Breakdown")
+                            appendLine("Format: ${tracked.result.formatName}")
+                            appendLine("Raw Data: ${tracked.rawContent}")
+                            if (varsBreakdown.isNotBlank()) {
+                                appendLine("\nVariables:\n$varsBreakdown")
+                            }
+                            appendLine("\nFinal Result: $resultText")
+                        }
+                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, shareContent)
+                            putExtra(Intent.EXTRA_SUBJECT, "QR Calculation - $resultText")
+                        }
+                        context.startActivity(Intent.createChooser(shareIntent, "Share QR Result"))
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = Color(0xFF0E222E),
+                        contentColor = Color(0xFFF59E0B)
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(38.dp)
+                        .testTag("share_result_button"),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Share,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Share",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Bottom Unpin Button to resume scanning
+            // Bottom Unpin Button to resume scanning (or swipe down)
             OutlinedButton(
-                onClick = onUnpin,
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onUnpin()
+                },
                 shape = RoundedCornerShape(12.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00F5D4).copy(alpha = 0.7f)),
                 colors = ButtonDefaults.outlinedButtonColors(
@@ -345,7 +505,7 @@ fun PinnedFullWidthOverlayCard(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Unpin & Resume Scanning",
+                    text = "Unpin & Resume Scanning (Swipe Down)",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )

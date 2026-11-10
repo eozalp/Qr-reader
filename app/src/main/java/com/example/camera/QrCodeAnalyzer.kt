@@ -30,6 +30,9 @@ class QrCodeAnalyzer(
     var isPaused: Boolean = false
 
     @Volatile
+    var isBatterySaverEnabled: Boolean = false
+
+    @Volatile
     var viewWidth: Float = 1080f
 
     @Volatile
@@ -43,6 +46,8 @@ class QrCodeAnalyzer(
 
     private val isProcessingInverted = AtomicBoolean(false)
     private var frameCounter = 0
+    private var lastAnalyzedTimeMs = 0L
+    private var cachedNv21: ByteArray? = null
 
     fun updateBarcodeFormats(
         preset: BarcodeScanPreset,
@@ -79,6 +84,17 @@ class QrCodeAnalyzer(
             return
         }
 
+        // Frame rate throttling:
+        // Battery saver: ~5.5 FPS (180ms min interval)
+        // Normal mode: ~20 FPS (50ms min interval) to avoid maxing out CPU/GPU
+        val currentTime = System.currentTimeMillis()
+        val minIntervalMs = if (isBatterySaverEnabled) 180L else 50L
+        if (currentTime - lastAnalyzedTimeMs < minIntervalMs) {
+            imageProxy.close()
+            return
+        }
+        lastAnalyzedTimeMs = currentTime
+
         val rotationDegrees = imageProxy.imageInfo.rotationDegrees
         val image = InputImage.fromMediaImage(mediaImage, rotationDegrees)
 
@@ -88,7 +104,8 @@ class QrCodeAnalyzer(
         val uprightHeight = if (isRotated) imageProxy.width.toFloat() else imageProxy.height.toFloat()
 
         frameCounter++
-        val shouldCheckInverted = enableInvertedDetection && (frameCounter % 3 == 0)
+        val invertedFrequency = if (isBatterySaverEnabled) 9 else 3
+        val shouldCheckInverted = enableInvertedDetection && (frameCounter % invertedFrequency == 0)
 
         currentScanner.process(image)
             .addOnSuccessListener { barcodes ->
@@ -147,7 +164,12 @@ class QrCodeAnalyzer(
             val rowStride = yPlane.rowStride
             val pixelStride = yPlane.pixelStride
 
-            val nv21 = ByteArray(width * height + (width * height / 2))
+            val requiredSize = width * height + (width * height / 2)
+            var nv21 = cachedNv21
+            if (nv21 == null || nv21.size != requiredSize) {
+                nv21 = ByteArray(requiredSize)
+                cachedNv21 = nv21
+            }
             // Fill chroma with neutral 128
             java.util.Arrays.fill(nv21, width * height, nv21.size, 128.toByte())
 
