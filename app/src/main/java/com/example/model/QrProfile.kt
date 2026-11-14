@@ -701,7 +701,8 @@ data class QrProfile(
     val formula: ArithmeticFormula = ArithmeticFormula(),
     val formatting: ResultFormatting = ResultFormatting(),
     val overlay: OverlayAppearance = OverlayAppearance(),
-    val tracking: TrackingSettings = TrackingSettings()
+    val tracking: TrackingSettings = TrackingSettings(),
+    val bluetoothKeyboard: BluetoothKeyboardConfig = BluetoothKeyboardConfig()
 ) {
     fun toJson(): JSONObject {
         return JSONObject().apply {
@@ -714,6 +715,7 @@ data class QrProfile(
             put("formatting", formatting.toJson())
             put("overlay", overlay.toJson())
             put("tracking", tracking.toJson())
+            put("bluetoothKeyboard", bluetoothKeyboard.toJson())
         }
     }
 
@@ -728,7 +730,8 @@ data class QrProfile(
                 formula = if (json.has("formula")) ArithmeticFormula.fromJson(json.getJSONObject("formula")) else ArithmeticFormula(),
                 formatting = if (json.has("formatting")) ResultFormatting.fromJson(json.getJSONObject("formatting")) else ResultFormatting(),
                 overlay = if (json.has("overlay")) OverlayAppearance.fromJson(json.getJSONObject("overlay")) else OverlayAppearance(),
-                tracking = if (json.has("tracking")) TrackingSettings.fromJson(json.getJSONObject("tracking")) else TrackingSettings()
+                tracking = if (json.has("tracking")) TrackingSettings.fromJson(json.getJSONObject("tracking")) else TrackingSettings(),
+                bluetoothKeyboard = if (json.has("bluetoothKeyboard")) BluetoothKeyboardConfig.fromJson(json.getJSONObject("bluetoothKeyboard")) else BluetoothKeyboardConfig()
             )
         }
     }

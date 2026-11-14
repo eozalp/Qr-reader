@@ -28,6 +28,7 @@ import com.example.model.QrProfile
 enum class SettingsTab(val title: String, val icon: ImageVector) {
     VARIABLES("Değişkenler & Formül", Icons.Default.QrCodeScanner),
     TABLE("Veri Tablosu", Icons.Default.TableChart),
+    KEYBOARD("Klavye & PC", Icons.Default.Keyboard),
     OVERLAY("Stil & Görünüm", Icons.Default.Layers),
     TRACKING("Kamera & Barkod", Icons.Default.Tune),
     PROFILES("Profiller", Icons.Default.FolderSpecial)
@@ -180,6 +181,15 @@ fun SettingsScreen(
                         onProfileChanged = { updatedProfile ->
                             profileRepository.saveProfile(updatedProfile)
                         }
+                    )
+                }
+                SettingsTab.KEYBOARD -> {
+                    BluetoothKeyboardSection(
+                        config = activeProfile.bluetoothKeyboard,
+                        onConfigChanged = { updatedKb ->
+                            profileRepository.saveProfile(activeProfile.copy(bluetoothKeyboard = updatedKb))
+                        },
+                        availableVariables = activeProfile.parsingRules.variables
                     )
                 }
                 SettingsTab.OVERLAY -> {

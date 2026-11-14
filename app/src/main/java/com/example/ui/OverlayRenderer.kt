@@ -182,6 +182,7 @@ fun PinnedFullWidthOverlayCard(
     config: OverlayAppearance,
     onUnpin: () -> Unit,
     onAttachmentClick: ((QrAttachment) -> Unit)? = null,
+    onSendToComputer: ((textToSend: String?, varName: String?) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -364,6 +365,39 @@ fun PinnedFullWidthOverlayCard(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+
+            // Primary Bluetooth Keystroke Action to Computer
+            if (onSendToComputer != null) {
+                Button(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onSendToComputer.invoke(null, null)
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF00F5D4),
+                        contentColor = Color(0xFF00382E)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .testTag("send_to_computer_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Keyboard,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Bilgisayara Tuşla / Gönder ⌨️",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             // 1-Tap Copy & Share Actions Row
             Row(

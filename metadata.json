@@ -1,6 +1,6 @@
 {
-  "name": "QR Live Calc",
-  "description": "Real-time augmented reality QR code scanner that parses values, computes arithmetic expressions, and projects dynamic overlays onto detected codes.",
+  "name": "ALVETAK QR",
+  "description": "Gerçek zamanlı artırılmış gerçeklik QR ve barkod hesaplayıcı; barkod verilerini ve değişkenleri Bluetooth klavye (HID) üzerinden bilgisayara aktarır.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

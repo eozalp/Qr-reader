@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "QR Live Calc"
+rootProject.name = "ALVETAK QR"
 
 include(":app")

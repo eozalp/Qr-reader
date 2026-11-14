@@ -60,6 +60,11 @@ import com.example.ui.attachments.EditAttachmentDialog
 import com.example.ui.attachments.LinkedAttachmentsSheet
 import com.example.ui.components.BarcodeFormatOptionsSheet
 import com.example.ui.components.ScanHistorySheet
+import com.example.ui.components.BluetoothKeyboardSheet
+import com.example.bluetooth.BluetoothHidManager
+import com.example.bluetooth.HidConnectionStatus
+import android.os.Build
+import android.widget.Toast
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -116,6 +121,18 @@ fun CameraScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         hasCameraPermission = isGranted
+    }
+
+    // Bluetooth HID Keyboard Manager & State
+    val hidManager = remember { BluetoothHidManager(context) }
+    val bluetoothConnectionStatus by hidManager.connectionStatus.collectAsState()
+    var showBluetoothSheet by remember { mutableStateOf(false) }
+    var autoSendToastText by remember { mutableStateOf<String?>(null) }
+
+    val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        hidManager.refreshState()
     }
 
     // Camera control states
@@ -321,6 +338,30 @@ fun CameraScreen(
         }
         if (newEntries.isNotEmpty()) {
             scanHistory = scanHistory + newEntries
+        }
+
+        // Bluetooth HID Auto-Send to Computer when scanning with ring scanner or camera
+        if (activeProfile.bluetoothKeyboard.isAutoSendEnabled && !isPaused && trackedQrs.isNotEmpty()) {
+            for (item in trackedQrs) {
+                if (hidManager.shouldAutoSend(item.rawContent, activeProfile.bluetoothKeyboard)) {
+                    val payload = hidManager.resolvePayload(
+                        result = item.result,
+                        config = activeProfile.bluetoothKeyboard
+                    )
+                    coroutineScope.launch {
+                        hidManager.sendToComputer(
+                            textToSend = payload,
+                            endingKey = activeProfile.bluetoothKeyboard.endingKey,
+                            typingDelayMs = activeProfile.bluetoothKeyboard.typingDelayMs,
+                            convertTurkishChars = activeProfile.bluetoothKeyboard.convertTurkishChars
+                        )
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        autoSendToastText = "⌨️ PC'ye İletildi: \"$payload\" [${activeProfile.bluetoothKeyboard.endingKey.label}]"
+                        delay(2500)
+                        autoSendToastText = null
+                    }
+                }
+            }
         }
     }
 
@@ -639,6 +680,9 @@ fun CameraScreen(
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
                     },
+                    isBluetoothConnected = bluetoothConnectionStatus == HidConnectionStatus.CONNECTED,
+                    isAutoSendEnabled = activeProfile.bluetoothKeyboard.isAutoSendEnabled,
+                    onOpenBluetooth = { showBluetoothSheet = true },
                     onOpenHistory = { showHistorySheet = true },
                     onOpenSimulation = { showSimulationSheet = true },
                     onOpenBarcodeOptions = { showBarcodeOptionsSheet = true },
@@ -647,6 +691,43 @@ fun CameraScreen(
                         .windowInsetsPadding(WindowInsets.statusBars)
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 )
+            }
+
+            // Real-Time Bluetooth Auto-Send Keystroke Notification Pill
+            AnimatedVisibility(
+                visible = autoSendToastText != null && !isRawModeActive,
+                enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(top = if (multiCodeSum != null) 120.dp else 70.dp)
+            ) {
+                Surface(
+                    color = Color(0xF2062822),
+                    shape = RoundedCornerShape(20.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.2.dp, NeonCyan),
+                    shadowElevation = 10.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Keyboard,
+                            contentDescription = null,
+                            tint = NeonCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = autoSendToastText ?: "",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                }
             }
 
             // Real-Time Multi-Code Sum / Aggregate Pill (When 2+ codes are detected with valid calculations)
@@ -912,7 +993,23 @@ fun CameraScreen(
                             pinnedQr = null
                             isPaused = false
                         },
-                        onAttachmentClick = { att -> viewingAttachment = att }
+                        onAttachmentClick = { att -> viewingAttachment = att },
+                        onSendToComputer = { customText, _ ->
+                            coroutineScope.launch {
+                                val payload = customText ?: hidManager.resolvePayload(
+                                    result = pinned.result,
+                                    config = activeProfile.bluetoothKeyboard
+                                )
+                                hidManager.sendToComputer(
+                                    textToSend = payload,
+                                    endingKey = activeProfile.bluetoothKeyboard.endingKey,
+                                    typingDelayMs = activeProfile.bluetoothKeyboard.typingDelayMs,
+                                    convertTurkishChars = activeProfile.bluetoothKeyboard.convertTurkishChars
+                                )
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                Toast.makeText(context, "Bilgisayara iletildi: \"$payload\"", Toast.LENGTH_SHORT).show()
+                            }
+                        }
                     )
                 }
             }
@@ -1220,7 +1317,56 @@ fun CameraScreen(
                         )
                     }
 
-                    // 5. Scan Session History (CSV Export & Log)
+                    // 5. Bluetooth Keyboard & Computer Input
+                    FilledTonalIconButton(
+                        onClick = { showBluetoothSheet = true },
+                        enabled = !isRawModeActive,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .alpha(if (isRawModeActive) 0f else 1f)
+                            .testTag("bluetooth_keyboard_btn"),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = if (bluetoothConnectionStatus == HidConnectionStatus.CONNECTED) Color(0xFF062822) else GlassmorphicDockBg,
+                            contentColor = if (bluetoothConnectionStatus == HidConnectionStatus.CONNECTED) NeonCyan else Color.White.copy(alpha = 0.85f)
+                        )
+                    ) {
+                        BadgedBox(
+                            badge = {
+                                if (activeProfile.bluetoothKeyboard.isAutoSendEnabled) {
+                                    Badge(
+                                        containerColor = CyberLime,
+                                        contentColor = Color(0xFF00382E)
+                                    ) {
+                                        Text(
+                                            text = "AUTO",
+                                            fontSize = 7.5.sp,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                    }
+                                } else if (bluetoothConnectionStatus == HidConnectionStatus.CONNECTED) {
+                                    Badge(
+                                        containerColor = NeonCyan,
+                                        contentColor = Color(0xFF00382E)
+                                    ) {
+                                        Text(
+                                            text = "PC",
+                                            fontSize = 8.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Keyboard,
+                                contentDescription = "Bluetooth Klavye & PC Girişi",
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+
+                    // 6. Scan Session History (CSV Export & Log)
                     FilledTonalIconButton(
                         onClick = { showHistorySheet = true },
                         enabled = !isRawModeActive,
@@ -1290,6 +1436,36 @@ fun CameraScreen(
                         recentLoggedQrs.clear()
                     },
                     onDismiss = { showHistorySheet = false }
+                )
+            }
+
+            // Bluetooth Keyboard Sheet
+            if (showBluetoothSheet) {
+                BluetoothKeyboardSheet(
+                    hidManager = hidManager,
+                    currentConfig = activeProfile.bluetoothKeyboard,
+                    availableVariables = activeProfile.parsingRules.variables,
+                    onConfigChanged = { updatedKb ->
+                        profileRepository.saveProfile(activeProfile.copy(bluetoothKeyboard = updatedKb))
+                    },
+                    onRequestPermission = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            bluetoothPermissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.BLUETOOTH_CONNECT,
+                                    Manifest.permission.BLUETOOTH_ADVERTISE
+                                )
+                            )
+                        } else {
+                            bluetoothPermissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.BLUETOOTH,
+                                    Manifest.permission.BLUETOOTH_ADMIN
+                                )
+                            )
+                        }
+                    },
+                    onDismiss = { showBluetoothSheet = false }
                 )
             }
 
@@ -1541,6 +1717,9 @@ fun TopHudBar(
     onToggleCamera: () -> Unit,
     isBatterySaverEnabled: Boolean,
     onToggleBatterySaver: () -> Unit,
+    isBluetoothConnected: Boolean = false,
+    isAutoSendEnabled: Boolean = false,
+    onOpenBluetooth: () -> Unit = {},
     onOpenHistory: () -> Unit,
     onOpenSimulation: () -> Unit,
     onOpenBarcodeOptions: () -> Unit,
@@ -1719,6 +1898,19 @@ fun TopHudBar(
                     )
                 }
 
+                // Bluetooth Keyboard / PC Input Toggle & Status
+                IconButton(
+                    onClick = onOpenBluetooth,
+                    modifier = Modifier.size(36.dp).testTag("top_hud_bluetooth_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Keyboard,
+                        contentDescription = "Bluetooth Klavye & PC Girişi",
+                        tint = if (isBluetoothConnected) NeonCyan else if (isAutoSendEnabled) CyberLime else OnDarkSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
                 // More Options Menu
                 Box {
                     IconButton(
@@ -1738,6 +1930,34 @@ fun TopHudBar(
                         onDismissRequest = { expandedMoreMenu = false },
                         modifier = Modifier.background(DarkSurfaceVariant)
                     ) {
+                        // Bluetooth Keyboard / PC Input Item
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Keyboard,
+                                        contentDescription = null,
+                                        tint = if (isBluetoothConnected) NeonCyan else if (isAutoSendEnabled) CyberLime else AmberGold,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text("Bluetooth Klavye & PC Girişi", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
+                                        Text(
+                                            if (isBluetoothConnected) "Bilgisayara bağlı • ${if (isAutoSendEnabled) "Oto Gönder AÇIK" else "Hazır"}"
+                                            else "Bilgisayara kablosuz tuşla",
+                                            fontSize = 11.sp,
+                                            color = OnDarkSurfaceVariant
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = {
+                                expandedMoreMenu = false
+                                onOpenBluetooth()
+                            }
+                        )
+
                         // Scan History Item
                         DropdownMenuItem(
                             text = {
