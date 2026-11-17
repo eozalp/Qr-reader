@@ -33,11 +33,11 @@ class ProfileRepository(private val context: Context) {
 
     init {
         scope.launch {
-            loadInitialProfiles()
+            reloadFromDisk()
         }
     }
 
-    private suspend fun loadInitialProfiles() {
+    suspend fun reloadFromDisk() {
         val prefs = context.dataStore.data.first()
         val jsonStr = prefs[KEY_PROFILES]
         val activeId = prefs[KEY_ACTIVE_ID]
@@ -504,6 +504,62 @@ class ProfileRepository(private val context: Context) {
                                 ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "BİRİM ORAN", prefix = "₺", postfix = "/gr", coordinate = "A4", isEmphasized = true)
                             )
                         )
+                    )
+                ),
+                // 7. Enflasyon & Tarihli Maliyet (Müşteri Fiyat Ekranı)
+                QrProfile(
+                    id = "preset_inflation_date",
+                    name = "Enflasyon & Tarihli Fiyat",
+                    description = "Format: 'SKU-Maliyet-Tarih' (örn: SKU01-1000-20250115), aylık enflasyonla güncel satış fiyatını bulur",
+                    triggerSignal = "SKU",
+                    parsingRules = QrParsingRules(
+                        delimiter = "-",
+                        variables = listOf(
+                            VariableDefinition(position = 0, name = "sku", alias = "kod", dataType = FieldDataType.STRING, defaultValue = "SKU01"),
+                            VariableDefinition(position = 1, name = "maliyet", alias = "cost", dataType = FieldDataType.DOUBLE, prefix = "₺", defaultValue = "1000"),
+                            VariableDefinition(position = 2, name = "tarih", alias = "date", dataType = FieldDataType.DATE, defaultValue = "20250115"),
+                            VariableDefinition(position = -1, name = "aylik_enf", dataType = FieldDataType.DOUBLE, isManual = true, defaultValue = "3.5", postfix = "%"),
+                            VariableDefinition(position = -1, name = "kar", dataType = FieldDataType.DOUBLE, isManual = true, defaultValue = "20", postfix = "%")
+                        )
+                    ),
+                    formula = ArithmeticFormula(
+                        expression = "maliyet * (1 + aylik_enf / 100) ^ max(0, ay_farki(bugun, tarih)) * (1 + kar / 100)",
+                        description = "Operatör ve tarih bileşenleri ile bileşik fiyat formülü"
+                    ),
+                    formatting = ResultFormatting(
+                        decimalPrecision = 2,
+                        prefix = "₺",
+                        postfix = " TL",
+                        decimalSeparator = ",",
+                        thousandsSeparator = ".",
+                        roundingMode = AppRoundingMode.ROUND_HALF_UP
+                    ),
+                    overlay = OverlayAppearance(
+                        textColorHex = "#00F5D4",
+                        borderColorHex = "#00F5D4",
+                        backgroundColorHex = "#071324",
+                        gradientColorEndHex = "#0B2942",
+                        fillMode = OverlayFillMode.FILLED_GRADIENT,
+                        iconName = "sparkle",
+                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
+                        customerPriceOnly = true,
+                        tableConfig = ExcelTableConfig(
+                            headerTitle = "GÜNCEL SATIŞ FİYATI",
+                            headerSubtitle = "ENFLASYON HESAPLAMA",
+                            gridTheme = ExcelGridTheme.NEON_CYAN,
+                            items = listOf(
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "sku", label = "Ürün Kodu", coordinate = "A1"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "tarih", label = "Alış Tarihi", coordinate = "A2"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "maliyet", label = "Baz Maliyet", prefix = "₺", coordinate = "A3"),
+                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "GÜNCEL FİYAT", prefix = "₺", postfix = " TL", coordinate = "A4", isEmphasized = true)
+                            )
+                        )
+                    ),
+                    bluetoothKeyboard = BluetoothKeyboardConfig(
+                        sendTarget = KeyboardSendTarget.MULTIPLE_VARIABLES,
+                        selectedVariables = listOf("sku", "maliyet"),
+                        variableSeparator = "\t",
+                        endingKey = KeyboardEndingKey.ENTER
                     )
                 )
             )

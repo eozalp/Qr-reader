@@ -165,6 +165,10 @@ fun SettingsScreen(
                         onRulesChanged = { updatedRules ->
                             profileRepository.saveProfile(activeProfile.copy(parsingRules = updatedRules))
                         },
+                        formula = activeProfile.formula,
+                        onFormulaChanged = { updatedFormula ->
+                            profileRepository.saveProfile(activeProfile.copy(formula = updatedFormula))
+                        },
                         formatting = activeProfile.formatting,
                         onFormattingChanged = { updatedFormat ->
                             profileRepository.saveProfile(activeProfile.copy(formatting = updatedFormat))

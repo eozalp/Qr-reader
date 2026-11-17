@@ -1,10 +1,16 @@
 package com.example.ui.settings
 
+import android.content.Context
+import android.content.Intent
+import android.provider.Settings
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -25,9 +31,12 @@ import com.example.bluetooth.BluetoothHidManager
 import com.example.bluetooth.HidConnectionStatus
 import com.example.model.BluetoothKeyboardConfig
 import com.example.model.KeyboardEndingKey
+import com.example.model.KeyboardLayoutType
 import com.example.model.KeyboardSendTarget
 import com.example.model.VariableDefinition
 import com.example.ui.theme.AmberGold
+import com.example.ui.theme.CyberLime
+import com.example.ui.theme.ElectricIndigo
 import com.example.ui.theme.NeonCyan
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -50,8 +59,17 @@ fun BluetoothKeyboardSection(
 
     val connectionStatus by manager.connectionStatus.collectAsState()
     val connectedDeviceName by manager.connectedDeviceName.collectAsState()
+    val connectionDiagnostic by manager.connectionDiagnostic.collectAsState()
     val recentLogs by manager.recentLogs.collectAsState()
     val pairedDevices by manager.pairedDevices.collectAsState()
+    val batchSentMap by manager.batchSentMap.collectAsState()
+
+    val isLocalImeEnabled = remember(context) {
+        runCatching {
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.enabledInputMethodList?.any { it.packageName == context.packageName } == true
+        }.getOrDefault(false)
+    }
 
     var testInputText by remember { mutableStateOf("ALVETAK-PC-TEST") }
     var isSendingTest by remember { mutableStateOf(false) }
@@ -152,6 +170,49 @@ fun BluetoothKeyboardSection(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
+                    if (!connectionDiagnostic.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "ℹ $connectionDiagnostic",
+                            fontSize = 11.sp,
+                            color = AmberGold,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    if (connectionStatus == HidConnectionStatus.DISCONNECTED || connectionStatus == HidConnectionStatus.CONNECTING) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    runCatching { context.startActivity(manager.makeDiscoverableIntent()) }
+                                },
+                                modifier = Modifier.weight(1f).height(44.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp)
+                            ) {
+                                Icon(Icons.Default.BluetoothSearching, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Görünür Yap (PC)", fontSize = 11.sp, maxLines = 1)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    runCatching { context.startActivity(manager.openBluetoothSettingsIntent()) }
+                                },
+                                modifier = Modifier.weight(1f).height(44.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp)
+                            ) {
+                                Icon(Icons.Default.SettingsBluetooth, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("BT Ayarları", fontSize = 11.sp, maxLines = 1)
+                            }
+                        }
+                    }
+
                     // Paired Device List
                     if (connectionStatus == HidConnectionStatus.DISCONNECTED && pairedDevices.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(10.dp))
@@ -174,7 +235,7 @@ fun BluetoothKeyboardSection(
                                         .clickable { manager.connectToDevice(dev.address) }
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
@@ -187,6 +248,88 @@ fun BluetoothKeyboardSection(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1b. Local Phone IME Keyboard Card (Chrome / Mobile Forms)
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)),
+                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, ElectricIndigo.copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.PhoneAndroid, contentDescription = null, tint = NeonCyan, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "TELEFON İÇİ KLAVYE (CHROME / FORM)",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                letterSpacing = 0.5.sp
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isLocalImeEnabled) CyberLime.copy(alpha = 0.2f) else AmberGold.copy(alpha = 0.2f)
+                        ) {
+                            Text(
+                                text = if (isLocalImeEnabled) "ETKİN ✓" else "KURULUM",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isLocalImeEnabled) CyberLime else AmberGold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Chrome, ERP veya Excel mobil formunda klavye simgesine dokunup 'ALVETAK QR Klavye'yi seçin: altta kamera okur, yukarıdaki kutuya Tab+Enter ile yazar.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_INPUT_METHOD_SETTINGS).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                    )
+                                }
+                            },
+                            modifier = Modifier.weight(1f).height(44.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("1. Ayarlardan Aç", fontSize = 11.sp)
+                        }
+                        Button(
+                            onClick = {
+                                val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                                imm?.showInputMethodPicker()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = ElectricIndigo, contentColor = Color.White),
+                            modifier = Modifier.weight(1f).height(44.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("2. Klavyeyi Seç", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -229,9 +372,11 @@ fun BluetoothKeyboardSection(
                                     coroutineScope.launch {
                                         manager.sendToComputer(
                                             textToSend = testInputText,
+                                            rawBarcodeKey = testInputText,
                                             endingKey = config.endingKey,
                                             typingDelayMs = config.typingDelayMs,
-                                            convertTurkishChars = config.convertTurkishChars
+                                            convertTurkishChars = config.convertTurkishChars,
+                                            keyboardLayout = config.keyboardLayout
                                         )
                                         isSendingTest = false
                                     }
@@ -349,7 +494,12 @@ fun BluetoothKeyboardSection(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Spacer(modifier = Modifier.height(6.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                            ) {
                                 availableVariables.forEach { variable ->
                                     val isChosen = config.selectedVariableName == variable.name ||
                                             (config.selectedVariableName.isBlank() && availableVariables.firstOrNull() == variable)
@@ -372,7 +522,12 @@ fun BluetoothKeyboardSection(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Spacer(modifier = Modifier.height(6.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                            ) {
                                 availableVariables.forEach { variable ->
                                     val inList = if (config.selectedVariables.isEmpty()) true else config.selectedVariables.contains(variable.name)
                                     FilterChip(
@@ -394,7 +549,12 @@ fun BluetoothKeyboardSection(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Spacer(modifier = Modifier.height(4.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                                 listOf(
                                     "\t" to "Tab ⇥ (Excel Sütunu)",
                                     " " to "Boşluk",
@@ -402,7 +562,8 @@ fun BluetoothKeyboardSection(
                                     ";" to "Noktalı Virgül"
                                 ).forEach { (sep, label) ->
                                     val isSepSelected = config.variableSeparator == sep
-                                    SuggestionChip(
+                                    FilterChip(
+                                        selected = isSepSelected,
                                         onClick = { onConfigChanged(config.copy(variableSeparator = sep)) },
                                         label = { Text(label, fontSize = 11.sp) }
                                     )
@@ -463,36 +624,123 @@ fun BluetoothKeyboardSection(
             }
         }
 
-        // 6. Turkish Transliteration Toggle
+        // 6. Batch Sayım Güvenliği, Klavye Düzeni (TR-Q / US-Q) & Yazım Hızı
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Türkçe Karakterleri Dönüştür (ç->c, ş->s vb.)",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
+                    // Batch Duplicate Guard
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Batch Sayım: Tekrar Okumada Onay İste",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                            Text(
+                                text = "Aynı barkod bir kez gönderildikten sonra kilitlenir; tekrar okunursa onay sorar (${batchSentMap.values.sumOf { it.count }} okuma)",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = config.requireDuplicateConfirmation,
+                            onCheckedChange = { onConfigChanged(config.copy(requireDuplicateConfirmation = it)) }
                         )
+                    }
+
+                    if (batchSentMap.isNotEmpty()) {
+                        OutlinedButton(
+                            onClick = { manager.resetBatchSession() },
+                            modifier = Modifier.fillMaxWidth().height(42.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, tint = AmberGold, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "Sayım Oturumunu Sıfırla (${batchSentMap.size} farklı SKU)",
+                                color = AmberGold,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+
+                    // Target PC Keyboard Layout
+                    Column {
                         Text(
-                            text = "Yabancı US klavye düzenine sahip ERP ve terminallerde karakter kaybını engeller",
+                            text = "HEDEF BİLGİSAYAR KLAVYE DÜZENİ",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Nokta/tire ve Türkçe karakterlerin bozulmaması için bilgisayarınızın düzenini seçin:",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            KeyboardLayoutType.entries.forEach { layout ->
+                                FilterChip(
+                                    selected = config.keyboardLayout == layout,
+                                    onClick = {
+                                        onConfigChanged(
+                                            config.copy(
+                                                keyboardLayout = layout,
+                                                convertTurkishChars = (layout == KeyboardLayoutType.US_Q)
+                                            )
+                                        )
+                                    },
+                                    label = { Text(layout.label, fontSize = 12.sp) }
+                                )
+                            }
+                        }
                     }
-                    Switch(
-                        checked = config.convertTurkishChars,
-                        onCheckedChange = { onConfigChanged(config.copy(convertTurkishChars = it)) }
-                    )
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+
+                    // Typing Speed Presets
+                    Column {
+                        Text(
+                            text = "TUŞ YAZIM HIZI",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf(
+                                3L to "Çok Hızlı (3ms)",
+                                5L to "Dengeli (5ms)",
+                                12L to "Güvenli Eski PC (12ms)"
+                            ).forEach { (ms, label) ->
+                                FilterChip(
+                                    selected = config.typingDelayMs == ms,
+                                    onClick = { onConfigChanged(config.copy(typingDelayMs = ms)) },
+                                    label = { Text(label, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

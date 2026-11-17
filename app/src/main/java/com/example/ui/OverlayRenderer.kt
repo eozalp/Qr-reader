@@ -183,6 +183,7 @@ fun PinnedFullWidthOverlayCard(
     onUnpin: () -> Unit,
     onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     onSendToComputer: ((textToSend: String?, varName: String?) -> Unit)? = null,
+    onToggleCustomerMode: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -296,63 +297,71 @@ fun PinnedFullWidthOverlayCard(
                     }
                 }
 
-                // Dismiss / Unpin Button (Click to unpin and resume scanning)
-                FilledTonalIconButton(
-                    onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onUnpin()
-                    },
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledTonalIconButtonColors(
-                        containerColor = Color(0xFF00F5D4),
-                        contentColor = Color(0xFF00382E)
-                    ),
-                    modifier = Modifier
-                        .size(36.dp)
-                        .testTag("unpin_overlay_button")
+                // Right actions: Customer Mode quick toggle + Unpin
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Sabitlemeyi kaldır ve taramaya dön",
-                        modifier = Modifier.size(18.dp)
-                    )
+                    if (onToggleCustomerMode != null) {
+                        FilledTonalIconButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onToggleCustomerMode()
+                            },
+                            shape = CircleShape,
+                            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = if (config.customerPriceOnly) Color(0xFF00F5D4) else Color(0xFF1E293B),
+                                contentColor = if (config.customerPriceOnly) Color(0xFF00382E) else Color.White
+                            ),
+                            modifier = Modifier
+                                .size(38.dp)
+                                .testTag("pinned_customer_mode_toggle")
+                        ) {
+                            Icon(
+                                imageVector = if (config.customerPriceOnly) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (config.customerPriceOnly) "Müşteri Modu Açık (Maliyeti Gizle)" else "Müşteri Moduna Geç",
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    // Dismiss / Unpin Button (Click to unpin and resume scanning)
+                    FilledTonalIconButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onUnpin()
+                        },
+                        shape = CircleShape,
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = Color(0xFF00F5D4),
+                            contentColor = Color(0xFF00382E)
+                        ),
+                        modifier = Modifier
+                            .size(38.dp)
+                            .testTag("unpin_overlay_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Sabitlemeyi kaldır ve taramaya dön",
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Full-width card content according to current display mode
-            when (config.displayMode) {
-                OverlayDisplayMode.EXCEL_TABLE -> {
-                    ExcelTableOverlayContent(
-                        result = tracked.result,
-                        config = config.copy(scale = 1.0f),
-                        attachment = tracked.attachment,
-                        onAttachmentClick = onAttachmentClick,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                OverlayDisplayMode.COMPACT_CARD -> {
-                    CompactCardOverlayContent(
-                        result = tracked.result,
-                        config = config.copy(scale = 1.0f, autoWidth = false, customWidth = 600f),
-                        attachment = tracked.attachment,
-                        onAttachmentClick = onAttachmentClick,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                OverlayDisplayMode.HYBRID -> {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        CompactCardOverlayContent(
-                            result = tracked.result,
-                            config = config.copy(scale = 1.0f, autoWidth = false, customWidth = 600f),
-                            attachment = tracked.attachment,
-                            onAttachmentClick = onAttachmentClick,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+            // Full-width card content according to customerPriceOnly or current display mode
+            if (config.customerPriceOnly) {
+                CustomerPriceOnlyCardContent(
+                    result = tracked.result,
+                    config = config.copy(scale = 1.0f),
+                    attachment = tracked.attachment,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                when (config.displayMode) {
+                    OverlayDisplayMode.EXCEL_TABLE -> {
                         ExcelTableOverlayContent(
                             result = tracked.result,
                             config = config.copy(scale = 1.0f),
@@ -360,6 +369,36 @@ fun PinnedFullWidthOverlayCard(
                             onAttachmentClick = onAttachmentClick,
                             modifier = Modifier.fillMaxWidth()
                         )
+                    }
+                    OverlayDisplayMode.COMPACT_CARD -> {
+                        CompactCardOverlayContent(
+                            result = tracked.result,
+                            config = config.copy(scale = 1.0f, autoWidth = false, customWidth = 600f),
+                            attachment = tracked.attachment,
+                            onAttachmentClick = onAttachmentClick,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    OverlayDisplayMode.HYBRID -> {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CompactCardOverlayContent(
+                                result = tracked.result,
+                                config = config.copy(scale = 1.0f, autoWidth = false, customWidth = 600f),
+                                attachment = tracked.attachment,
+                                onAttachmentClick = onAttachmentClick,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            ExcelTableOverlayContent(
+                                result = tracked.result,
+                                config = config.copy(scale = 1.0f),
+                                attachment = tracked.attachment,
+                                onAttachmentClick = onAttachmentClick,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                 }
             }
@@ -436,58 +475,69 @@ fun PinnedFullWidthOverlayCard(
                     )
                 }
 
-                // Copy Raw Barcode Button
-                FilledTonalButton(
-                    onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        clipboardManager.setText(AnnotatedString(tracked.rawContent))
-                        Toast.makeText(context, "Ham barkod kopyalandı", Toast.LENGTH_SHORT).show()
-                    },
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = Color(0xFF0E222E),
-                        contentColor = Color(0xFF38BDF8)
-                    ),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(38.dp)
-                        .testTag("copy_raw_button"),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.DataObject,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Ham Veri",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1
-                    )
+                // Copy Raw Barcode Button (Hidden when customerPriceOnly so customer doesn't see cost barcode)
+                if (!config.customerPriceOnly) {
+                    FilledTonalButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            clipboardManager.setText(AnnotatedString(tracked.rawContent))
+                            Toast.makeText(context, "Ham barkod kopyalandı", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = Color(0xFF0E222E),
+                            contentColor = Color(0xFF38BDF8)
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(38.dp)
+                            .testTag("copy_raw_button"),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DataObject,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Ham Veri",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                    }
                 }
 
                 // Share Button
                 FilledTonalButton(
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        val varsBreakdown = tracked.result.extractedVariables.entries.joinToString("\n") { (k, v) -> "• $k: $v" }
-                        val shareContent = buildString {
-                            appendLine("📊 QR Barkod Canlı Hesaplama Özeti")
-                            appendLine("Format: ${tracked.result.formatName}")
-                            appendLine("Ham Barkod Verisi: ${tracked.rawContent}")
-                            if (varsBreakdown.isNotBlank()) {
-                                appendLine("\nDeğişkenler:\n$varsBreakdown")
+                        val shareContent = if (config.customerPriceOnly) {
+                            buildString {
+                                tracked.attachment?.title?.takeIf { it.isNotBlank() }?.let {
+                                    appendLine(it)
+                                }
+                                appendLine("Satış Fiyatı: $resultText")
                             }
-                            appendLine("\nHesaplanan Nihai Sonuç: $resultText")
+                        } else {
+                            val varsBreakdown = tracked.result.extractedVariables.entries.joinToString("\n") { (k, v) -> "• $k: $v" }
+                            buildString {
+                                appendLine("📊 QR Barkod Canlı Hesaplama Özeti")
+                                appendLine("Format: ${tracked.result.formatName}")
+                                appendLine("Ham Barkod Verisi: ${tracked.rawContent}")
+                                if (varsBreakdown.isNotBlank()) {
+                                    appendLine("\nDeğişkenler:\n$varsBreakdown")
+                                }
+                                appendLine("\nHesaplanan Nihai Sonuç: $resultText")
+                            }
                         }
                         val shareIntent = Intent(Intent.ACTION_SEND).apply {
                             type = "text/plain"
                             putExtra(Intent.EXTRA_TEXT, shareContent)
-                            putExtra(Intent.EXTRA_SUBJECT, "Barkod Hesaplama - $resultText")
+                            putExtra(Intent.EXTRA_SUBJECT, "ALVETAK QR - $resultText")
                         }
-                        context.startActivity(Intent.createChooser(shareIntent, "Barkod Sonucunu Paylaş"))
+                        context.startActivity(Intent.createChooser(shareIntent, "Sonucu Paylaş"))
                     },
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
@@ -690,7 +740,7 @@ fun QrTrackingHudElement(
 }
 
 /**
- * Main overlay router: dispatches between Mini Excel Table, Compact Card, or Hybrid mode.
+ * Main overlay router: dispatches between Customer-Price-Only, Mini Excel Table, Compact Card, or Hybrid mode.
  */
 @Composable
 fun OverlayCardContent(
@@ -700,6 +750,16 @@ fun OverlayCardContent(
     onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    if (config.customerPriceOnly) {
+        CustomerPriceOnlyCardContent(
+            result = result,
+            config = config,
+            attachment = attachment,
+            modifier = modifier
+        )
+        return
+    }
+
     when (config.displayMode) {
         OverlayDisplayMode.EXCEL_TABLE -> {
             ExcelTableOverlayContent(
@@ -737,6 +797,100 @@ fun OverlayCardContent(
                     attachment = attachment,
                     onAttachmentClick = onAttachmentClick
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Clean Customer-Facing Display Card ("Müşteri Ekranı"):
+ * Shows ONLY the final calculated selling price (and optional public title),
+ * completely hiding wholesale cost, barcode date, inflation rate, and raw QR tokens.
+ */
+@Composable
+fun CustomerPriceOnlyCardContent(
+    result: ParsedQrResult,
+    config: OverlayAppearance,
+    attachment: QrAttachment? = null,
+    modifier: Modifier = Modifier
+) {
+    val cornerRadius = config.cornerRadiusDp.coerceAtLeast(14f).dp
+    val shape = RoundedCornerShape(cornerRadius)
+    val accentColor = parseHexColor(config.borderColorHex)
+    val textColor = parseHexColor(config.textColorHex)
+    val bgColor = parseHexColor(config.backgroundColorHex).copy(alpha = 0.94f)
+
+    Box(
+        modifier = modifier
+            .graphicsLayer {
+                scaleX = config.scale
+                scaleY = config.scale
+            }
+            .shadow(elevation = 14.dp, shape = shape, ambientColor = accentColor, spotColor = accentColor)
+            .border(1.5.dp, accentColor, shape)
+            .background(bgColor, shape)
+            .clip(shape)
+            .widthIn(min = 170.dp, max = 320.dp)
+            .padding(horizontal = 18.dp, vertical = 14.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            if (attachment != null && attachment.title.isNotBlank()) {
+                Text(
+                    text = attachment.title,
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = accentColor.copy(alpha = 0.16f)
+            ) {
+                Text(
+                    text = "SATIŞ FİYATI",
+                    color = accentColor,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 1.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            when (val status = result.status) {
+                is CalculationStatus.Success -> {
+                    Text(
+                        text = status.formattedText,
+                        color = textColor,
+                        fontSize = (config.fontSizeSp * 1.25f).coerceIn(22f, 40f).sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                is CalculationStatus.ParseError -> {
+                    Text(
+                        text = "Fiyat Hesaplanamadı",
+                        color = Color(0xFFFCA5A5),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                is CalculationStatus.EvaluationError -> {
+                    Text(
+                        text = "Fiyat Hesaplanamadı",
+                        color = Color(0xFFFDE68A),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
         }
     }

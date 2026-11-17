@@ -1100,4 +1100,125 @@ class QrEngineComprehensiveTest {
         assertEquals("PDF417", pdfTracked.formatName)
         assertEquals(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_PDF417, pdfTracked.barcodeFormat)
     }
+
+    // --- Composable Data Types, Operators & Formula Builder Primitives ---
+
+    @Test
+    fun testDateFormatsParsingAndDerivedVariables() {
+        assertEquals(java.time.LocalDate.of(2024, 1, 15), QrParser.parseBarcodeDate("20240115"))
+        assertEquals(java.time.LocalDate.of(2024, 1, 15), QrParser.parseBarcodeDate("15.01.2024"))
+        assertEquals(java.time.LocalDate.of(2024, 1, 15), QrParser.parseBarcodeDate("2024-01-15"))
+        assertEquals(java.time.LocalDate.of(2024, 1, 15), QrParser.parseBarcodeDate("15/01/2024"))
+        assertNull(QrParser.parseBarcodeDate("not-a-date"))
+
+        val rules = QrParsingRules(
+            delimiter = "-",
+            variables = listOf(
+                VariableDefinition(position = 0, name = "maliyet", dataType = FieldDataType.DOUBLE),
+                VariableDefinition(position = 1, name = "tarih", dataType = FieldDataType.DATE)
+            )
+        )
+
+        val outcome = QrParser.parse("1000-20240115", rules)
+        assertTrue("Expected Success, got $outcome", outcome is QrParseOutcome.Success)
+        val success = outcome as QrParseOutcome.Success
+
+        assertEquals(1000.0, success.numericVariables["maliyet"]!!, 1e-6)
+        assertEquals("15.01.2024", success.stringVariables["tarih"])
+        val epochDay = java.time.LocalDate.of(2024, 1, 15).toEpochDay().toDouble()
+        assertEquals(epochDay, success.numericVariables["tarih"]!!, 1e-6)
+        assertTrue((success.numericVariables["tarih_gun"] ?: -1.0) >= 0.0)
+        assertTrue((success.numericVariables["tarih_ay"] ?: -1.0) >= 0.0)
+        assertTrue((success.numericVariables["tarih_yil"] ?: -1.0) >= 0.0)
+    }
+
+    @Test
+    fun testBooleanDataTypeAndTypeEnforcement() {
+        val rules = QrParsingRules(
+            delimiter = "-",
+            variables = listOf(
+                VariableDefinition(position = 0, name = "adet", dataType = FieldDataType.INTEGER),
+                VariableDefinition(position = 1, name = "indirimli", dataType = FieldDataType.BOOLEAN),
+                VariableDefinition(position = 2, name = "fiyat", dataType = FieldDataType.DOUBLE)
+            )
+        )
+
+        val outcome = QrParser.parse("3.9-evet-100", rules)
+        assertTrue(outcome is QrParseOutcome.Success)
+        val success = outcome as QrParseOutcome.Success
+
+        // INTEGER truncates 3.9 -> 3.0
+        assertEquals(3.0, success.numericVariables["adet"]!!, 1e-6)
+        // BOOLEAN parses "evet" -> 1.0 & "Doğru"
+        assertEquals(1.0, success.numericVariables["indirimli"]!!, 1e-6)
+        assertEquals("Doğru", success.stringVariables["indirimli"])
+
+        val res = evaluator.evaluate(
+            "if(indirimli && adet >= 3, fiyat * adet * 0.85, fiyat * adet)",
+            success.numericVariables,
+            success.stringVariables
+        )
+        assertTrue(res is MathResult.Success)
+        assertEquals(255.0, (res as MathResult.Success).value, 1e-6)
+    }
+
+    @Test
+    fun testComposableOperatorsDatePrimitivesAndUserBuiltFormula() {
+        val date12MoAgo = java.time.LocalDate.now().minusMonths(12).toEpochDay().toDouble()
+        val vars = mapOf("tarih" to date12MoAgo, "maliyet" to 1000.0, "aylik_oran" to 4.0)
+
+        // Day difference: bugun - tarih (~365/366 days)
+        val daysRes = evaluator.evaluate("bugun - tarih", vars)
+        assertTrue(daysRes is MathResult.Success)
+        assertTrue((daysRes as MathResult.Success).value >= 364.0)
+
+        // Calendar accessors: year(date(2025, 7, 19)), month(...), day(...)
+        assertEquals(2025.0, (evaluator.evaluate("year(date(2025, 7, 19))", emptyMap()) as MathResult.Success).value, 1e-6)
+        assertEquals(7.0, (evaluator.evaluate("month(date(2025, 7, 19))", emptyMap()) as MathResult.Success).value, 1e-6)
+        assertEquals(19.0, (evaluator.evaluate("day(date(2025, 7, 19))", emptyMap()) as MathResult.Success).value, 1e-6)
+
+        // User-composed compound calculation built purely with operators & primitives (no hardcoded formula!):
+        val userBuiltRes = evaluator.evaluate(
+            "round(maliyet * (1 + aylik_oran / 100) ^ max(0, ay_farki(bugun, tarih)), 2)",
+            vars
+        )
+        assertTrue(userBuiltRes is MathResult.Success)
+        val valComputed = (userBuiltRes as MathResult.Success).value
+        assertTrue("Expected ~1580..1620, got $valComputed", valComputed in 1550.0..1650.0)
+
+        // Ensure hardcoded domain black-box function is gone
+        val removedRes = evaluator.evaluate("enflasyon_ay(maliyet, tarih, 4)", vars)
+        assertTrue(removedRes is MathResult.Error)
+    }
+
+    @Test
+    fun testStringOperatorsTernaryAndShortCircuitMathTools() {
+        val numVars = mapOf("fiyat" to 500.0, "bolen" to 0.0)
+        val strVars = mapOf("sku" to "ALTIN-24K-015")
+
+        // Ternary + string comparison / starts_with / substr / num
+        val expr1 = """starts_with(sku, "ALTIN") ? fiyat + num(substr(sku, 10, 3)) : fiyat"""
+        val r1 = evaluator.evaluate(expr1, numVars, strVars)
+        assertTrue("Expected Success, got $r1", r1 is MathResult.Success)
+        assertEquals(515.0, (r1 as MathResult.Success).value, 1e-6)
+
+        // Short-circuit if() prevents division by zero on untaken branch!
+        val r2 = evaluator.evaluate("if(bolen != 0, fiyat / bolen, clamp(fiyat, 100, 400))", numVars, strVars)
+        assertTrue("Expected short-circuit Success, got $r2", r2 is MathResult.Success)
+        assertEquals(400.0, (r2 as MathResult.Success).value, 1e-6)
+
+        // Math helpers: floor, ceil, trunc, round(x, 2), len()
+        assertEquals(12.0, (evaluator.evaluate("floor(12.9)", emptyMap()) as MathResult.Success).value, 1e-6)
+        assertEquals(13.0, (evaluator.evaluate("ceil(12.1)", emptyMap()) as MathResult.Success).value, 1e-6)
+        assertEquals(3.14, (evaluator.evaluate("round(3.14159, 2)", emptyMap()) as MathResult.Success).value, 1e-6)
+        assertEquals(13.0, (evaluator.evaluate("len(sku)", numVars, strVars) as MathResult.Success).value, 1e-6)
+    }
+
+    @Test
+    fun testCustomerPriceOnlySerialization() {
+        val overlay = OverlayAppearance(customerPriceOnly = true)
+        val json = overlay.toJson()
+        val restored = OverlayAppearance.fromJson(json)
+        assertTrue(restored.customerPriceOnly)
+    }
 }

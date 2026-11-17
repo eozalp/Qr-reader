@@ -8,11 +8,13 @@ import java.util.UUID
 /**
  * Data types supported for QR parsed variables.
  */
-enum class FieldDataType {
-    INTEGER,
-    FLOAT,
-    DOUBLE,
-    STRING
+enum class FieldDataType(val label: String) {
+    INTEGER("Tam Sayı (Int)"),
+    FLOAT("Ondalıklı (Float)"),
+    DOUBLE("Hassas Sayı (Double)"),
+    BOOLEAN("Mantıksal (Bool)"),
+    STRING("Metin (String)"),
+    DATE("Tarih (Date)")
 }
 
 /**
@@ -483,7 +485,8 @@ data class OverlayAppearance(
     val showAnchorDot: Boolean = true,
     val showBarcodeDashedOutline: Boolean = true,
     val leaderLineWidthDp: Float = 1.5f,
-    val leaderLineColorHex: String = "" // empty = use borderColorHex
+    val leaderLineColorHex: String = "", // empty = use borderColorHex
+    val customerPriceOnly: Boolean = false // If true, hides costs/inputs and shows ONLY final price to customer
 ) {
     fun toJson(): JSONObject {
         return JSONObject().apply {
@@ -531,6 +534,7 @@ data class OverlayAppearance(
             put("showBarcodeDashedOutline", showBarcodeDashedOutline)
             put("leaderLineWidthDp", leaderLineWidthDp.toDouble())
             put("leaderLineColorHex", leaderLineColorHex)
+            put("customerPriceOnly", customerPriceOnly)
         }
     }
 
@@ -601,7 +605,8 @@ data class OverlayAppearance(
                 showAnchorDot = json.optBoolean("showAnchorDot", true),
                 showBarcodeDashedOutline = json.optBoolean("showBarcodeDashedOutline", true),
                 leaderLineWidthDp = json.optDouble("leaderLineWidthDp", 1.5).toFloat(),
-                leaderLineColorHex = json.optString("leaderLineColorHex", "")
+                leaderLineColorHex = json.optString("leaderLineColorHex", ""),
+                customerPriceOnly = json.optBoolean("customerPriceOnly", false)
             )
         }
     }

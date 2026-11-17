@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">ALVETAK QR</string>
+    <string name="ime_label">ALVETAK QR Klavye</string>
+    <string name="ime_subtype_barcode">Türkçe (Barkod &amp; QR Kamera)</string>
 </resources>

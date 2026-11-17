@@ -82,6 +82,21 @@ object ResultFormatter {
             effPostfix = if (effPostfix.isEmpty()) "%" else "$effPostfix%"
         }
 
+        if (varDef.dataType == FieldDataType.BOOLEAN) {
+            val boolText = if (abs(value) >= 0.5) "Doğru" else "Yanlış"
+            return "$effPrefix$boolText$effPostfix"
+        }
+
+        if (varDef.dataType == FieldDataType.DATE) {
+            val dateText = runCatching {
+                java.time.LocalDate.ofEpochDay(value.toLong())
+                    .format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy"))
+            }.getOrNull()
+            if (dateText != null) {
+                return "$effPrefix$dateText$effPostfix"
+            }
+        }
+
         return formatCore(
             value = value,
             precision = precision,

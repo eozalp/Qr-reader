@@ -142,21 +142,25 @@ class QrTracker {
                 // Pre-compute formatted display string for each variable pill with its individual prefix, postfix, and decimal settings
                 val pillDisplay = mutableMapOf<String, String>()
                 for (v in profile.parsingRules.variables) {
+                    val strVal = parseOutcome.stringVariables[v.name]
                     val numVal = parseOutcome.numericVariables[v.name]
-                    if (numVal != null) {
+                    if ((v.dataType == com.example.model.FieldDataType.DATE || v.dataType == com.example.model.FieldDataType.STRING || v.dataType == com.example.model.FieldDataType.BOOLEAN) && strVal != null) {
+                        val displayStr = "${v.prefix}$strVal${v.postfix}"
+                        pillDisplay[v.name] = displayStr
+                        if (v.alias.isNotBlank()) {
+                            pillDisplay[v.alias] = displayStr
+                        }
+                    } else if (numVal != null) {
                         val displayStr = ResultFormatter.formatVariable(numVal, v, profile.formatting)
                         pillDisplay[v.name] = displayStr
                         if (v.alias.isNotBlank()) {
                             pillDisplay[v.alias] = displayStr
                         }
-                    } else {
-                        val strVal = parseOutcome.stringVariables[v.name]
-                        if (strVal != null) {
-                            val displayStr = "${v.prefix}$strVal${v.postfix}"
-                            pillDisplay[v.name] = displayStr
-                            if (v.alias.isNotBlank()) {
-                                pillDisplay[v.alias] = displayStr
-                            }
+                    } else if (strVal != null) {
+                        val displayStr = "${v.prefix}$strVal${v.postfix}"
+                        pillDisplay[v.name] = displayStr
+                        if (v.alias.isNotBlank()) {
+                            pillDisplay[v.alias] = displayStr
                         }
                     }
                 }
@@ -182,7 +186,7 @@ class QrTracker {
                     )
                 } else if (profile.formula.expression.isNotBlank()) {
                     // Graceful formula evaluation fallback when no computed variables defined
-                    when (val evalOutcome = mathEvaluator.evaluate(profile.formula.expression, parseOutcome.numericVariables)) {
+                    when (val evalOutcome = mathEvaluator.evaluate(profile.formula.expression, parseOutcome.numericVariables, parseOutcome.stringVariables)) {
                         is MathResult.Success -> {
                             val formatted = ResultFormatter.format(evalOutcome.value, profile.formatting)
                             ParsedQrResult(

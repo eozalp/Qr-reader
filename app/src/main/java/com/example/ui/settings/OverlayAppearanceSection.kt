@@ -204,6 +204,47 @@ fun OverlayAppearanceSection(
             }
         }
 
+        // Müşteri Fiyat Ekranı Modu (Sadece Nihai Fiyatı Göster / Maliyeti Gizle)
+        item {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (overlay.customerPriceOnly) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    }
+                ),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text(
+                            text = "Müşteri Fiyat Ekranı Modu",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Açıkken ekranda sadece hesaplanan nihai satış fiyatı gösterilir; maliyet, alış tarihi, enflasyon oranı ve ham barkod müşteriden gizlenir.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = overlay.customerPriceOnly,
+                        onCheckedChange = { onOverlayChanged(overlay.copy(customerPriceOnly = it)) },
+                        modifier = Modifier.testTag("customer_price_only_switch")
+                    )
+                }
+            }
+        }
+
         // Multi-QR Callout Layout & Bonded Leader Lines (Anti-Overlap)
         item {
             Card(

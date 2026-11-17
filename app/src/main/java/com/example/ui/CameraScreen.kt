@@ -61,6 +61,8 @@ import com.example.ui.attachments.LinkedAttachmentsSheet
 import com.example.ui.components.BarcodeFormatOptionsSheet
 import com.example.ui.components.ScanHistorySheet
 import com.example.ui.components.BluetoothKeyboardSheet
+import com.example.bluetooth.AutoSendDecision
+import com.example.bluetooth.BatchSentEntry
 import com.example.bluetooth.BluetoothHidManager
 import com.example.bluetooth.HidConnectionStatus
 import android.os.Build
@@ -126,8 +128,11 @@ fun CameraScreen(
     // Bluetooth HID Keyboard Manager & State
     val hidManager = remember { BluetoothHidManager(context) }
     val bluetoothConnectionStatus by hidManager.connectionStatus.collectAsState()
+    val batchSentMap by hidManager.batchSentMap.collectAsState()
     var showBluetoothSheet by remember { mutableStateOf(false) }
     var autoSendToastText by remember { mutableStateOf<String?>(null) }
+    var hideAutoSendToastJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var pendingDuplicateConfirm by remember { mutableStateOf<Pair<TrackedQr, BatchSentEntry>?>(null) }
 
     val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -340,25 +345,54 @@ fun CameraScreen(
             scanHistory = scanHistory + newEntries
         }
 
-        // Bluetooth HID Auto-Send to Computer when scanning with ring scanner or camera
+        // Synchronize visible barcodes for Batch Inventory in-frame lock
+        val visibleRawSet = trackedQrs.map { it.rawContent }.toSet()
+        hidManager.syncVisibleBarcodes(visibleRawSet)
+
+        // Batch-Safe Bluetooth HID Auto-Send to Computer
         if (activeProfile.bluetoothKeyboard.isAutoSendEnabled && !isPaused && trackedQrs.isNotEmpty()) {
             for (item in trackedQrs) {
-                if (hidManager.shouldAutoSend(item.rawContent, activeProfile.bluetoothKeyboard)) {
-                    val payload = hidManager.resolvePayload(
-                        result = item.result,
-                        config = activeProfile.bluetoothKeyboard
-                    )
-                    coroutineScope.launch {
-                        hidManager.sendToComputer(
-                            textToSend = payload,
-                            endingKey = activeProfile.bluetoothKeyboard.endingKey,
-                            typingDelayMs = activeProfile.bluetoothKeyboard.typingDelayMs,
-                            convertTurkishChars = activeProfile.bluetoothKeyboard.convertTurkishChars
+                when (val decision = hidManager.evaluateAutoSend(item.rawContent, activeProfile.bluetoothKeyboard)) {
+                    is AutoSendDecision.SendNow -> {
+                        hidManager.markBarcodeInFrame(item.rawContent)
+                        val payload = hidManager.resolvePayload(
+                            result = item.result,
+                            config = activeProfile.bluetoothKeyboard
                         )
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        autoSendToastText = "⌨️ PC'ye İletildi: \"$payload\" [${activeProfile.bluetoothKeyboard.endingKey.label}]"
-                        delay(2500)
-                        autoSendToastText = null
+                        val endingKey = activeProfile.bluetoothKeyboard.endingKey
+                        val typingDelayMs = activeProfile.bluetoothKeyboard.typingDelayMs
+                        val convertTr = activeProfile.bluetoothKeyboard.convertTurkishChars
+                        val layout = activeProfile.bluetoothKeyboard.keyboardLayout
+                        val rawKey = item.rawContent
+                        coroutineScope.launch {
+                            val ok = hidManager.sendToComputer(
+                                textToSend = payload,
+                                rawBarcodeKey = rawKey,
+                                endingKey = endingKey,
+                                typingDelayMs = typingDelayMs,
+                                convertTurkishChars = convertTr,
+                                keyboardLayout = layout
+                            )
+                            if (ok) {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                val countNow = hidManager.batchSentMap.value[rawKey]?.count ?: 1
+                                autoSendToastText = "✓ PC'ye İletildi (#$countNow): \"$payload\""
+                                hideAutoSendToastJob?.cancel()
+                                hideAutoSendToastJob = coroutineScope.launch {
+                                    delay(2400)
+                                    autoSendToastText = null
+                                }
+                            }
+                        }
+                    }
+                    is AutoSendDecision.RequireConfirmation -> {
+                        hidManager.markBarcodeInFrame(item.rawContent)
+                        if (pendingDuplicateConfirm == null) {
+                            pendingDuplicateConfirm = item to decision.previousEntry
+                        }
+                    }
+                    AutoSendDecision.SkipDisabled, AutoSendDecision.SkipAlreadyActive -> {
+                        // Locked while in frame or disabled
                     }
                 }
             }
@@ -668,28 +702,42 @@ fun CameraScreen(
                             pinnedQr = null
                         }
                     },
+                    isCustomerMode = activeProfile.overlay.customerPriceOnly,
+                    onToggleCustomerMode = {
+                        val nextVal = !activeProfile.overlay.customerPriceOnly
+                        profileRepository.saveProfile(
+                            activeProfile.copy(overlay = activeProfile.overlay.copy(customerPriceOnly = nextVal))
+                        )
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        Toast.makeText(
+                            context,
+                            if (nextVal) "Müşteri Fiyat Modu AÇIK (Maliyet Gizlendi)" else "Tam Detay Görünümü AÇIK",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    },
                     isFrontCamera = isFrontCamera,
                     onToggleCamera = { isFrontCamera = !isFrontCamera },
                     isBatterySaverEnabled = isBatterySaverEnabled,
                     onToggleBatterySaver = {
                         isBatterySaverEnabled = !isBatterySaverEnabled
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        android.widget.Toast.makeText(
+                        Toast.makeText(
                             context,
-                            if (isBatterySaverEnabled) "Pil Tasarrufu Modu AÇIK (~5.5 FPS)" else "Pil Tasarrufu Modu KAPALI (Tam Performans)",
-                            android.widget.Toast.LENGTH_SHORT
+                            if (isBatterySaverEnabled) "Pil Tasarrufu Modu AÇIK (~5.5 FPS)" else "Pil Tasarrufu Modu KAPALI",
+                            Toast.LENGTH_SHORT
                         ).show()
                     },
                     isBluetoothConnected = bluetoothConnectionStatus == HidConnectionStatus.CONNECTED,
                     isAutoSendEnabled = activeProfile.bluetoothKeyboard.isAutoSendEnabled,
                     onOpenBluetooth = { showBluetoothSheet = true },
+                    onOpenAttachments = { showAttachmentsSheet = true },
                     onOpenHistory = { showHistorySheet = true },
                     onOpenSimulation = { showSimulationSheet = true },
                     onOpenBarcodeOptions = { showBarcodeOptionsSheet = true },
                     onOpenSettings = onOpenSettings,
                     modifier = Modifier
                         .windowInsetsPadding(WindowInsets.statusBars)
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
                 )
             }
 
@@ -994,20 +1042,35 @@ fun CameraScreen(
                             isPaused = false
                         },
                         onAttachmentClick = { att -> viewingAttachment = att },
+                        onToggleCustomerMode = {
+                            profileRepository.saveProfile(
+                                activeProfile.copy(
+                                    overlay = activeProfile.overlay.copy(
+                                        customerPriceOnly = !activeProfile.overlay.customerPriceOnly
+                                    )
+                                )
+                            )
+                        },
                         onSendToComputer = { customText, _ ->
                             coroutineScope.launch {
                                 val payload = customText ?: hidManager.resolvePayload(
                                     result = pinned.result,
                                     config = activeProfile.bluetoothKeyboard
                                 )
-                                hidManager.sendToComputer(
+                                val ok = hidManager.sendToComputer(
                                     textToSend = payload,
+                                    rawBarcodeKey = pinned.rawContent,
                                     endingKey = activeProfile.bluetoothKeyboard.endingKey,
                                     typingDelayMs = activeProfile.bluetoothKeyboard.typingDelayMs,
-                                    convertTurkishChars = activeProfile.bluetoothKeyboard.convertTurkishChars
+                                    convertTurkishChars = activeProfile.bluetoothKeyboard.convertTurkishChars,
+                                    keyboardLayout = activeProfile.bluetoothKeyboard.keyboardLayout
                                 )
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                Toast.makeText(context, "Bilgisayara iletildi: \"$payload\"", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    context,
+                                    if (ok) "Bilgisayara iletildi: \"$payload\"" else "Gönderim başarısız",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         }
                     )
@@ -1156,9 +1219,9 @@ fun CameraScreen(
                 }
             }
 
-            // Quick Attach pill when a QR is currently in camera view (Hidden during raw QR mode or when pinned)
+            // Quick Attach pill when a QR is currently in camera view (Hidden during raw mode, customer mode, pinned, or duplicate confirmation)
             val visibleQr = trackedQrs.firstOrNull()
-            if (visibleQr != null && !isRawModeActive && pinnedQr == null) {
+            if (visibleQr != null && !isRawModeActive && pinnedQr == null && !activeProfile.overlay.customerPriceOnly && pendingDuplicateConfirm == null) {
                 Surface(
                     color = GlassmorphicHudBg,
                     shape = RoundedCornerShape(24.dp),
@@ -1170,7 +1233,7 @@ fun CameraScreen(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .windowInsetsPadding(WindowInsets.navigationBars)
-                        .padding(bottom = 76.dp)
+                        .padding(bottom = 92.dp)
                         .clip(RoundedCornerShape(24.dp))
                         .clickable {
                             if (visibleQr.attachment != null) {
@@ -1207,22 +1270,175 @@ fun CameraScreen(
                 }
             }
 
-            // Expressive Bottom Floating Action Dock (Icon-only buttons for visual consistency)
-            Row(
+            // Batch Inventory Duplicate Barcode Confirmation Card
+            AnimatedVisibility(
+                visible = pendingDuplicateConfirm != null && !isRawModeActive && pinnedQr == null,
+                enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
+                exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(horizontal = 20.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(bottom = 94.dp, start = 16.dp, end = 16.dp)
             ) {
-                // Left Quick Controls: Barcode Formats, Linked Data, Raw QR, and AR Simulator
+                pendingDuplicateConfirm?.let { (dupTracked, prevEntry) ->
+                    val payloadPreview = remember(dupTracked, activeProfile.bluetoothKeyboard) {
+                        hidManager.resolvePayload(dupTracked.result, activeProfile.bluetoothKeyboard)
+                    }
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xF5121A2B)),
+                        shape = RoundedCornerShape(20.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, AmberGold),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .widthIn(max = 520.dp)
+                            .testTag("batch_duplicate_confirm_card")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(AmberGold.copy(alpha = 0.18f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = AmberGold,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "TEKRAR BARKOD ALGILANDI",
+                                        color = AmberGold,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 12.sp,
+                                        letterSpacing = 0.5.sp
+                                    )
+                                    Text(
+                                        text = "Bu kod daha önce ${prevEntry.count} kez gönderildi (${dupTracked.rawContent.take(24)})",
+                                        color = Color(0xFFE2E8F0),
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                color = Color(0xFF090E1A),
+                                shape = RoundedCornerShape(10.dp),
+                                border = androidx.compose.foundation.BorderStroke(0.5.dp, Color(0xFF334155)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "İletilecek: \"$payloadPreview\"",
+                                    color = NeonCyan,
+                                    fontSize = 12.sp,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 2,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        hidManager.dismissDuplicateForCurrentFrame(dupTracked.rawContent)
+                                        pendingDuplicateConfirm = null
+                                    },
+                                    modifier = Modifier
+                                        .weight(0.9f)
+                                        .height(48.dp)
+                                        .testTag("batch_duplicate_skip_btn"),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("Atla", color = Color.White, fontWeight = FontWeight.SemiBold)
+                                }
+
+                                Button(
+                                    onClick = {
+                                        val trackedRef = dupTracked
+                                        val kb = activeProfile.bluetoothKeyboard
+                                        pendingDuplicateConfirm = null
+                                        coroutineScope.launch {
+                                            val ok = hidManager.sendToComputer(
+                                                textToSend = payloadPreview,
+                                                rawBarcodeKey = trackedRef.rawContent,
+                                                endingKey = kb.endingKey,
+                                                typingDelayMs = kb.typingDelayMs,
+                                                convertTurkishChars = kb.convertTurkishChars,
+                                                keyboardLayout = kb.keyboardLayout
+                                            )
+                                            if (ok) {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                val countNow = hidManager.batchSentMap.value[trackedRef.rawContent]?.count ?: (prevEntry.count + 1)
+                                                autoSendToastText = "✓ +1 Onaylı İletildi (#$countNow)"
+                                                hideAutoSendToastJob?.cancel()
+                                                hideAutoSendToastJob = coroutineScope.launch {
+                                                    delay(2200)
+                                                    autoSendToastText = null
+                                                }
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = NeonCyan,
+                                        contentColor = Color(0xFF00382E)
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1.3f)
+                                        .height(48.dp)
+                                        .testTag("batch_duplicate_resend_btn"),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Tekrar Gönder (+1)", fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Streamlined Centered Floating Action Dock (5 spacious 48.dp buttons — Lab button removed)
+            Surface(
+                shape = RoundedCornerShape(30.dp),
+                color = GlassmorphicHudBg,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    Brush.linearGradient(
+                        listOf(NeonCyan.copy(alpha = 0.35f), ElectricIndigo.copy(alpha = 0.25f))
+                    )
+                ),
+                shadowElevation = 14.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                    .widthIn(max = 520.dp)
+                    .fillMaxWidth()
+            ) {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 1. Barcode Formats
+                    // 1. Barkod Formatları
                     FilledTonalIconButton(
                         onClick = { showBarcodeOptionsSheet = true },
                         enabled = !isRawModeActive,
@@ -1230,7 +1446,7 @@ fun CameraScreen(
                             .size(48.dp)
                             .alpha(if (isRawModeActive) 0f else 1f)
                             .testTag("barcode_reading_options_btn"),
-                        shape = RoundedCornerShape(20.dp),
+                        shape = RoundedCornerShape(18.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
                             containerColor = GlassmorphicDockBg,
                             contentColor = NeonCyan
@@ -1238,38 +1454,12 @@ fun CameraScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.QrCodeScanner,
-                            contentDescription = "Barkod Formatları (${when (activeProfile.tracking.scanPreset) {
-                                BarcodeScanPreset.ALL_FORMATS -> "Tüm Barkodlar"
-                                BarcodeScanPreset.TWO_D_ONLY -> "2D / 3D"
-                                BarcodeScanPreset.ONE_D_ONLY -> "1D Barkodlar"
-                                BarcodeScanPreset.CUSTOM -> "Özel"
-                            }})",
+                            contentDescription = "Barkod Formatları",
                             modifier = Modifier.size(22.dp)
                         )
                     }
 
-                    // 2. Linked Data & Attachments
-                    FilledTonalIconButton(
-                        onClick = { showAttachmentsSheet = true },
-                        enabled = !isRawModeActive,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .alpha(if (isRawModeActive) 0f else 1f)
-                            .testTag("manage_attachments_btn"),
-                        shape = RoundedCornerShape(20.dp),
-                        colors = IconButtonDefaults.filledTonalIconButtonColors(
-                            containerColor = GlassmorphicDockBg,
-                            contentColor = AmberGold
-                        )
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.AttachFile,
-                            contentDescription = "Bağlantılı Veriler & Medya",
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-
-                    // 3. Raw QR (Press and Hold to view raw unparsed data, or Tap to toggle)
+                    // 2. Ham Veri (Basılı Tut / Dokun)
                     FilledTonalIconButton(
                         onClick = {
                             val duration = System.currentTimeMillis() - rawPressStartTime
@@ -1283,7 +1473,7 @@ fun CameraScreen(
                         modifier = Modifier
                             .size(48.dp)
                             .testTag("hold_raw_qr_button"),
-                        shape = RoundedCornerShape(20.dp),
+                        shape = RoundedCornerShape(18.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
                             containerColor = if (isRawModeActive) NeonCyan else GlassmorphicDockBg,
                             contentColor = if (isRawModeActive) Color(0xFF00382E) else CyberLime
@@ -1296,28 +1486,7 @@ fun CameraScreen(
                         )
                     }
 
-                    // 4. AR Simulator
-                    FilledTonalIconButton(
-                        onClick = { showSimulationSheet = true },
-                        enabled = !isRawModeActive,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .alpha(if (isRawModeActive) 0f else 1f)
-                            .testTag("open_simulation_btn"),
-                        shape = RoundedCornerShape(20.dp),
-                        colors = IconButtonDefaults.filledTonalIconButtonColors(
-                            containerColor = GlassmorphicDockBg,
-                            contentColor = if (simulatedCodes.isNotEmpty()) NeonCyan else Color.White.copy(alpha = 0.85f)
-                        )
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Science,
-                            contentDescription = "AR Kodlarını Simüle Et",
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-
-                    // 5. Bluetooth Keyboard & Computer Input
+                    // 3. Bluetooth Klavye & Telefon İçi Klavye
                     FilledTonalIconButton(
                         onClick = { showBluetoothSheet = true },
                         enabled = !isRawModeActive,
@@ -1325,48 +1494,35 @@ fun CameraScreen(
                             .size(48.dp)
                             .alpha(if (isRawModeActive) 0f else 1f)
                             .testTag("bluetooth_keyboard_btn"),
-                        shape = RoundedCornerShape(20.dp),
+                        shape = RoundedCornerShape(18.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
                             containerColor = if (bluetoothConnectionStatus == HidConnectionStatus.CONNECTED) Color(0xFF062822) else GlassmorphicDockBg,
-                            contentColor = if (bluetoothConnectionStatus == HidConnectionStatus.CONNECTED) NeonCyan else Color.White.copy(alpha = 0.85f)
+                            contentColor = if (bluetoothConnectionStatus == HidConnectionStatus.CONNECTED) NeonCyan else Color.White.copy(alpha = 0.9f)
                         )
                     ) {
                         BadgedBox(
                             badge = {
                                 if (activeProfile.bluetoothKeyboard.isAutoSendEnabled) {
-                                    Badge(
-                                        containerColor = CyberLime,
-                                        contentColor = Color(0xFF00382E)
-                                    ) {
-                                        Text(
-                                            text = "AUTO",
-                                            fontSize = 7.5.sp,
-                                            fontWeight = FontWeight.ExtraBold
-                                        )
+                                    Badge(containerColor = CyberLime, contentColor = Color(0xFF00382E)) {
+                                        Text("OTO", fontSize = 7.5.sp, fontWeight = FontWeight.ExtraBold)
                                     }
                                 } else if (bluetoothConnectionStatus == HidConnectionStatus.CONNECTED) {
-                                    Badge(
-                                        containerColor = NeonCyan,
-                                        contentColor = Color(0xFF00382E)
-                                    ) {
-                                        Text(
-                                            text = "PC",
-                                            fontSize = 8.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                    Badge(containerColor = NeonCyan, contentColor = Color(0xFF00382E)) {
+                                        Text("PC", fontSize = 8.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Keyboard,
-                                contentDescription = "Bluetooth Klavye & PC Girişi",
+                                contentDescription = "Bluetooth Klavye & Telefon Klavyesi",
                                 modifier = Modifier.size(22.dp)
                             )
                         }
                     }
 
-                    // 6. Scan Session History (CSV Export & Log)
+                    // 4. Sayım & Tarama Geçmişi
+                    val totalHistoryOrBatch = maxOf(scanHistory.size, batchSentMap.values.sumOf { it.count })
                     FilledTonalIconButton(
                         onClick = { showHistorySheet = true },
                         enabled = !isRawModeActive,
@@ -1374,21 +1530,18 @@ fun CameraScreen(
                             .size(48.dp)
                             .alpha(if (isRawModeActive) 0f else 1f)
                             .testTag("scan_history_btn"),
-                        shape = RoundedCornerShape(20.dp),
+                        shape = RoundedCornerShape(18.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
                             containerColor = GlassmorphicDockBg,
-                            contentColor = if (scanHistory.isNotEmpty()) NeonCyan else Color.White.copy(alpha = 0.85f)
+                            contentColor = if (totalHistoryOrBatch > 0) NeonCyan else Color.White.copy(alpha = 0.9f)
                         )
                     ) {
                         BadgedBox(
                             badge = {
-                                if (scanHistory.isNotEmpty()) {
-                                    Badge(
-                                        containerColor = NeonCyan,
-                                        contentColor = Color(0xFF00382E)
-                                    ) {
+                                if (totalHistoryOrBatch > 0) {
+                                    Badge(containerColor = NeonCyan, contentColor = Color(0xFF00382E)) {
                                         Text(
-                                            text = if (scanHistory.size > 99) "99+" else scanHistory.size.toString(),
+                                            text = if (totalHistoryOrBatch > 99) "99+" else totalHistoryOrBatch.toString(),
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Bold
                                         )
@@ -1398,32 +1551,32 @@ fun CameraScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.History,
-                                contentDescription = "Tarama Oturumu Geçmişi",
+                                contentDescription = "Sayım ve Tarama Geçmişi",
                                 modifier = Modifier.size(22.dp)
                             )
                         }
                     }
-                }
 
-                // Right: Expressive Squircle Settings FAB
-                FilledIconButton(
-                    onClick = onOpenSettings,
-                    enabled = !isRawModeActive,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .alpha(if (isRawModeActive) 0f else 1f)
-                        .testTag("open_settings_button"),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = NeonCyan,
-                        contentColor = Color(0xFF00382E)
-                    )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Ayarlar",
-                        modifier = Modifier.size(24.dp)
-                    )
+                    // 5. Ayarlar
+                    FilledIconButton(
+                        onClick = onOpenSettings,
+                        enabled = !isRawModeActive,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .alpha(if (isRawModeActive) 0f else 1f)
+                            .testTag("open_settings_button"),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = NeonCyan,
+                            contentColor = Color(0xFF00382E)
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Ayarlar",
+                            modifier = Modifier.size(23.dp)
+                        )
+                    }
                 }
             }
 
@@ -1713,6 +1866,8 @@ fun TopHudBar(
     onToggleTorch: () -> Unit,
     isPaused: Boolean,
     onTogglePause: () -> Unit,
+    isCustomerMode: Boolean = false,
+    onToggleCustomerMode: () -> Unit = {},
     isFrontCamera: Boolean,
     onToggleCamera: () -> Unit,
     isBatterySaverEnabled: Boolean,
@@ -1720,6 +1875,7 @@ fun TopHudBar(
     isBluetoothConnected: Boolean = false,
     isAutoSendEnabled: Boolean = false,
     onOpenBluetooth: () -> Unit = {},
+    onOpenAttachments: () -> Unit = {},
     onOpenHistory: () -> Unit,
     onOpenSimulation: () -> Unit,
     onOpenBarcodeOptions: () -> Unit,
@@ -1742,7 +1898,7 @@ fun TopHudBar(
     )
 
     Surface(
-        shape = RoundedCornerShape(32.dp),
+        shape = RoundedCornerShape(30.dp),
         color = GlassmorphicHudBg,
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
@@ -1756,18 +1912,18 @@ fun TopHudBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             // Active Profile Selector Pill
-            Box(modifier = Modifier.weight(1f, fill = false)) {
+            Box(modifier = Modifier.weight(1f)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .clip(RoundedCornerShape(20.dp))
                         .clickable { expandedDropdown = true }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
                 ) {
                     Box(
                         modifier = Modifier
@@ -1775,27 +1931,35 @@ fun TopHudBar(
                             .clip(CircleShape)
                             .background(
                                 if (isPaused) AmberGold
+                                else if (isCustomerMode) ElectricIndigo
                                 else EmeraldGreen.copy(alpha = pulseAlpha)
                             )
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Column(modifier = Modifier.widthIn(max = 135.dp)) {
+                    Column(modifier = Modifier.weight(1f, fill = false)) {
                         Text(
                             text = activeProfile.name,
                             color = OnDarkSurface,
-                            fontSize = 13.sp,
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
+                        val statusSubtitle = buildString {
+                            if (activeCount > 0) append("$activeCount algılandı")
+                            else if (isPaused) append("Duraklatıldı")
+                            else append("Taranıyor")
+                            if (isCustomerMode) append(" · Müşteri Modu")
+                        }
                         Text(
-                            text = if (activeCount > 0) "$activeCount algılandı" else if (isPaused) "Duraklatıldı" else "Taranıyor...",
-                            color = if (activeCount > 0) NeonCyan else OnDarkSurfaceVariant,
+                            text = statusSubtitle,
+                            color = if (activeCount > 0 || isCustomerMode) NeonCyan else OnDarkSurfaceVariant,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium,
                             maxLines = 1
                         )
                     }
+                    Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         imageVector = Icons.Default.ArrowDropDown,
                         contentDescription = "Profil Seç",
@@ -1841,73 +2005,49 @@ fun TopHudBar(
                 }
             }
 
-            // Direct Expressive Action Controls
+            // Streamlined Essential Action Controls (Optimal 44dp touch spacing, zero clutter)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(1.dp)
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 // Torch
                 IconButton(
                     onClick = onToggleTorch,
-                    modifier = Modifier.size(36.dp)
+                    modifier = Modifier.size(44.dp)
                 ) {
                     Icon(
                         imageVector = if (isTorchEnabled) Icons.Default.FlashOn else Icons.Default.FlashOff,
                         contentDescription = "Flaş Aç/Kapat",
                         tint = if (isTorchEnabled) AmberGold else OnDarkSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(20.dp)
                     )
                 }
 
                 // Pause
                 IconButton(
                     onClick = onTogglePause,
-                    modifier = Modifier.size(36.dp)
+                    modifier = Modifier.size(44.dp)
                 ) {
                     Icon(
                         imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
                         contentDescription = "Taramayı Duraklat/Devam Ettir",
                         tint = if (isPaused) AmberGold else OnDarkSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(20.dp)
                     )
                 }
 
-                // Battery Saver Mode Toggle
+                // Müşteri Fiyat Modu (Maliyeti Gizle)
                 IconButton(
-                    onClick = onToggleBatterySaver,
-                    modifier = Modifier.size(36.dp).testTag("battery_saver_toggle_btn")
+                    onClick = onToggleCustomerMode,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .testTag("customer_mode_toggle_btn")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.BatterySaver,
-                        contentDescription = if (isBatterySaverEnabled) "Pil Tasarrufu AÇIK" else "Pil Tasarrufu KAPALI",
-                        tint = if (isBatterySaverEnabled) CyberLime else OnDarkSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-
-                // Flip Camera
-                IconButton(
-                    onClick = onToggleCamera,
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.FlipCameraAndroid,
-                        contentDescription = "Kamerayı Değiştir",
-                        tint = OnDarkSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-
-                // Bluetooth Keyboard / PC Input Toggle & Status
-                IconButton(
-                    onClick = onOpenBluetooth,
-                    modifier = Modifier.size(36.dp).testTag("top_hud_bluetooth_btn")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Keyboard,
-                        contentDescription = "Bluetooth Klavye & PC Girişi",
-                        tint = if (isBluetoothConnected) NeonCyan else if (isAutoSendEnabled) CyberLime else OnDarkSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
+                        imageVector = if (isCustomerMode) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        contentDescription = if (isCustomerMode) "Müşteri Fiyat Modu Açık" else "Müşteri Fiyat Moduna Geç",
+                        tint = if (isCustomerMode) NeonCyan else OnDarkSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
 
@@ -1915,13 +2055,15 @@ fun TopHudBar(
                 Box {
                     IconButton(
                         onClick = { expandedMoreMenu = true },
-                        modifier = Modifier.size(36.dp).testTag("top_hud_more_menu_btn")
+                        modifier = Modifier
+                            .size(44.dp)
+                            .testTag("top_hud_more_menu_btn")
                     ) {
                         Icon(
                             imageVector = Icons.Default.MoreVert,
                             contentDescription = "Daha Fazla Seçenek",
                             tint = OnDarkSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
 
@@ -1930,7 +2072,6 @@ fun TopHudBar(
                         onDismissRequest = { expandedMoreMenu = false },
                         modifier = Modifier.background(DarkSurfaceVariant)
                     ) {
-                        // Bluetooth Keyboard / PC Input Item
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1942,10 +2083,10 @@ fun TopHudBar(
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
-                                        Text("Bluetooth Klavye & PC Girişi", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
+                                        Text("Bluetooth & Telefon İçi Klavye", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
                                         Text(
-                                            if (isBluetoothConnected) "Bilgisayara bağlı • ${if (isAutoSendEnabled) "Oto Gönder AÇIK" else "Hazır"}"
-                                            else "Bilgisayara kablosuz tuşla",
+                                            if (isBluetoothConnected) "Bilgisayara bağlı • ${if (isAutoSendEnabled) "Oto AÇIK" else "Hazır"}"
+                                            else "PC veya Chrome formuna gönder",
                                             fontSize = 11.sp,
                                             color = OnDarkSurfaceVariant
                                         )
@@ -1958,30 +2099,53 @@ fun TopHudBar(
                             }
                         )
 
-                        // Scan History Item
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
-                                        imageVector = Icons.Default.History,
+                                        imageVector = Icons.Default.AttachFile,
                                         contentDescription = null,
-                                        tint = NeonCyan,
+                                        tint = AmberGold,
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
-                                        Text("Tarama Oturumu Geçmişi", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
-                                        Text("CSV günlüğünü görüntüle ve aktar", fontSize = 11.sp, color = OnDarkSurfaceVariant)
+                                        Text("Bağlantılı Veriler & Medya", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
+                                        Text("Barkoda bağlı fotoğraf, not ve detaylar", fontSize = 11.sp, color = OnDarkSurfaceVariant)
                                     }
                                 }
                             },
                             onClick = {
                                 expandedMoreMenu = false
-                                onOpenHistory()
+                                onOpenAttachments()
                             }
                         )
 
-                        // Battery Saver Item
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.FlipCameraAndroid,
+                                        contentDescription = null,
+                                        tint = OnDarkSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = if (isFrontCamera) "Arka Kameraya Geç" else "Ön Kameraya Geç",
+                                            color = OnDarkSurface,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = {
+                                expandedMoreMenu = false
+                                onToggleCamera()
+                            }
+                        )
+
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2012,21 +2176,21 @@ fun TopHudBar(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
-                                        imageVector = Icons.Default.Science,
+                                        imageVector = Icons.Default.History,
                                         contentDescription = null,
                                         tint = NeonCyan,
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
-                                        Text("AR Kod Simülatörü", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
-                                        Text("Sanal QR ve barkod enjekte et", fontSize = 11.sp, color = OnDarkSurfaceVariant)
+                                        Text("Tarama Geçmişi & CSV", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
+                                        Text("Oturum kayıtlarını görüntüle", fontSize = 11.sp, color = OnDarkSurfaceVariant)
                                     }
                                 }
                             },
                             onClick = {
                                 expandedMoreMenu = false
-                                onOpenSimulation()
+                                onOpenHistory()
                             }
                         )
 
@@ -2042,13 +2206,35 @@ fun TopHudBar(
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
                                         Text("Barkod Formatları", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
-                                        Text("2D, 3D ve 1D tarayıcıyı yapılandır", fontSize = 11.sp, color = OnDarkSurfaceVariant)
+                                        Text("2D, 3D ve 1D tarayıcı seçenekleri", fontSize = 11.sp, color = OnDarkSurfaceVariant)
                                     }
                                 }
                             },
                             onClick = {
                                 expandedMoreMenu = false
                                 onOpenBarcodeOptions()
+                            }
+                        )
+
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Science,
+                                        contentDescription = null,
+                                        tint = NeonCyan,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text("AR Kod Simülatörü (Test)", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
+                                        Text("Sanal barkod test et", fontSize = 11.sp, color = OnDarkSurfaceVariant)
+                                    }
+                                }
+                            },
+                            onClick = {
+                                expandedMoreMenu = false
+                                onOpenSimulation()
                             }
                         )
 

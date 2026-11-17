@@ -6,6 +6,8 @@ import com.example.model.QrParsingRules
 import com.example.model.VariableDefinition
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 
@@ -47,6 +49,11 @@ object QrParser {
         val numericMap = mutableMapOf<String, Double>()
         val stringMap = mutableMapOf<String, String>()
 
+        val today = LocalDate.now()
+        val todayEpochDay = today.toEpochDay().toDouble()
+        numericMap["bugun"] = todayEpochDay
+        numericMap["today"] = todayEpochDay
+
         // 1. Process manual / constant variables (not extracted from barcode tokens)
         val manualVars = rules.variables.filter { it.isManual && !it.isComputed }
         for (varDef in manualVars) {
@@ -63,7 +70,38 @@ object QrParser {
                         stringMap[varDef.alias] = valueToUse
                     }
                 }
-                FieldDataType.INTEGER, FieldDataType.FLOAT, FieldDataType.DOUBLE -> {
+                FieldDataType.BOOLEAN -> {
+                    val boolVal = parseBoolean(valueToUse) ?: false
+                    val numBool = if (boolVal) 1.0 else 0.0
+                    val strBool = if (boolVal) "Doğru" else "Yanlış"
+                    numericMap[varDef.name] = numBool
+                    stringMap[varDef.name] = strBool
+                    if (varDef.alias.isNotBlank()) {
+                        numericMap[varDef.alias] = numBool
+                        stringMap[varDef.alias] = strBool
+                    }
+                }
+                FieldDataType.DATE -> {
+                    val parsedDate = parseBarcodeDate(valueToUse) ?: today
+                    populateDateVariables(varDef, parsedDate, today, numericMap, stringMap)
+                }
+                FieldDataType.INTEGER -> {
+                    val parsedNumber = parseNumber(normalizedNumStr, rules.allowNegative) ?: 0.0
+                    val intVal = kotlin.math.truncate(parsedNumber)
+                    numericMap[varDef.name] = intVal
+                    if (varDef.alias.isNotBlank()) {
+                        numericMap[varDef.alias] = intVal
+                    }
+                }
+                FieldDataType.FLOAT -> {
+                    val parsedNumber = parseNumber(normalizedNumStr, rules.allowNegative) ?: 0.0
+                    val floatVal = parsedNumber.toFloat().toDouble()
+                    numericMap[varDef.name] = floatVal
+                    if (varDef.alias.isNotBlank()) {
+                        numericMap[varDef.alias] = floatVal
+                    }
+                }
+                FieldDataType.DOUBLE -> {
                     val parsedNumber = parseNumber(normalizedNumStr, rules.allowNegative) ?: 0.0
                     numericMap[varDef.name] = parsedNumber
                     if (varDef.alias.isNotBlank()) {
@@ -104,11 +142,37 @@ object QrParser {
                         stringMap[varDef.alias] = tokenToUse
                     }
                 }
+                FieldDataType.BOOLEAN -> {
+                    val boolVal = parseBoolean(tokenToUse)
+                        ?: return QrParseOutcome.Error(
+                            "Geçersiz mantıksal değer '$tokenToUse' ('${varDef.name}' için 1/0 veya true/false kullanın)"
+                        )
+                    val numBool = if (boolVal) 1.0 else 0.0
+                    val strBool = if (boolVal) "Doğru" else "Yanlış"
+                    numericMap[varDef.name] = numBool
+                    stringMap[varDef.name] = strBool
+                    if (varDef.alias.isNotBlank()) {
+                        numericMap[varDef.alias] = numBool
+                        stringMap[varDef.alias] = strBool
+                    }
+                }
+                FieldDataType.DATE -> {
+                    val parsedDate = parseBarcodeDate(tokenToUse)
+                        ?: return QrParseOutcome.Error(
+                            "Geçersiz tarih '$tokenToUse' ('${varDef.name}' için yyyyMMdd veya gg.aa.yyyy kullanın)"
+                        )
+                    populateDateVariables(varDef, parsedDate, today, numericMap, stringMap)
+                }
                 FieldDataType.INTEGER, FieldDataType.FLOAT, FieldDataType.DOUBLE -> {
-                    val parsedNumber = parseNumber(normalizedNumStr, rules.allowNegative)
+                    val rawParsed = parseNumber(normalizedNumStr, rules.allowNegative)
                         ?: return QrParseOutcome.Error(
                             "Invalid numeric value '$tokenToUse' for '${varDef.name}'"
                         )
+                    val parsedNumber = when (varDef.dataType) {
+                        FieldDataType.INTEGER -> kotlin.math.truncate(rawParsed)
+                        FieldDataType.FLOAT -> rawParsed.toFloat().toDouble()
+                        else -> rawParsed
+                    }
 
                     // Validate min/max boundaries
                     if (varDef.minValue != null && parsedNumber < varDef.minValue) {
@@ -145,11 +209,40 @@ object QrParser {
                     progress = true
                     continue
                 }
-                when (val res = mathEvaluator.evaluate(compVar.computationFormula, numericMap)) {
+                when (val res = mathEvaluator.evaluate(compVar.computationFormula, numericMap, stringMap)) {
                     is MathResult.Success -> {
-                        numericMap[compVar.name] = res.value
-                        if (compVar.alias.isNotBlank()) {
-                            numericMap[compVar.alias] = res.value
+                        val finalVal = when (compVar.dataType) {
+                            FieldDataType.INTEGER -> kotlin.math.truncate(res.value)
+                            FieldDataType.FLOAT -> res.value.toFloat().toDouble()
+                            FieldDataType.BOOLEAN -> if (kotlin.math.abs(res.value) > 1e-12) 1.0 else 0.0
+                            else -> res.value
+                        }
+                        when (compVar.dataType) {
+                            FieldDataType.DATE -> {
+                                val computedDate = runCatching {
+                                    LocalDate.ofEpochDay(finalVal.toLong())
+                                }.getOrNull()
+                                if (computedDate != null) {
+                                    populateDateVariables(compVar, computedDate, today, numericMap, stringMap)
+                                } else {
+                                    numericMap[compVar.name] = finalVal
+                                }
+                            }
+                            FieldDataType.BOOLEAN -> {
+                                val boolLabel = if (finalVal >= 0.5) "Doğru" else "Yanlış"
+                                numericMap[compVar.name] = finalVal
+                                stringMap[compVar.name] = boolLabel
+                                if (compVar.alias.isNotBlank()) {
+                                    numericMap[compVar.alias] = finalVal
+                                    stringMap[compVar.alias] = boolLabel
+                                }
+                            }
+                            else -> {
+                                numericMap[compVar.name] = finalVal
+                                if (compVar.alias.isNotBlank()) {
+                                    numericMap[compVar.alias] = finalVal
+                                }
+                            }
                         }
                         iterator.remove()
                         progress = true
@@ -163,12 +256,95 @@ object QrParser {
 
         if (remainingComputed.isNotEmpty()) {
             val failedVar = remainingComputed.first()
-            val err = mathEvaluator.evaluate(failedVar.computationFormula, numericMap)
+            val err = mathEvaluator.evaluate(failedVar.computationFormula, numericMap, stringMap)
             val msg = if (err is MathResult.Error) err.message else "Formula evaluation failed"
             return QrParseOutcome.Error("Computed '${failedVar.name}': $msg")
         }
 
         return QrParseOutcome.Success(numericMap, stringMap)
+    }
+
+    private fun populateDateVariables(
+        varDef: VariableDefinition,
+        date: LocalDate,
+        today: LocalDate,
+        numericMap: MutableMap<String, Double>,
+        stringMap: MutableMap<String, String>
+    ) {
+        val epochDay = date.toEpochDay().toDouble()
+        val daysElapsed = (today.toEpochDay() - date.toEpochDay()).toDouble()
+        val monthsElapsed = daysElapsed / 30.4375
+        val yearsElapsed = daysElapsed / 365.25
+        val formattedDate = date.format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))
+
+        fun assignForKey(key: String) {
+            stringMap[key] = formattedDate
+            numericMap[key] = epochDay
+            numericMap["${key}_gun"] = daysElapsed
+            numericMap["${key}_days"] = daysElapsed
+            numericMap["${key}_ay"] = monthsElapsed
+            numericMap["${key}_months"] = monthsElapsed
+            numericMap["${key}_yil"] = yearsElapsed
+            numericMap["${key}_years"] = yearsElapsed
+        }
+
+        assignForKey(varDef.name)
+        if (varDef.alias.isNotBlank()) {
+            assignForKey(varDef.alias)
+        }
+    }
+
+    /**
+     * Parses common barcode date representations:
+     * - yyyyMMdd (e.g. 20240115)
+     * - yyyy-MM-dd (e.g. 2024-01-15)
+     * - dd.MM.yyyy (e.g. 15.01.2024)
+     * - dd/MM/yyyy (e.g. 15/01/2024)
+     * - yyyy/MM/dd (e.g. 2024/01/15)
+     * - dd-MM-yyyy (e.g. 15-01-2024)
+     * - yyyyMM (e.g. 202401 -> 1st of month)
+     * - MM.yyyy / MM/yyyy
+     */
+    fun parseBarcodeDate(raw: String): LocalDate? {
+        val cleaned = raw.trim()
+        if (cleaned.isEmpty()) return null
+        if (cleaned.equals("today", ignoreCase = true) || cleaned.equals("bugun", ignoreCase = true)) {
+            return LocalDate.now()
+        }
+
+        val fullFormatters = listOf(
+            DateTimeFormatter.BASIC_ISO_DATE, // yyyyMMdd
+            DateTimeFormatter.ISO_LOCAL_DATE, // yyyy-MM-dd
+            DateTimeFormatter.ofPattern("dd.MM.yyyy"),
+            DateTimeFormatter.ofPattern("d.M.yyyy"),
+            DateTimeFormatter.ofPattern("dd/MM/yyyy"),
+            DateTimeFormatter.ofPattern("d/M/yyyy"),
+            DateTimeFormatter.ofPattern("yyyy/MM/dd"),
+            DateTimeFormatter.ofPattern("dd-MM-yyyy")
+        )
+        for (fmt in fullFormatters) {
+            val parsed = runCatching { LocalDate.parse(cleaned, fmt) }.getOrNull()
+            if (parsed != null) return parsed
+        }
+
+        // Handle month-year formats like 202401, 01.2024, 01/2024
+        val ymCompact = Regex("^(\\d{4})(\\d{2})$").matchEntire(cleaned)
+        if (ymCompact != null) {
+            val y = ymCompact.groupValues[1].toIntOrNull()
+            val m = ymCompact.groupValues[2].toIntOrNull()
+            if (y != null && m != null && m in 1..12) {
+                return runCatching { LocalDate.of(y, m, 1) }.getOrNull()
+            }
+        }
+        val myDelimited = Regex("^(\\d{1,2})[./-](\\d{4})$").matchEntire(cleaned)
+        if (myDelimited != null) {
+            val m = myDelimited.groupValues[1].toIntOrNull()
+            val y = myDelimited.groupValues[2].toIntOrNull()
+            if (y != null && m != null && m in 1..12) {
+                return runCatching { LocalDate.of(y, m, 1) }.getOrNull()
+            }
+        }
+        return null
     }
 
     private fun parseNumber(str: String, allowNegative: Boolean): Double? {
@@ -179,6 +355,14 @@ object QrParser {
         return runCatching {
             trimmed.toDouble()
         }.getOrNull()
+    }
+
+    private fun parseBoolean(raw: String): Boolean? {
+        return when (raw.trim().lowercase()) {
+            "1", "true", "evet", "yes", "on", "var", "ok", "dogru", "doğru" -> true
+            "0", "false", "hayir", "hayır", "no", "off", "yok", "yanlis", "yanlış" -> false
+            else -> null
+        }
     }
 
     /**

@@ -153,6 +153,8 @@ class BluetoothHidPayloadTest {
         assertEquals(config.typingDelayMs, restored.typingDelayMs)
         assertEquals(config.sendCooldownMs, restored.sendCooldownMs)
         assertEquals(config.convertTurkishChars, restored.convertTurkishChars)
+        assertEquals(config.keyboardLayout, restored.keyboardLayout)
+        assertEquals(config.requireDuplicateConfirmation, restored.requireDuplicateConfirmation)
     }
 
     @Test
@@ -160,15 +162,76 @@ class BluetoothHidPayloadTest {
         val hidManager = BluetoothHidManager()
         val config = testConfig.copy(
             isAutoSendEnabled = true,
-            sendCooldownMs = 1000L
+            sendCooldownMs = 1000L,
+            requireDuplicateConfirmation = false
         )
 
         assertTrue(hidManager.shouldAutoSend("CODE-A", config))
         hidManager.recordSentBarcode("CODE-A")
-        // Immediate repeat should be suppressed by debounce cooldown
+        // Immediate repeat should be suppressed by debounce cooldown & in-frame lock
         assertFalse(hidManager.shouldAutoSend("CODE-A", config))
 
         // Different barcode should not be blocked
         assertTrue(hidManager.shouldAutoSend("CODE-B", config))
+    }
+
+    @Test
+    fun testBatchDuplicateConfirmationStateMachine() {
+        val hidManager = BluetoothHidManager()
+        val config = testConfig.copy(
+            isAutoSendEnabled = true,
+            sendCooldownMs = 1000L,
+            requireDuplicateConfirmation = true
+        )
+
+        // 1. First appearance -> SendNow
+        val d1 = hidManager.evaluateAutoSend("SKU-777", config, nowMs = 1000L)
+        assertEquals(com.example.bluetooth.AutoSendDecision.SendNow, d1)
+
+        // Record sent ACK
+        hidManager.recordSentBarcode("SKU-777", "SKU-777", nowMs = 1000L)
+
+        // 2. Same barcode still in frame -> SkipAlreadyActive (never spams target PC!)
+        val d2 = hidManager.evaluateAutoSend("SKU-777", config, nowMs = 5000L)
+        assertEquals(com.example.bluetooth.AutoSendDecision.SkipAlreadyActive, d2)
+
+        // 3. User removes barcode for > 1200ms and scans the exact same barcode again
+        hidManager.syncVisibleBarcodes(emptySet(), nowMs = 7000L)
+        val d3 = hidManager.evaluateAutoSend("SKU-777", config, nowMs = 7500L)
+        assertTrue(d3 is com.example.bluetooth.AutoSendDecision.RequireConfirmation)
+        assertEquals(1, (d3 as com.example.bluetooth.AutoSendDecision.RequireConfirmation).previousEntry.count)
+
+        // 4. User taps "Atla" (Skip) -> suppressed until barcode leaves frame
+        hidManager.dismissDuplicateForCurrentFrame("SKU-777", nowMs = 7500L)
+        val d4 = hidManager.evaluateAutoSend("SKU-777", config, nowMs = 8000L)
+        assertEquals(com.example.bluetooth.AutoSendDecision.SkipAlreadyActive, d4)
+    }
+
+    @Test
+    fun testTurkishQLayoutHidScancodesPreventGibberish() {
+        // On Turkish-Q: '.' is 0x38, '-' is 0x2E, 'i' is 0x34, 'ı' is 0x0C, 'ş' is 0x33, 'ç' is 0x37
+        val dotTr = BluetoothHidManager.charToHidKey('.', KeyboardLayoutType.TR_Q)
+        assertNotNull(dotTr)
+        assertEquals(0x38.toByte(), dotTr!!.keyCode)
+        assertEquals(BluetoothHidManager.MODIFIER_NONE, dotTr.modifier)
+
+        val dashTr = BluetoothHidManager.charToHidKey('-', KeyboardLayoutType.TR_Q)
+        assertNotNull(dashTr)
+        assertEquals(0x2E.toByte(), dashTr!!.keyCode)
+
+        val dottedITr = BluetoothHidManager.charToHidKey('i', KeyboardLayoutType.TR_Q)
+        assertEquals(0x34.toByte(), dottedITr!!.keyCode)
+
+        val dotlessITr = BluetoothHidManager.charToHidKey('ı', KeyboardLayoutType.TR_Q)
+        assertEquals(0x0C.toByte(), dotlessITr!!.keyCode)
+
+        val sCedillaTr = BluetoothHidManager.charToHidKey('ş', KeyboardLayoutType.TR_Q)
+        assertEquals(0x33.toByte(), sCedillaTr!!.keyCode)
+
+        // Verify US-Q still uses standard US HID usages
+        val dotUs = BluetoothHidManager.charToHidKey('.', KeyboardLayoutType.US_Q)
+        assertEquals(0x37.toByte(), dotUs!!.keyCode)
+        val dashUs = BluetoothHidManager.charToHidKey('-', KeyboardLayoutType.US_Q)
+        assertEquals(0x2D.toByte(), dashUs!!.keyCode)
     }
 }

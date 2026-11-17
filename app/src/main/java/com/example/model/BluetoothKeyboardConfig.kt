@@ -26,7 +26,17 @@ enum class KeyboardEndingKey(val label: String, val hidKeyCode: Byte?) {
 }
 
 /**
- * Configuration for transmitting barcode data to computers/tablets as a Bluetooth HID Keyboard.
+ * Target computer keyboard layout so HID USB scancodes match the OS layout
+ * (prevents '.' typing 'ç' or '-' typing '*' on Turkish Q Windows/Mac PCs).
+ */
+enum class KeyboardLayoutType(val label: String) {
+    TR_Q("Türkçe Q (TR)"),
+    US_Q("İngilizce Q (US)")
+}
+
+/**
+ * Configuration for transmitting barcode data to computers/tablets as a Bluetooth HID Keyboard
+ * or to local phone apps via the ALVETAK QR IME Keyboard.
  */
 data class BluetoothKeyboardConfig(
     val isEnabled: Boolean = true,
@@ -39,9 +49,11 @@ data class BluetoothKeyboardConfig(
     val customTemplate: String = "{a}\t{b}",
     val prefixText: String = "",
     val postfixText: String = "",
-    val typingDelayMs: Long = 12L, // Inter-keystroke delay for target OS compatibility
-    val sendCooldownMs: Long = 2000L, // Cooldown before same barcode can auto-send again
-    val convertTurkishChars: Boolean = true // Convert ç, ş, ğ, ı, ö, ü to ASCII c, s, g, i, o, u for US PC compatibility
+    val typingDelayMs: Long = 5L, // Fast & reliable inter-keystroke timing
+    val sendCooldownMs: Long = 2000L, // Minimum cooldown between distinct repeat confirmations
+    val convertTurkishChars: Boolean = false, // Only needed if US_Q is selected on target PC
+    val keyboardLayout: KeyboardLayoutType = KeyboardLayoutType.TR_Q,
+    val requireDuplicateConfirmation: Boolean = true // Batch Inventory Count guard: ask before re-sending same barcode
 ) {
     fun toJson(): JSONObject {
         return JSONObject().apply {
@@ -60,6 +72,8 @@ data class BluetoothKeyboardConfig(
             put("typingDelayMs", typingDelayMs)
             put("sendCooldownMs", sendCooldownMs)
             put("convertTurkishChars", convertTurkishChars)
+            put("keyboardLayout", keyboardLayout.name)
+            put("requireDuplicateConfirmation", requireDuplicateConfirmation)
         }
     }
 
@@ -88,9 +102,13 @@ data class BluetoothKeyboardConfig(
                 customTemplate = json.optString("customTemplate", "{a}\t{b}"),
                 prefixText = json.optString("prefixText", ""),
                 postfixText = json.optString("postfixText", ""),
-                typingDelayMs = json.optLong("typingDelayMs", 12L),
+                typingDelayMs = json.optLong("typingDelayMs", 5L),
                 sendCooldownMs = json.optLong("sendCooldownMs", 2000L),
-                convertTurkishChars = json.optBoolean("convertTurkishChars", true)
+                convertTurkishChars = json.optBoolean("convertTurkishChars", false),
+                keyboardLayout = runCatching {
+                    KeyboardLayoutType.valueOf(json.optString("keyboardLayout", KeyboardLayoutType.TR_Q.name))
+                }.getOrDefault(KeyboardLayoutType.TR_Q),
+                requireDuplicateConfirmation = json.optBoolean("requireDuplicateConfirmation", true)
             )
         }
     }
