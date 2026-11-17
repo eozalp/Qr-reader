@@ -1221,4 +1221,52 @@ class QrEngineComprehensiveTest {
         val restored = OverlayAppearance.fromJson(json)
         assertTrue(restored.customerPriceOnly)
     }
+
+    @Test
+    fun testResolveTableRowsNoDoublePrefixPostfix() {
+        val tableConfig = ExcelTableConfig(
+            items = listOf(
+                ExcelTableCellItem(
+                    source = TableItemSource.FORMULA_RESULT,
+                    label = "NET TUTAR",
+                    prefix = "₺",
+                    postfix = " TL",
+                    coordinate = "A1",
+                    isVisible = true,
+                    isEmphasized = true
+                )
+            )
+        )
+
+        val positiveResult = ParsedQrResult(
+            rawText = "100-0",
+            status = CalculationStatus.Success(100.0, "₺100.00 TL")
+        )
+        val negativeResult = ParsedQrResult(
+            rawText = "100-0",
+            status = CalculationStatus.Success(-100.0, "-₺100.00 TL")
+        )
+        val parenResult = ParsedQrResult(
+            rawText = "100-0",
+            status = CalculationStatus.Success(-100.0, "(₺100.00 TL)")
+        )
+
+        assertEquals("₺100.00 TL", com.example.ui.resolveTableRows(tableConfig, positiveResult).first().second)
+        assertEquals("-₺100.00 TL", com.example.ui.resolveTableRows(tableConfig, negativeResult).first().second)
+        assertEquals("(₺100.00 TL)", com.example.ui.resolveTableRows(tableConfig, parenResult).first().second)
+
+        val customWrapConfig = ExcelTableConfig(
+            items = listOf(
+                ExcelTableCellItem(
+                    source = TableItemSource.FORMULA_RESULT,
+                    label = "NET",
+                    prefix = "Net: ",
+                    postfix = " (KDV)",
+                    coordinate = "A1",
+                    isVisible = true
+                )
+            )
+        )
+        assertEquals("Net: ₺100.00 TL (KDV)", com.example.ui.resolveTableRows(customWrapConfig, positiveResult).first().second)
+    }
 }

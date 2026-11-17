@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.engine.ResultFormatter
 import com.example.model.*
 import com.example.ui.ExcelTableOverlayContent
 import java.util.UUID
@@ -57,7 +58,7 @@ fun TableSettingsSection(
                 mockVars[v.name]?.toInt()?.toString() ?: "10"
             },
             extractedVariables = mockVars,
-            status = CalculationStatus.Success(100.0, "${profile.formatting.prefix}100.00${profile.formatting.postfix}"),
+            status = CalculationStatus.Success(100.0, ResultFormatter.format(100.0, profile.formatting)),
             formulaExpression = profile.formula.expression,
             variablePillDisplay = pillDisplay
         )
@@ -173,10 +174,10 @@ fun TableSettingsSection(
                             }
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "LIVE MINI EXCEL PREVIEW",
+                                text = "CANLI MİNİ EXCEL ÖNİZLEME",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color(0xFF86EFAC),
-                                letterSpacing = 1.2.sp,
+                                letterSpacing = 1.0.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -193,9 +194,9 @@ fun TableSettingsSection(
                             label = {
                                 Text(
                                     text = when (overlay.displayMode) {
-                                        OverlayDisplayMode.EXCEL_TABLE -> "Mode: Excel Grid"
-                                        OverlayDisplayMode.COMPACT_CARD -> "Mode: Compact Card"
-                                        OverlayDisplayMode.HYBRID -> "Mode: Hybrid"
+                                        OverlayDisplayMode.EXCEL_TABLE -> "Mod: Excel Tablo"
+                                        OverlayDisplayMode.COMPACT_CARD -> "Mod: Özet Kart"
+                                        OverlayDisplayMode.HYBRID -> "Mod: Hibrit"
                                     },
                                     fontSize = 11.sp
                                 )
@@ -233,7 +234,7 @@ fun TableSettingsSection(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Table Header & Aesthetic Options",
+                        text = "Tablo Başlığı & Görünüm Ayarları",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -245,9 +246,9 @@ fun TableSettingsSection(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            Text("Show Table Header", fontWeight = FontWeight.SemiBold)
-                            Text("Header banner atop spreadsheet", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Tablo Başlığını Göster", fontWeight = FontWeight.SemiBold)
+                            Text("Tablonun üstünde başlık şeridi gösterir", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = tableConfig.showHeader,
@@ -261,15 +262,17 @@ fun TableSettingsSection(
                         OutlinedTextField(
                             value = tableConfig.headerTitle,
                             onValueChange = { updateTable(tableConfig.copy(headerTitle = it, items = effectiveItems)) },
-                            label = { Text("Header Title (e.g. DATA SHEET)") },
-                            modifier = Modifier.fillMaxWidth()
+                            label = { Text("Ana Başlık (örn. FİYAT TABLOSU)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedTextField(
                             value = tableConfig.headerSubtitle,
                             onValueChange = { updateTable(tableConfig.copy(headerSubtitle = it, items = effectiveItems)) },
-                            label = { Text("Header Subtitle / Tag (e.g. SPREADSHEET)") },
-                            modifier = Modifier.fillMaxWidth()
+                            label = { Text("Alt Başlık / Etiket (örn. ₺ FİYATLANDIRMA)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
                         )
                     }
 
@@ -283,9 +286,9 @@ fun TableSettingsSection(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            Text("Show Column Headers", fontWeight = FontWeight.SemiBold)
-                            Text("Displays [PARAM] & [VALUE] header row", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Sütun Başlıklarını Göster", fontWeight = FontWeight.SemiBold)
+                            Text("[HÜCRE / PARAMETRE] ve [DEĞER] satırını gösterir", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = tableConfig.showColumnHeaders,
@@ -300,9 +303,9 @@ fun TableSettingsSection(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            Text("Show Cell Coordinates", fontWeight = FontWeight.SemiBold)
-                            Text("Displays A1, A2, A3... spreadsheet cell IDs", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Hücre Koordinatlarını Göster", fontWeight = FontWeight.SemiBold)
+                            Text("A1, A2, A3... hücre numaralarını gösterir", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = tableConfig.showCoordinates,
@@ -311,7 +314,7 @@ fun TableSettingsSection(
                     }
 
                     Spacer(modifier = Modifier.height(14.dp))
-                    Text("Grid Theme", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Text("Tablo Teması", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Row(
@@ -328,10 +331,10 @@ fun TableSettingsSection(
                                 label = {
                                     Text(
                                         when (theme) {
-                                            ExcelGridTheme.EXCEL_CLASSIC -> "Excel Classic"
-                                            ExcelGridTheme.NEON_CYAN -> "Neon Cyan"
-                                            ExcelGridTheme.MODERN_SLATE -> "Modern Slate"
-                                            ExcelGridTheme.AMBER_GOLD -> "Amber Gold"
+                                            ExcelGridTheme.EXCEL_CLASSIC -> "Excel Klasik"
+                                            ExcelGridTheme.NEON_CYAN -> "Neon Turkuaz"
+                                            ExcelGridTheme.MODERN_SLATE -> "Modern Koyu"
+                                            ExcelGridTheme.AMBER_GOLD -> "Kehribar Altın"
                                         }
                                     )
                                 },
@@ -355,12 +358,12 @@ fun TableSettingsSection(
                 ) {
                     Column {
                         Text(
-                            text = "Table Cells & Ordering",
+                            text = "Tablo Hücreleri ve Sıralama",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${effectiveItems.count { it.isVisible }} visible · ${effectiveItems.count { it.isEmphasized }} emphasized",
+                            text = "${effectiveItems.count { it.isVisible }} görünür · ${effectiveItems.count { it.isEmphasized }} vurgulu",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -371,7 +374,7 @@ fun TableSettingsSection(
                         color = MaterialTheme.colorScheme.primaryContainer
                     ) {
                         Text(
-                            text = "${effectiveItems.size} Total",
+                            text = "${effectiveItems.size} Toplam",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -394,7 +397,7 @@ fun TableSettingsSection(
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Add Cell")
+                        Text("Hücre Ekle")
                     }
 
                     FilledTonalButton(
@@ -405,7 +408,7 @@ fun TableSettingsSection(
                     ) {
                         Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Reset Sync")
+                        Text("Senkronize Sıfırla")
                     }
                 }
             }

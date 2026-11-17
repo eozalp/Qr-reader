@@ -16,14 +16,18 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.annotation.OptIn
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -32,6 +36,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import com.example.MainActivity
+import com.example.R
 import com.example.bluetooth.BluetoothHidManager
 import com.example.camera.QrCodeAnalyzer
 import com.example.camera.QrTracker
@@ -41,6 +46,10 @@ import com.example.engine.QrParser
 import com.example.model.KeyboardEndingKey
 import com.example.model.KeyboardSendTarget
 import com.example.model.QrProfile
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -50,12 +59,19 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * Local Android InputMethodService (IME) allowing the user to select "ALVETAK QR Klavye"
- * from Android's keyboard switcher button inside Chrome, Excel Mobile, Notes, or any web form.
- * Runs a compact live camera barcode scanner in the bottom keyboard pane and types parsed
- * barcodes / variables / Tab / Enter directly into the active input field above.
+ * Compact Camera Input Keyboard ("ALVETAK QR Klavye") modeled after clean camera-strip IMEs:
+ * - Occupies only the bottom ~34% of the screen so Chrome / Edge / Excel forms stay visible above.
+ * - Uses TextureView (PreviewView.ImplementationMode.COMPATIBLE) so camera video renders reliably inside IME windows.
+ * - Top centered segmented toggle: [ Barkod | Metin ] (Barcode scanning vs live OCR Text capture).
+ * - Center frosted horizontal scan strip for aiming barcodes or reading text.
+ * - Bottom-left Camera Flip, bottom-right Flash/Torch, plus subtle micro action pills (Mode / Tab / Enter / Backspace).
  */
 class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
+
+    private enum class ScanInputMode {
+        BARCODE,
+        TEXT_OCR
+    }
 
     private lateinit var lifecycleRegistry: LifecycleRegistry
     override val lifecycle: Lifecycle
@@ -68,15 +84,19 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
     private val qrTracker = QrTracker()
     private val hidPayloadHelper = BluetoothHidManager(null)
     private lateinit var cameraExecutor: ExecutorService
+    private lateinit var textRecognizer: TextRecognizer
 
     private var cameraProvider: ProcessCameraProvider? = null
     private var boundCamera: Camera? = null
     private var previewView: PreviewView? = null
-    private var analyzer: QrCodeAnalyzer? = null
+    private var barcodeAnalyzer: QrCodeAnalyzer? = null
 
-    private var isPaused = false
+    private var scanMode: ScanInputMode = ScanInputMode.BARCODE
+    private var useFrontCamera = false
     private var isTorchOn = false
     private var currentSendTargetOverride: KeyboardSendTarget? = null
+    private var lastOcrScanTimeMs = 0L
+    private var latestDetectedOcrText: String = ""
 
     // Batch duplicate guard inside local keyboard
     private val activeInFrameRaw = mutableSetOf<String>()
@@ -85,18 +105,26 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
     private val dismissedUntilGone = mutableSetOf<String>()
     private var pendingConfirmRaw: String? = null
     private var pendingConfirmPayload: String? = null
-    private var lastSubmittedPayload: String? = null
-    private var lastSubmittedRaw: String? = null
 
     // UI References
-    private var statusTextView: TextView? = null
-    private var profileTextView: TextView? = null
-    private var modeChipBtn: Button? = null
-    private var pauseBtn: Button? = null
-    private var torchBtn: Button? = null
-    private var permissionContainer: LinearLayout? = null
+    private var barcodeTabContainer: LinearLayout? = null
+    private var barcodeTabIcon: ImageView? = null
+    private var barcodeTabLabel: TextView? = null
+    private var textTabContainer: LinearLayout? = null
+    private var textTabIcon: ImageView? = null
+    private var textTabLabel: TextView? = null
+
+    private var scanStripBox: LinearLayout? = null
+    private var ocrPreviewTextView: TextView? = null
+    private var ocrCommitChip: TextView? = null
+    private var statusToastView: TextView? = null
     private var duplicateBanner: LinearLayout? = null
     private var duplicateTextView: TextView? = null
+    private var permissionContainer: LinearLayout? = null
+    private var torchButton: ImageButton? = null
+    private var modeMicroChip: TextView? = null
+
+    private var statusClearRunnable: Runnable? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -104,100 +132,189 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         profileRepository = ProfileRepository(applicationContext)
         cameraExecutor = Executors.newSingleThreadExecutor()
+        textRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }
+
+    override fun onEvaluateFullscreenMode(): Boolean = false
 
     override fun onCreateInputView(): View {
         val density = resources.displayMetrics.density
         fun dp(v: Int): Int = (v * density).toInt()
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#090D16"))
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(290)
-            )
-            setPadding(dp(10), dp(8), dp(10), dp(10))
+        val screenH = resources.displayMetrics.heightPixels
+        val targetKeyboardHeight = (screenH * 0.34f).toInt().coerceIn(dp(235), dp(290))
+
+        // Fixed-height root guarantees the IME never stretches to fill the screen
+        val root = FixedHeightFrameLayout(this, targetKeyboardHeight).apply {
+            setBackgroundColor(Color.BLACK)
         }
 
-        // --- 1. Top Control Strip (Profile, Target Mode, Torch, Pause, Switch Keyboard) ---
-        val topBar = LinearLayout(this).apply {
+        // 1. Full-bleed Live Camera Preview (COMPATIBLE = TextureView so it NEVER shows black in IME!)
+        val camPreview = PreviewView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+        }
+        previewView = camPreview
+        root.addView(camPreview)
+
+        // Subtle dark vignette overlay for high contrast of floating white pills/icons
+        val vignette = View(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(
+                    Color.parseColor("#66000000"),
+                    Color.parseColor("#18000000"),
+                    Color.parseColor("#77000000")
+                )
+            )
+        }
+        root.addView(vignette)
+
+        // 2. Top Centered Segmented Toggle: [ Barcode | Text ]
+        val pillHost = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(40)
-            )
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#880B0F19"))
+                cornerRadius = dp(24).toFloat()
+            }
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                dp(42),
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            ).apply {
+                topMargin = dp(10)
+            }
         }
 
-        val profilePill = TextView(this).apply {
-            text = profileRepository.activeProfile.value.name
-            setTextColor(Color.parseColor("#00F5D4"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        val (bTab, bIcon, bLabel) = buildSegmentTab(R.drawable.ic_kb_barcode, "Barkod") {
+            setScanMode(ScanInputMode.BARCODE)
+        }
+        barcodeTabContainer = bTab
+        barcodeTabIcon = bIcon
+        barcodeTabLabel = bLabel
+
+        val (tTab, tIcon, tLabel) = buildSegmentTab(R.drawable.ic_kb_text_scan, "Metin") {
+            setScanMode(ScanInputMode.TEXT_OCR)
+        }
+        textTabContainer = tTab
+        textTabIcon = tIcon
+        textTabLabel = tLabel
+
+        pillHost.addView(bTab)
+        pillHost.addView(tTab)
+        root.addView(pillHost)
+
+        // 3. Center Frosted Horizontal Scan Strip (Aiming Reticle + OCR Capture Strip)
+        val strip = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#54E5E7EB"))
+                cornerRadius = dp(6).toFloat()
+                setStroke(dp(1), Color.parseColor("#66FFFFFF"))
+            }
+            setPadding(dp(12), 0, dp(8), 0)
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                dp(46),
+                Gravity.CENTER
+            ).apply {
+                marginStart = dp(22)
+                marginEnd = dp(22)
+            }
+            setOnClickListener {
+                if (scanMode == ScanInputMode.TEXT_OCR && latestDetectedOcrText.isNotBlank()) {
+                    commitTextOcrToEditor(latestDetectedOcrText)
+                }
+            }
+        }
+        val ocrText = TextView(this).apply {
+            text = ""
+            setTextColor(Color.parseColor("#111827"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setTypeface(null, Typeface.BOLD)
             maxLines = 1
+            visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-        profileTextView = profilePill
-        topBar.addView(profilePill)
+        ocrPreviewTextView = ocrText
+        strip.addView(ocrText)
 
-        val modeBtn = createChipButton("Mod: Tümü") {
-            val active = profileRepository.activeProfile.value
-            val current = currentSendTargetOverride ?: active.bluetoothKeyboard.sendTarget
-            val next = when (current) {
-                KeyboardSendTarget.WHOLE_RAW -> KeyboardSendTarget.MULTIPLE_VARIABLES
-                KeyboardSendTarget.MULTIPLE_VARIABLES -> KeyboardSendTarget.FORMULA_RESULT
-                KeyboardSendTarget.FORMULA_RESULT -> KeyboardSendTarget.SINGLE_VARIABLE
-                else -> KeyboardSendTarget.WHOLE_RAW
+        val commitChip = TextView(this).apply {
+            text = "Yaz ↵"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTypeface(null, Typeface.BOLD)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#111827"))
+                cornerRadius = dp(14).toFloat()
             }
-            currentSendTargetOverride = next
-            updateModeLabel(active)
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            visibility = View.GONE
+            setOnClickListener {
+                if (latestDetectedOcrText.isNotBlank()) {
+                    commitTextOcrToEditor(latestDetectedOcrText)
+                }
+            }
         }
-        modeChipBtn = modeBtn
-        topBar.addView(modeBtn)
+        ocrCommitChip = commitChip
+        strip.addView(commitChip)
+        scanStripBox = strip
+        root.addView(strip)
 
-        val flashBtn = createChipButton("Flaş") {
-            isTorchOn = !isTorchOn
-            boundCamera?.cameraControl?.enableTorch(isTorchOn)
-            torchBtn?.setTextColor(if (isTorchOn) Color.parseColor("#F59E0B") else Color.WHITE)
+        // 4. Compact Feedback Toast / Batch Duplicate Banner (just below center strip)
+        val statusToast = TextView(this).apply {
+            text = ""
+            setTextColor(Color.parseColor("#00F5D4"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#CC090D16"))
+                cornerRadius = dp(12).toFloat()
+                setStroke(dp(1), Color.parseColor("#5500F5D4"))
+            }
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            ).apply {
+                topMargin = dp(46)
+            }
         }
-        torchBtn = flashBtn
-        topBar.addView(flashBtn)
+        statusToastView = statusToast
+        root.addView(statusToast)
 
-        val pauseToggle = createChipButton("Duraklat") {
-            isPaused = !isPaused
-            analyzer?.isPaused = isPaused
-            pauseBtn?.text = if (isPaused) "Devam" else "Duraklat"
-            statusTextView?.text = if (isPaused) "Tarama duraklatıldı" else "Barkod bekleniyor..."
-        }
-        pauseBtn = pauseToggle
-        topBar.addView(pauseToggle)
-
-        val switchKbBtn = createChipButton("🌐") {
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-            imm?.showInputMethodPicker()
-        }
-        topBar.addView(switchKbBtn)
-
-        root.addView(topBar)
-
-        // --- 2. Duplicate Confirmation Strip (Hidden unless same barcode rescanned in batch) ---
-        val dupStrip = LinearLayout(this).apply {
+        val dupBanner = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             visibility = View.GONE
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#2A1B05"))
-                cornerRadius = dp(10).toFloat()
+                setColor(Color.parseColor("#E61C1204"))
+                cornerRadius = dp(14).toFloat()
                 setStroke(dp(1), Color.parseColor("#F59E0B"))
             }
-            setPadding(dp(10), dp(6), dp(10), dp(6))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+            setPadding(dp(10), dp(5), dp(8), dp(5))
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
             ).apply {
-                topMargin = dp(4)
-                bottomMargin = dp(4)
+                topMargin = dp(48)
+                marginStart = dp(16)
+                marginEnd = dp(16)
             }
         }
         val dupLabel = TextView(this).apply {
@@ -205,12 +322,12 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setTypeface(null, Typeface.BOLD)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            maxLines = 1
         }
         duplicateTextView = dupLabel
-        dupStrip.addView(dupLabel)
+        dupBanner.addView(dupLabel)
 
-        val confirmBtn = createActionKey("Tekrar Yaz (+1)", "#00F5D4", "#00382E") {
+        val confirmBtn = createMiniPill("Tekrar (+1)", "#00F5D4", "#042F2E") {
             val raw = pendingConfirmRaw
             val payload = pendingConfirmPayload
             if (raw != null && payload != null) {
@@ -220,251 +337,348 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             pendingConfirmPayload = null
             duplicateBanner?.visibility = View.GONE
         }
-        dupStrip.addView(confirmBtn)
+        dupBanner.addView(confirmBtn)
 
-        val skipBtn = createActionKey("Atla", "#334155", "#FFFFFF") {
+        val skipBtn = createMiniPill("Atla", "#334155", "#FFFFFF") {
             pendingConfirmRaw?.let { dismissedUntilGone.add(it) }
             pendingConfirmRaw = null
             pendingConfirmPayload = null
             duplicateBanner?.visibility = View.GONE
         }
-        dupStrip.addView(skipBtn)
+        dupBanner.addView(skipBtn)
+        duplicateBanner = dupBanner
+        root.addView(dupBanner)
 
-        duplicateBanner = dupStrip
-        root.addView(dupStrip)
-
-        // --- 3. Main Area: Live Camera Scanner (Left) + Action Keypad Column (Right) ---
-        val bodyRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            ).apply { topMargin = dp(6) }
-        }
-
-        // Camera Box
-        val cameraContainer = FrameLayout(this).apply {
+        // 5. Bottom-Left: Camera Flip Icon Button
+        val flipBtn = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_kb_camera_flip)
+            setColorFilter(Color.WHITE)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            contentDescription = "Kamera Değiştir"
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#111827"))
-                cornerRadius = dp(14).toFloat()
-                setStroke(dp(1), Color.parseColor("#1E293B"))
+                setColor(Color.parseColor("#55000000"))
+                shape = GradientDrawable.OVAL
             }
-            clipToOutline = true
-            layoutParams = LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                1f
-            ).apply { marginEnd = dp(8) }
+            setPadding(dp(11), dp(11), dp(11), dp(11))
+            layoutParams = FrameLayout.LayoutParams(dp(46), dp(46), Gravity.BOTTOM or Gravity.START).apply {
+                marginStart = dp(16)
+                bottomMargin = dp(12)
+            }
+            setOnClickListener {
+                useFrontCamera = !useFrontCamera
+                if (useFrontCamera) isTorchOn = false
+                updateTorchIconTint()
+                startCameraIfPermitted()
+            }
         }
+        root.addView(flipBtn)
 
-        val camPreview = PreviewView(this).apply {
+        // 6. Bottom-Center: Micro Utility Capsule (Send Mode + Tab + Enter + Backspace)
+        val bottomCenterBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#880B0F19"))
+                cornerRadius = dp(18).toFloat()
+            }
+            setPadding(dp(6), dp(3), dp(6), dp(3))
             layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-            scaleType = PreviewView.ScaleType.FILL_CENTER
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                dp(36),
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            ).apply {
+                bottomMargin = dp(16)
+            }
         }
-        previewView = camPreview
-        cameraContainer.addView(camPreview)
 
-        // Aiming Reticle Overlay + Status Pill at Bottom of Camera
-        val statusPill = TextView(this).apply {
-            text = "Kamerayı barkoda tutun — okunan veri forma yazılır"
-            setTextColor(Color.WHITE)
+        val modeView = TextView(this).apply {
+            text = "Ham"
+            setTextColor(Color.parseColor("#00F5D4"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setTypeface(null, Typeface.BOLD)
-            gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#CC090D16"))
-                cornerRadius = dp(10).toFloat()
-            }
-            setPadding(dp(10), dp(5), dp(10), dp(5))
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM
-            ).apply {
-                setMargins(dp(8), dp(8), dp(8), dp(8))
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            setOnClickListener {
+                val active = profileRepository.activeProfile.value
+                val current = currentSendTargetOverride ?: active.bluetoothKeyboard.sendTarget
+                currentSendTargetOverride = when (current) {
+                    KeyboardSendTarget.WHOLE_RAW -> KeyboardSendTarget.MULTIPLE_VARIABLES
+                    KeyboardSendTarget.MULTIPLE_VARIABLES -> KeyboardSendTarget.FORMULA_RESULT
+                    KeyboardSendTarget.FORMULA_RESULT -> KeyboardSendTarget.SINGLE_VARIABLE
+                    else -> KeyboardSendTarget.WHOLE_RAW
+                }
+                updateModeChipLabel(active)
             }
         }
-        statusTextView = statusPill
-        cameraContainer.addView(statusPill)
+        modeMicroChip = modeView
+        bottomCenterBar.addView(modeView)
 
-        // Camera Permission Missing Overlay
-        val permBox = LinearLayout(this).apply {
+        bottomCenterBar.addView(createMicroKey("⇥") {
+            sendDownUpKeyEvents(KeyEvent.KEYCODE_TAB)
+        })
+        bottomCenterBar.addView(createMicroKey("↵") {
+            sendEnterOrAction()
+        })
+        bottomCenterBar.addView(createMicroKey("⌫") {
+            currentInputConnection?.deleteSurroundingText(1, 0)
+        })
+        root.addView(bottomCenterBar)
+
+        // 7. Bottom-Right: Flash / Torch Bolt Button
+        val flashBtn = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_kb_flash)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            contentDescription = "Flaş"
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#55000000"))
+                shape = GradientDrawable.OVAL
+            }
+            setPadding(dp(11), dp(11), dp(11), dp(11))
+            layoutParams = FrameLayout.LayoutParams(dp(46), dp(46), Gravity.BOTTOM or Gravity.END).apply {
+                marginEnd = dp(16)
+                bottomMargin = dp(12)
+            }
+            setOnClickListener {
+                if (!useFrontCamera) {
+                    isTorchOn = !isTorchOn
+                    boundCamera?.cameraControl?.enableTorch(isTorchOn)
+                    updateTorchIconTint()
+                }
+            }
+        }
+        torchButton = flashBtn
+        updateTorchIconTint()
+        root.addView(flashBtn)
+
+        // 8. Camera Permission Overlay (only visible if user hasn't granted CAMERA permission yet)
+        val permOverlay = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setBackgroundColor(Color.parseColor("#EE090D16"))
+            setBackgroundColor(Color.parseColor("#EA090D16"))
             visibility = View.GONE
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
-            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setPadding(dp(20), dp(20), dp(20), dp(20))
         }
-        val permLabel = TextView(this).apply {
-            text = "Kamera taraması için uygulama içi kamera izni gerekli."
+        val permText = TextView(this).apply {
+            text = "Kamera klavyesini kullanmak için uygulama içi kamera izni verin."
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             gravity = Gravity.CENTER
         }
-        val openAppBtn = createActionKey("İzin Ver / Uygulamayı Aç", "#00F5D4", "#00382E") {
-            val launch = Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val openAppBtn = Button(this).apply {
+            text = "İzin Ver / Uygulamayı Aç"
+            isAllCaps = false
+            setTextColor(Color.parseColor("#042F2E"))
+            setTypeface(null, Typeface.BOLD)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#00F5D4"))
+                cornerRadius = dp(14).toFloat()
             }
-            startActivity(launch)
-        }
-        permBox.addView(permLabel)
-        permBox.addView(openAppBtn)
-        permissionContainer = permBox
-        cameraContainer.addView(permBox)
-
-        bodyRow.addView(cameraContainer)
-
-        // Right Keypad Column (Tab, Enter, Backspace, Resend Last)
-        val keysCol = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(14), dp(6), dp(14), dp(6))
             layoutParams = LinearLayout.LayoutParams(
-                dp(92),
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        }
-
-        keysCol.addView(createKeypadButton("Tab ⇥", "#1E293B", "#00F5D4") {
-            sendDownUpKeyEvents(KeyEvent.KEYCODE_TAB)
-        })
-        keysCol.addView(createKeypadButton("Enter ↵", "#00F5D4", "#00382E") {
-            sendEnterOrAction()
-        })
-        keysCol.addView(createKeypadButton("Sil ⌫", "#1E293B", "#F87171") {
-            currentInputConnection?.deleteSurroundingText(1, 0)
-        })
-        keysCol.addView(createKeypadButton("Tekrar", "#1E293B", "#FBBF24") {
-            val raw = lastSubmittedRaw
-            val pay = lastSubmittedPayload
-            if (raw != null && pay != null) {
-                commitPayloadToEditor(raw, pay, profileRepository.activeProfile.value)
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(10) }
+            setOnClickListener {
+                startActivity(Intent(this@AlvetakKeyboardService, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
             }
-        })
+        }
+        permOverlay.addView(permText)
+        permOverlay.addView(openAppBtn)
+        permissionContainer = permOverlay
+        root.addView(permOverlay)
 
-        bodyRow.addView(keysCol)
-        root.addView(bodyRow)
-
-        updateModeLabel(profileRepository.activeProfile.value)
+        refreshTabStyles()
+        updateModeChipLabel(profileRepository.activeProfile.value)
         return root
     }
 
-    private fun createChipButton(label: String, onClick: () -> Unit): Button {
+    private fun buildSegmentTab(
+        iconRes: Int,
+        title: String,
+        onClick: () -> Unit
+    ): Triple<LinearLayout, ImageView, TextView> {
         val density = resources.displayMetrics.density
-        val padH = (8 * density).toInt()
-        return Button(this).apply {
+        fun dp(v: Int): Int = (v * density).toInt()
+
+        val iconView = ImageView(this).apply {
+            setImageResource(iconRes)
+            layoutParams = LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(6) }
+        }
+        val labelView = TextView(this).apply {
+            text = title
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTypeface(null, Typeface.BOLD)
+            maxLines = 1
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            addView(iconView)
+            addView(labelView)
+            setOnClickListener { onClick() }
+        }
+        return Triple(container, iconView, labelView)
+    }
+
+    private fun createMiniPill(label: String, bgHex: String, fgHex: String, onClick: () -> Unit): TextView {
+        val density = resources.displayMetrics.density
+        fun dp(v: Int): Int = (v * density).toInt()
+        return TextView(this).apply {
             text = label
-            isAllCaps = false
+            setTextColor(Color.parseColor(fgHex))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTypeface(null, Typeface.BOLD)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor(bgHex))
+                cornerRadius = dp(10).toFloat()
+            }
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = dp(6) }
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun createMicroKey(symbol: String, onClick: () -> Unit): TextView {
+        val density = resources.displayMetrics.density
+        fun dp(v: Int): Int = (v * density).toInt()
+        return TextView(this).apply {
+            text = symbol
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#162033"))
-                cornerRadius = (10 * density)
-                setStroke((1 * density).toInt(), Color.parseColor("#2A3B55"))
+                setColor(Color.parseColor("#33FFFFFF"))
+                cornerRadius = dp(12).toFloat()
             }
-            setPadding(padH, 0, padH, 0)
-            minWidth = 0
-            minimumWidth = 0
+            setPadding(dp(10), dp(3), dp(10), dp(3))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                (34 * density).toInt()
-            ).apply { marginStart = (4 * density).toInt() }
+                dp(26)
+            ).apply { marginStart = dp(4) }
             setOnClickListener { onClick() }
         }
     }
 
-    private fun createActionKey(label: String, bgHex: String, fgHex: String, onClick: () -> Unit): Button {
+    private fun setScanMode(mode: ScanInputMode) {
+        if (scanMode == mode) return
+        scanMode = mode
+        latestDetectedOcrText = ""
+        refreshTabStyles()
+        if (mode == ScanInputMode.BARCODE) {
+            ocrPreviewTextView?.visibility = View.GONE
+            ocrCommitChip?.visibility = View.GONE
+        } else {
+            duplicateBanner?.visibility = View.GONE
+            ocrPreviewTextView?.text = "Metni orta şeride hizalayın..."
+            ocrPreviewTextView?.visibility = View.VISIBLE
+            ocrCommitChip?.visibility = View.GONE
+        }
+    }
+
+    private fun refreshTabStyles() {
         val density = resources.displayMetrics.density
-        return Button(this).apply {
-            text = label
-            isAllCaps = false
-            setTextColor(Color.parseColor(fgHex))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setTypeface(null, Typeface.BOLD)
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor(bgHex))
-                cornerRadius = (8 * density)
-            }
-            setPadding((8 * density).toInt(), (4 * density).toInt(), (8 * density).toInt(), (4 * density).toInt())
-            minWidth = 0
-            minimumWidth = 0
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                (34 * density).toInt()
-            ).apply { marginStart = (6 * density).toInt() }
-            setOnClickListener { onClick() }
-        }
+        val radius = 20f * density
+        val isBarcode = scanMode == ScanInputMode.BARCODE
+
+        barcodeTabContainer?.background = if (isBarcode) {
+            GradientDrawable().apply { setColor(Color.WHITE); cornerRadius = radius }
+        } else null
+        barcodeTabIcon?.setColorFilter(if (isBarcode) Color.parseColor("#111827") else Color.WHITE)
+        barcodeTabLabel?.setTextColor(if (isBarcode) Color.parseColor("#111827") else Color.WHITE)
+
+        textTabContainer?.background = if (!isBarcode) {
+            GradientDrawable().apply { setColor(Color.WHITE); cornerRadius = radius }
+        } else null
+        textTabIcon?.setColorFilter(if (!isBarcode) Color.parseColor("#111827") else Color.WHITE)
+        textTabLabel?.setTextColor(if (!isBarcode) Color.parseColor("#111827") else Color.WHITE)
+
+        modeMicroChip?.visibility = if (isBarcode) View.VISIBLE else View.GONE
     }
 
-    private fun createKeypadButton(label: String, bgHex: String, fgHex: String, onClick: () -> Unit): Button {
-        val density = resources.displayMetrics.density
-        return Button(this).apply {
-            text = label
-            isAllCaps = false
-            setTextColor(Color.parseColor(fgHex))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTypeface(null, Typeface.BOLD)
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor(bgHex))
-                cornerRadius = (10 * density)
-                setStroke((1 * density).toInt(), Color.parseColor("#2A3B55"))
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            ).apply { bottomMargin = (5 * density).toInt() }
-            setOnClickListener { onClick() }
-        }
+    private fun updateTorchIconTint() {
+        torchButton?.alpha = if (useFrontCamera) 0.35f else 1f
+        torchButton?.setColorFilter(
+            if (isTorchOn && !useFrontCamera) Color.parseColor("#FBBF24") else Color.WHITE
+        )
     }
 
-    private fun updateModeLabel(profile: QrProfile) {
+    private fun updateModeChipLabel(profile: QrProfile) {
         val target = currentSendTargetOverride ?: profile.bluetoothKeyboard.sendTarget
-        val shortLabel = when (target) {
+        modeMicroChip?.text = when (target) {
             KeyboardSendTarget.WHOLE_RAW -> "Ham"
             KeyboardSendTarget.FORMULA_RESULT -> "Sonuç"
             KeyboardSendTarget.SINGLE_VARIABLE -> "Tek"
             KeyboardSendTarget.MULTIPLE_VARIABLES -> "Çoklu"
             KeyboardSendTarget.CUSTOM_TEMPLATE -> "Şablon"
         }
-        profileTextView?.text = profile.name
-        modeChipBtn?.text = "Mod: $shortLabel"
+    }
+
+    private fun showStatusToast(message: String) {
+        statusToastView?.text = message
+        statusToastView?.visibility = View.VISIBLE
+        statusClearRunnable?.let { mainHandler.removeCallbacks(it) }
+        val r = Runnable { statusToastView?.visibility = View.GONE }
+        statusClearRunnable = r
+        mainHandler.postDelayed(r, 2200L)
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         serviceScope.launch {
             profileRepository.reloadFromDisk()
-            updateModeLabel(profileRepository.activeProfile.value)
+            updateModeChipLabel(profileRepository.activeProfile.value)
+        }
+        previewView?.post {
+            if (boundCamera == null) {
+                startCameraIfPermitted()
+            }
         }
     }
 
     override fun onWindowShown() {
         super.onWindowShown()
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
-        startCameraIfPermitted()
+        if (lifecycleRegistry.currentState == Lifecycle.State.CREATED) {
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+        }
+        if (lifecycleRegistry.currentState == Lifecycle.State.STARTED) {
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        }
+        previewView?.post { startCameraIfPermitted() } ?: startCameraIfPermitted()
     }
 
     override fun onWindowHidden() {
         super.onWindowHidden()
         stopCamera()
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        if (lifecycleRegistry.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+        }
+        if (lifecycleRegistry.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        }
     }
 
     override fun onDestroy() {
         stopCamera()
         serviceScope.cancel()
+        runCatching { textRecognizer.close() }
         cameraExecutor.shutdown()
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+        if (lifecycleRegistry.currentState != Lifecycle.State.DESTROYED) {
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+        }
         super.onDestroy()
     }
 
@@ -489,52 +703,129 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 provider.unbindAll()
 
                 val activeProfile = profileRepository.activeProfile.value
-                val newAnalyzer = QrCodeAnalyzer { detectedList ->
+                val newQrAnalyzer = QrCodeAnalyzer { detectedList ->
                     mainHandler.post {
                         handleDetectedCodes(detectedList)
                     }
                 }.apply {
-                    isPaused = this@AlvetakKeyboardService.isPaused
+                    isFrontCamera = useFrontCamera
                     updateBarcodeFormats(
                         preset = activeProfile.tracking.scanPreset,
                         customFormats = activeProfile.tracking.enabledFormats,
                         enableInverted = activeProfile.tracking.enableInvertedDetection
                     )
                 }
-                analyzer = newAnalyzer
+                barcodeAnalyzer = newQrAnalyzer
 
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(pv.surfaceProvider)
                 }
+
                 val analysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
-                    .also {
-                        it.setAnalyzer(cameraExecutor, newAnalyzer)
+                    .also { imgAnalysis ->
+                        imgAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                            if (scanMode == ScanInputMode.BARCODE) {
+                                newQrAnalyzer.analyze(imageProxy)
+                            } else {
+                                analyzeOcrFrame(imageProxy)
+                            }
+                        }
                     }
+
+                val selector = if (useFrontCamera) {
+                    CameraSelector.DEFAULT_FRONT_CAMERA
+                } else {
+                    CameraSelector.DEFAULT_BACK_CAMERA
+                }
 
                 boundCamera = provider.bindToLifecycle(
                     this,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    selector,
                     preview,
                     analysis
                 )
+                if (!useFrontCamera && isTorchOn) {
+                    boundCamera?.cameraControl?.enableTorch(true)
+                }
             } catch (e: Exception) {
-                statusTextView?.text = "Kamera açılamadı: ${e.message}"
+                showStatusToast("Kamera açılamadı: ${e.message}")
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    @OptIn(ExperimentalGetImage::class)
+    private fun analyzeOcrFrame(imageProxy: ImageProxy) {
+        val mediaImage = imageProxy.image
+        if (mediaImage == null) {
+            imageProxy.close()
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (now - lastOcrScanTimeMs < 250L) {
+            imageProxy.close()
+            return
+        }
+        lastOcrScanTimeMs = now
+
+        val rotation = imageProxy.imageInfo.rotationDegrees
+        val isRotated = rotation == 90 || rotation == 270
+        val frameH = if (isRotated) imageProxy.width.toFloat() else imageProxy.height.toFloat()
+        val inputImage = InputImage.fromMediaImage(mediaImage, rotation)
+
+        textRecognizer.process(inputImage)
+            .addOnSuccessListener { visionText ->
+                // Prioritize text lines inside the middle horizontal strip (30%..70% height)
+                val centerMinY = frameH * 0.25f
+                val centerMaxY = frameH * 0.75f
+                val centerLines = visionText.textBlocks
+                    .flatMap { it.lines }
+                    .filter { line ->
+                        val box = line.boundingBox
+                        box == null || (box.centerY().toFloat() in centerMinY..centerMaxY)
+                    }
+                    .map { it.text.trim() }
+                    .filter { it.isNotEmpty() }
+
+                val candidate = centerLines.firstOrNull() ?: visionText.text.trim().lineSequence().firstOrNull().orEmpty()
+                mainHandler.post {
+                    if (scanMode == ScanInputMode.TEXT_OCR) {
+                        latestDetectedOcrText = candidate
+                        if (candidate.isNotBlank()) {
+                            ocrPreviewTextView?.text = candidate
+                            ocrCommitChip?.visibility = View.VISIBLE
+                        } else {
+                            ocrPreviewTextView?.text = "Metni orta şeride hizalayın..."
+                            ocrCommitChip?.visibility = View.GONE
+                        }
+                    }
+                }
+            }
+            .addOnFailureListener {
+                mainHandler.post {
+                    if (scanMode == ScanInputMode.TEXT_OCR && latestDetectedOcrText.isBlank()) {
+                        ocrPreviewTextView?.text = "Metin algılama hazırlanıyor..."
+                        ocrCommitChip?.visibility = View.GONE
+                    }
+                }
+            }
+            .addOnCompleteListener {
+                imageProxy.close()
+            }
     }
 
     private fun stopCamera() {
         try {
             isTorchOn = false
+            updateTorchIconTint()
             cameraProvider?.unbindAll()
             boundCamera = null
         } catch (_: Exception) {}
     }
 
     private fun handleDetectedCodes(detected: List<RawDetectedCode>) {
-        if (isPaused) return
+        if (scanMode != ScanInputMode.BARCODE) return
         val now = System.currentTimeMillis()
 
         val visibleRaws = detected.map { it.rawValue }.toSet()
@@ -558,7 +849,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             profileRepository.selectProfile(matched.id)
         }
         val activeProfile = profileRepository.activeProfile.value
-        updateModeLabel(activeProfile)
+        updateModeChipLabel(activeProfile)
 
         val parsed = qrTracker.processQr(raw, activeProfile, firstCode.format, firstCode.formatName)
         val effectiveConfig = activeProfile.bluetoothKeyboard.copy(
@@ -574,17 +865,32 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             pendingConfirmPayload = payload
             duplicateTextView?.text = "Tekrar (${prevCount}x): $payload"
             duplicateBanner?.visibility = View.VISIBLE
-            statusTextView?.text = "Onay bekleniyor: $payload"
+            showStatusToast("Onay bekleniyor")
         } else {
             commitPayloadToEditor(raw, payload, activeProfile)
         }
     }
 
+    private fun commitTextOcrToEditor(text: String) {
+        val ic = currentInputConnection ?: return
+        val profile = profileRepository.activeProfile.value
+        ic.commitText(text, 1)
+        when (profile.bluetoothKeyboard.endingKey) {
+            KeyboardEndingKey.ENTER -> sendEnterOrAction()
+            KeyboardEndingKey.TAB -> sendDownUpKeyEvents(KeyEvent.KEYCODE_TAB)
+            KeyboardEndingKey.TAB_THEN_ENTER -> {
+                sendDownUpKeyEvents(KeyEvent.KEYCODE_TAB)
+                sendEnterOrAction()
+            }
+            KeyboardEndingKey.SPACE -> ic.commitText(" ", 1)
+            KeyboardEndingKey.NONE -> {}
+        }
+        showStatusToast("✓ Yazıldı: $text")
+    }
+
     private fun commitPayloadToEditor(raw: String, payload: String, profile: QrProfile) {
         val ic = currentInputConnection ?: return
 
-        // If payload contains tabs (e.g. SKU \t Fiyat), split and send real KEYCODE_TAB between fields
-        // so Chrome/mobile web forms and spreadsheets jump cleanly from one box to the next!
         val parts = payload.split("\t")
         parts.forEachIndexed { idx, part ->
             if (part.isNotEmpty()) {
@@ -608,11 +914,9 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
         val newCount = (sentCounts[raw] ?: 0) + 1
         sentCounts[raw] = newCount
-        lastSubmittedRaw = raw
-        lastSubmittedPayload = payload
 
         val displayPreview = payload.replace("\t", " ⇥ ")
-        statusTextView?.text = "✓ Yazıldı (#$newCount): $displayPreview"
+        showStatusToast("✓ Yazıldı (#$newCount): $displayPreview")
     }
 
     private fun sendEnterOrAction() {
@@ -623,6 +927,16 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             ic.performEditorAction(actionId)
         } else {
             sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
+        }
+    }
+
+    private class FixedHeightFrameLayout(
+        context: Context,
+        private val fixedHeightPx: Int
+    ) : FrameLayout(context) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val exactHeightSpec = MeasureSpec.makeMeasureSpec(fixedHeightPx, MeasureSpec.EXACTLY)
+            super.onMeasure(widthMeasureSpec, exactHeightSpec)
         }
     }
 }

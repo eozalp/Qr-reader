@@ -50,6 +50,7 @@ fun FormulaBuilderPanel(
     liveNumericVars: Map<String, Double> = emptyMap(),
     liveStringVars: Map<String, String> = emptyMap(),
     formatting: ResultFormatting? = null,
+    previewVariable: VariableDefinition? = null,
     label: String = "Hesaplama İfadesi",
     placeholder: String = "örn: maliyet * (1 + oran / 100)",
     testTagPrefix: String = "main_formula",
@@ -159,8 +160,16 @@ fun FormulaBuilderPanel(
             Spacer(modifier = Modifier.height(6.dp))
             when (liveEvalResult) {
                 is MathResult.Success -> {
-                    val formatted = formatting?.let { ResultFormatter.format(liveEvalResult.value, it) }
-                        ?: liveEvalResult.value.toString()
+                    val formatted = when {
+                        previewVariable != null -> ResultFormatter.formatVariable(
+                            value = liveEvalResult.value,
+                            varDef = previewVariable,
+                            profileFormatting = formatting,
+                            includePrefixPostfix = true
+                        )
+                        formatting != null -> ResultFormatter.format(liveEvalResult.value, formatting)
+                        else -> liveEvalResult.value.toString()
+                    }
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
@@ -371,10 +380,10 @@ fun FormulaBuilderPanel(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             listOf(
-                                "bugun" to "Bugün (gün)",
-                                "bu_yil" to "Yıl",
-                                "bu_ay" to "Ay",
-                                "bu_gun" to "Gün",
+                                "bugun" to "Bugün (tarih)",
+                                "bu_yil" to "Bu yıl (sayı)",
+                                "bu_ay" to "Bu ay (1-12)",
+                                "bu_gun" to "Bu gün (1-31)",
                                 "true" to "Doğru (1)",
                                 "false" to "Yanlış (0)",
                                 "pi" to "π",

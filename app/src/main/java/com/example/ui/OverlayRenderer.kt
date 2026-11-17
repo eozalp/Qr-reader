@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1053,7 +1054,21 @@ fun resolveTableRows(
             TableItemSource.FORMULA_RESULT -> {
                 when (val status = result.status) {
                     is CalculationStatus.Success -> {
-                        "${item.prefix}${status.formattedText}${item.postfix}"
+                        val baseText = status.formattedText
+                        val pfx = item.prefix
+                        val sfx = item.postfix
+                        val hasPrefix = pfx.isNotEmpty() && (
+                            baseText.startsWith(pfx) ||
+                                baseText.startsWith("-$pfx") ||
+                                baseText.startsWith("($pfx")
+                            )
+                        val hasPostfix = sfx.isNotEmpty() && (
+                            baseText.endsWith(sfx) ||
+                                baseText.endsWith("$sfx)")
+                            )
+                        val outPrefix = if (hasPrefix) "" else pfx
+                        val outPostfix = if (hasPostfix) "" else sfx
+                        "$outPrefix$baseText$outPostfix"
                     }
                     is CalculationStatus.ParseError -> "ERR"
                     is CalculationStatus.EvaluationError -> "ERR"
@@ -1222,12 +1237,15 @@ fun ExcelTableOverlayContent(
                         )
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
                         Box(
                             modifier = Modifier
-                                .size(20.dp)
+                                .size(22.dp)
                                 .clip(RoundedCornerShape(4.dp))
                                 .background(themeColors.accent),
                             contentAlignment = Alignment.Center
@@ -1240,50 +1258,45 @@ fun ExcelTableOverlayContent(
                             )
                         }
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = tableConfig.headerTitle.ifBlank { "VERİ TABLOSU" }.uppercase(),
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.8.sp
-                        )
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        // Barcode Format Tag Badge
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(themeColors.accent.copy(alpha = 0.22f))
-                                .padding(horizontal = 5.dp, vertical = 2.dp)
-                        ) {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = result.formatName,
-                                color = themeColors.accent,
-                                fontSize = 8.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                letterSpacing = 0.4.sp
+                                text = tableConfig.headerTitle.ifBlank { "VERİ TABLOSU" }.uppercase(),
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.6.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                        }
-
-                        if (tableConfig.headerSubtitle.isNotBlank()) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(Color.Black.copy(alpha = 0.4f))
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            ) {
+                            if (tableConfig.headerSubtitle.isNotBlank()) {
                                 Text(
                                     text = tableConfig.headerSubtitle,
                                     color = themeColors.textSecondary,
                                     fontSize = 9.sp,
-                                    fontWeight = FontWeight.Medium
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
+                    }
+
+                    // Barcode Format Tag Badge
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(themeColors.accent.copy(alpha = 0.22f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = result.formatName,
+                            color = themeColors.accent,
+                            fontSize = 8.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.4.sp,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
                 }
                 Spacer(modifier = Modifier.height(4.dp))

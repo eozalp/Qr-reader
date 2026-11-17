@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.engine.QrParseOutcome
@@ -37,9 +38,9 @@ import com.example.model.VariableDefinition
 import java.util.UUID
 
 enum class VariableTypeSelection(val label: String) {
-    TOKEN("Barkod Belirteci (Token)"),
+    TOKEN("Barkod Token"),
     CONSTANT("Sabit Değer"),
-    FORMULA("Hesaplanan Formül")
+    FORMULA("Formül (fx)")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -110,7 +111,7 @@ fun ParsingSettingsSection(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Real-Time QR Simulator",
+                                text = "Canlı QR Simülatörü",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -122,7 +123,7 @@ fun ParsingSettingsSection(
                             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
                         ) {
                             Text(
-                                text = "LIVE",
+                                text = "CANLI",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary,
@@ -133,7 +134,7 @@ fun ParsingSettingsSection(
 
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Type any sample QR code text to test parsing, formulas, and formatting immediately:",
+                        text = "Ayrıştırma, formül ve biçimlendirmeyi test etmek için örnek bir QR metni yazın:",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                     )
@@ -143,14 +144,14 @@ fun ParsingSettingsSection(
                     OutlinedTextField(
                         value = sampleQrText,
                         onValueChange = { sampleQrText = it },
-                        label = { Text("Sample QR Code Text") },
-                        placeholder = { Text("e.g. 150-25-3 or 49.95,2") },
+                        label = { Text("Örnek QR Kodu Metni") },
+                        placeholder = { Text("örn. 150-25-3 veya 49.95,2") },
                         modifier = Modifier.fillMaxWidth().testTag("sample_qr_input"),
                         singleLine = true,
                         trailingIcon = {
                             if (sampleQrText.isNotEmpty()) {
                                 IconButton(onClick = { sampleQrText = "" }) {
-                                    Icon(Icons.Default.Clear, contentDescription = "Clear")
+                                    Icon(Icons.Default.Clear, contentDescription = "Temizle")
                                 }
                             }
                         }
@@ -162,7 +163,7 @@ fun ParsingSettingsSection(
                     when (liveParseOutcome) {
                         is QrParseOutcome.Success -> {
                             Text(
-                                text = "Extracted & Computed Values:",
+                                text = "Çıkarılan & Hesaplanan Değerler:",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.primary
@@ -246,7 +247,7 @@ fun ParsingSettingsSection(
                         }
                         null -> {
                             Text(
-                                text = "Enter QR sample text above to preview.",
+                                text = "Önizleme için yukarıya örnek bir QR metni girin.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -262,7 +263,7 @@ fun ParsingSettingsSection(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Presets:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+                        Text("Hazır:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
                         val delim = rules.effectiveDelimiter
                         listOf("100${delim}20", "50${delim}250", "12.5${delim}4${delim}1.25").forEach { preset ->
                             SuggestionChip(
@@ -362,13 +363,13 @@ fun ParsingSettingsSection(
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text(
-                        text = "QR Token Delimiter",
+                        text = "QR Ayırıcı Karakter (Delimiter)",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Character used to split barcode tokens (e.g. '-' in '150-25'):",
+                        text = "Barkod parçalarını bölen karakter (örn. '150-25' için '-'):",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -386,7 +387,7 @@ fun ParsingSettingsSection(
                                 onClick = {
                                     onRulesChanged(rules.copy(delimiter = delim, customDelimiter = ""))
                                 },
-                                label = { Text(if (delim == " ") "Space" else "'$delim'", maxLines = 1, softWrap = false) },
+                                label = { Text(if (delim == " ") "Boşluk" else "'$delim'", maxLines = 1, softWrap = false) },
                                 modifier = Modifier.testTag("delim_chip_$delim")
                             )
                         }
@@ -397,8 +398,8 @@ fun ParsingSettingsSection(
                     OutlinedTextField(
                         value = rules.customDelimiter,
                         onValueChange = { onRulesChanged(rules.copy(customDelimiter = it)) },
-                        label = { Text("Custom Delimiter (Optional)") },
-                        placeholder = { Text("e.g. ##, ::, or /") },
+                        label = { Text("Özel Ayırıcı (İsteğe Bağlı)") },
+                        placeholder = { Text("örn. ##, :: veya /") },
                         modifier = Modifier.fillMaxWidth().testTag("custom_delim_input"),
                         singleLine = true
                     )
@@ -412,11 +413,11 @@ fun ParsingSettingsSection(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Auto-Switch Signal Tag", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                            Text("Otomatik Profil Tetikleyici", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                         }
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "Auto-activate this profile when QR starts with this tag (e.g. TESBIH- or [P:amber])",
+                            text = "Barkod bu etiketle başladığında bu profil otomatik açılır (örn. TESBIH- veya [P:amber])",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -424,8 +425,8 @@ fun ParsingSettingsSection(
                         OutlinedTextField(
                             value = triggerSignal,
                             onValueChange = onTriggerSignalChanged,
-                            label = { Text("Signal Tag / Prefix") },
-                            placeholder = { Text("e.g. TESBIH-, GOLD-, or [P:amber]") },
+                            label = { Text("Sinyal Etiketi / Ön Ek") },
+                            placeholder = { Text("örn. TESBIH-, GOLD- veya [P:amber]") },
                             modifier = Modifier.fillMaxWidth().testTag("trigger_signal_input"),
                             singleLine = true
                         )
@@ -459,12 +460,12 @@ fun ParsingSettingsSection(
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text(
-                                    text = "Global Separators & Rounding",
+                                    text = "Genel Ayırıcı ve Yuvarlama",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "Thousands '${formatting.thousandsSeparator}', Decimal '${formatting.decimalSeparator}', ${formatting.decimalPrecision} decimals",
+                                    text = "Binlik '${formatting.thousandsSeparator}', Ondalık '${formatting.decimalSeparator}', ${formatting.decimalPrecision} basamak",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -474,7 +475,7 @@ fun ParsingSettingsSection(
                         IconButton(onClick = { showGlobalFormatCard = !showGlobalFormatCard }) {
                             Icon(
                                 imageVector = if (showGlobalFormatCard) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                contentDescription = if (showGlobalFormatCard) "Collapse" else "Expand"
+                                contentDescription = if (showGlobalFormatCard) "Daralt" else "Genişlet"
                             )
                         }
                     }
@@ -485,7 +486,7 @@ fun ParsingSettingsSection(
                             Spacer(modifier = Modifier.height(10.dp))
 
                             // Thousands Separator
-                            Text("Thousands Separator", style = MaterialTheme.typography.labelMedium)
+                            Text("Binlik Ayırıcı", style = MaterialTheme.typography.labelMedium)
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(
                                 modifier = Modifier
@@ -493,7 +494,7 @@ fun ParsingSettingsSection(
                                     .horizontalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                listOf("none" to "None", "," to "Comma (,)", "." to "Dot (.)", " " to "Space ( )", "'" to "Apostrophe (')").forEach { (code, label) ->
+                                listOf("none" to "Yok", "," to "Virgül (,)", "." to "Nokta (.)", " " to "Boşluk ( )", "'" to "Kesme (')").forEach { (code, label) ->
                                     FilterChip(
                                         selected = formatting.thousandsSeparator == code,
                                         onClick = { onFormattingChanged(formatting.copy(thousandsSeparator = code)) },
@@ -505,7 +506,7 @@ fun ParsingSettingsSection(
                             Spacer(modifier = Modifier.height(8.dp))
 
                             // Decimal Separator
-                            Text("Decimal Separator", style = MaterialTheme.typography.labelMedium)
+                            Text("Ondalık Ayırıcı", style = MaterialTheme.typography.labelMedium)
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(
                                 modifier = Modifier
@@ -516,19 +517,19 @@ fun ParsingSettingsSection(
                                 FilterChip(
                                     selected = formatting.decimalSeparator == ".",
                                     onClick = { onFormattingChanged(formatting.copy(decimalSeparator = ".")) },
-                                    label = { Text("Dot (.)", maxLines = 1, softWrap = false) }
+                                    label = { Text("Nokta (.)", maxLines = 1, softWrap = false) }
                                 )
                                 FilterChip(
                                     selected = formatting.decimalSeparator == ",",
                                     onClick = { onFormattingChanged(formatting.copy(decimalSeparator = ",")) },
-                                    label = { Text("Comma (,)", maxLines = 1, softWrap = false) }
+                                    label = { Text("Virgül (,)", maxLines = 1, softWrap = false) }
                                 )
                             }
 
                             Spacer(modifier = Modifier.height(8.dp))
 
                             // Default Decimal Precision
-                            Text("Default Decimal Places (${formatting.decimalPrecision})", style = MaterialTheme.typography.labelMedium)
+                            Text("Varsayılan Ondalık Basamak (${formatting.decimalPrecision})", style = MaterialTheme.typography.labelMedium)
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(
                                 modifier = Modifier
@@ -548,7 +549,7 @@ fun ParsingSettingsSection(
                             Spacer(modifier = Modifier.height(8.dp))
 
                             // Rounding Mode
-                            Text("Rounding Mode", style = MaterialTheme.typography.labelMedium)
+                            Text("Yuvarlama Modu", style = MaterialTheme.typography.labelMedium)
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(
                                 modifier = Modifier
@@ -569,7 +570,7 @@ fun ParsingSettingsSection(
                             Spacer(modifier = Modifier.height(8.dp))
 
                             // Negative Number Format
-                            Text("Negative Number Format", style = MaterialTheme.typography.labelMedium)
+                            Text("Negatif Sayı Biçimi", style = MaterialTheme.typography.labelMedium)
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(
                                 modifier = Modifier
@@ -577,7 +578,7 @@ fun ParsingSettingsSection(
                                     .horizontalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                listOf("-x" to "-100", "(x)" to "(100)", "-prefix" to "-$100").forEach { (fmt, example) ->
+                                listOf("-x" to "-100", "(x)" to "(100)", "-prefix" to "-₺100").forEach { (fmt, example) ->
                                     FilterChip(
                                         selected = formatting.negativeFormat == fmt,
                                         onClick = { onFormattingChanged(formatting.copy(negativeFormat = fmt)) },
@@ -605,12 +606,12 @@ fun ParsingSettingsSection(
                 ) {
                     Column {
                         Text(
-                            text = "Variables & Formulas",
+                            text = "Değişkenler & Formüller",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "$scannedCount barcode tokens · $manualCount constants · $computedCount formulas",
+                            text = "$scannedCount barkod tokeni · $manualCount sabit · $computedCount formül",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -621,7 +622,7 @@ fun ParsingSettingsSection(
                         color = MaterialTheme.colorScheme.primaryContainer
                     ) {
                         Text(
-                            text = "${rules.variables.size} Total",
+                            text = "${rules.variables.size} Adet",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -660,7 +661,7 @@ fun ParsingSettingsSection(
                     ) {
                         Icon(Icons.Default.Pin, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Constant", fontSize = 12.sp, maxLines = 1, softWrap = false)
+                        Text("Sabit", fontSize = 12.sp, maxLines = 1, softWrap = false)
                     }
 
                     FilledTonalButton(
@@ -673,7 +674,7 @@ fun ParsingSettingsSection(
                     ) {
                         Icon(Icons.Default.Calculate, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Formula", fontSize = 12.sp, maxLines = 1, softWrap = false)
+                        Text("Formül", fontSize = 12.sp, maxLines = 1, softWrap = false)
                     }
                 }
             }
@@ -768,9 +769,9 @@ fun VariableItemCard(
                         else -> MaterialTheme.colorScheme.onPrimaryContainer
                     }
                     val badgeText = when {
-                        varDef.isComputed -> "fx Formula"
-                        varDef.isManual -> "📌 Constant"
-                        else -> "Pos ${varDef.position}"
+                        varDef.isComputed -> "fx Formül"
+                        varDef.isManual -> "📌 Sabit"
+                        else -> "Sıra ${varDef.position}"
                     }
 
                     Box(
@@ -796,8 +797,8 @@ fun VariableItemCard(
                             fontWeight = FontWeight.Bold
                         )
                         val summaryDetail = when {
-                            varDef.isComputed -> if (varDef.computationFormula.isNotBlank()) "= ${varDef.computationFormula}" else "No formula set"
-                            varDef.isManual -> "Constant: ${varDef.defaultValue}"
+                            varDef.isComputed -> if (varDef.computationFormula.isNotBlank()) "= ${varDef.computationFormula}" else "Formül tanımlanmadı"
+                            varDef.isManual -> "Sabit: ${varDef.defaultValue}"
                             else -> "Token ${varDef.position}${if (varDef.prefix.isNotBlank() || varDef.postfix.isNotBlank()) " (${varDef.prefix}…${varDef.postfix})" else ""}"
                         }
                         Text(
@@ -813,7 +814,7 @@ fun VariableItemCard(
                     IconButton(onClick = { isExpanded = !isExpanded }, modifier = Modifier.size(36.dp)) {
                         Icon(
                             imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                            contentDescription = if (isExpanded) "Collapse" else "Expand",
+                            contentDescription = if (isExpanded) "Daralt" else "Genişlet",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -821,7 +822,7 @@ fun VariableItemCard(
                     IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
                         Icon(
                             imageVector = Icons.Default.Delete,
-                            contentDescription = "Delete Variable",
+                            contentDescription = "Değişkeni Sil",
                             tint = MaterialTheme.colorScheme.error,
                             modifier = Modifier.size(18.dp)
                         )
@@ -845,17 +846,17 @@ fun VariableItemCard(
                         FilterChip(
                             selected = !varDef.isComputed && !varDef.isManual,
                             onClick = { onUpdate(varDef.copy(isComputed = false, isManual = false)) },
-                            label = { Text("Barcode Token", fontSize = 11.sp, maxLines = 1, softWrap = false) }
+                            label = { Text("Barkod Token", fontSize = 11.sp, maxLines = 1, softWrap = false) }
                         )
                         FilterChip(
                             selected = varDef.isManual,
                             onClick = { onUpdate(varDef.copy(isComputed = false, isManual = true)) },
-                            label = { Text("Manual Constant", fontSize = 11.sp, maxLines = 1, softWrap = false) }
+                            label = { Text("Sabit Değer", fontSize = 11.sp, maxLines = 1, softWrap = false) }
                         )
                         FilterChip(
                             selected = varDef.isComputed,
                             onClick = { onUpdate(varDef.copy(isComputed = true, isManual = false)) },
-                            label = { Text("Computed Formula", fontSize = 11.sp, maxLines = 1, softWrap = false) }
+                            label = { Text("Formül (fx)", fontSize = 11.sp, maxLines = 1, softWrap = false) }
                         )
                     }
 
@@ -866,7 +867,7 @@ fun VariableItemCard(
                         OutlinedTextField(
                             value = varDef.name,
                             onValueChange = { onUpdate(varDef.copy(name = it.filter { c -> c.isLetterOrDigit() || c == '_' })) },
-                            label = { Text("Name") },
+                            label = { Text("Değişken Adı") },
                             modifier = Modifier.weight(1f),
                             singleLine = true
                         )
@@ -874,7 +875,7 @@ fun VariableItemCard(
                         OutlinedTextField(
                             value = varDef.alias,
                             onValueChange = { onUpdate(varDef.copy(alias = it.filter { c -> c.isLetterOrDigit() || c == '_' })) },
-                            label = { Text("Alias") },
+                            label = { Text("Etiket / Açıklama") },
                             modifier = Modifier.weight(1f),
                             singleLine = true
                         )
@@ -952,6 +953,7 @@ fun VariableItemCard(
                                 liveNumericVars = liveNumericVars,
                                 liveStringVars = liveStringVars,
                                 formatting = globalFormatting,
+                                previewVariable = varDef,
                                 label = "Formül (${varDef.name})",
                                 placeholder = "örn: a * b veya if(a > 100, a * 0.9, a)",
                                 testTagPrefix = "formula_input_${varDef.name}",
@@ -963,8 +965,8 @@ fun VariableItemCard(
                             OutlinedTextField(
                                 value = varDef.defaultValue,
                                 onValueChange = { onUpdate(varDef.copy(defaultValue = it)) },
-                                label = { Text("Constant Value") },
-                                placeholder = { Text("e.g. 18, 5.5, or 0.20") },
+                                label = { Text("Sabit Değer") },
+                                placeholder = { Text("örn. 18, 5.5 veya 0.20") },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true
                             )
@@ -979,7 +981,7 @@ fun VariableItemCard(
                                         val pos = str.toIntOrNull() ?: 0
                                         onUpdate(varDef.copy(position = pos))
                                     },
-                                    label = { Text("Token Position") },
+                                    label = { Text("Token Sırası", maxLines = 1, softWrap = false) },
                                     modifier = Modifier.weight(1f),
                                     singleLine = true
                                 )
@@ -987,7 +989,7 @@ fun VariableItemCard(
                                 OutlinedTextField(
                                     value = varDef.defaultValue,
                                     onValueChange = { onUpdate(varDef.copy(defaultValue = it)) },
-                                    label = { Text("Default Fallback") },
+                                    label = { Text("Varsayılan Değer", maxLines = 1, softWrap = false) },
                                     modifier = Modifier.weight(1f),
                                     singleLine = true
                                 )
@@ -1002,7 +1004,7 @@ fun VariableItemCard(
                         OutlinedTextField(
                             value = varDef.prefix,
                             onValueChange = { onUpdate(varDef.copy(prefix = it)) },
-                            label = { Text("Prefix (e.g. $, ₺)") },
+                            label = { Text("Ön Ek (₺, $)", maxLines = 1, softWrap = false) },
                             modifier = Modifier.weight(1f),
                             singleLine = true
                         )
@@ -1010,7 +1012,7 @@ fun VariableItemCard(
                         OutlinedTextField(
                             value = varDef.postfix,
                             onValueChange = { onUpdate(varDef.copy(postfix = it)) },
-                            label = { Text("Postfix (e.g. /g, pcs)") },
+                            label = { Text("Son Ek (/gr, ad)", maxLines = 1, softWrap = false) },
                             modifier = Modifier.weight(1f),
                             singleLine = true
                         )
@@ -1020,7 +1022,7 @@ fun VariableItemCard(
 
                     // Number Formatting & Decimals
                     if (varDef.dataType != FieldDataType.STRING && varDef.dataType != FieldDataType.DATE && varDef.dataType != FieldDataType.BOOLEAN) {
-                        Text("Decimal Places:", style = MaterialTheme.typography.labelSmall)
+                        Text("Ondalık Basamak:", style = MaterialTheme.typography.labelSmall)
                         Spacer(modifier = Modifier.height(4.dp))
                         Row(
                             modifier = Modifier
@@ -1029,8 +1031,8 @@ fun VariableItemCard(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             val decOptions = listOf(
-                                null to "Auto",
-                                0 to "0 (Int)",
+                                null to "Oto",
+                                0 to "0 (Tam)",
                                 1 to "1",
                                 2 to "2",
                                 3 to "3",
@@ -1058,7 +1060,7 @@ fun VariableItemCard(
                                     checked = varDef.isPercentage,
                                     onCheckedChange = { onUpdate(varDef.copy(isPercentage = it)) }
                                 )
-                                Text("Percentage (%)", style = MaterialTheme.typography.bodySmall)
+                                Text("Yüzde (%)", style = MaterialTheme.typography.bodySmall)
                             }
 
                             val previewSample = ResultFormatter.formatVariable(1234.5678, varDef, globalFormatting, true)
@@ -1067,7 +1069,7 @@ fun VariableItemCard(
                                 color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)
                             ) {
                                 Text(
-                                    text = "Preview: $previewSample",
+                                    text = "Önizleme: $previewSample",
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -1087,7 +1089,7 @@ fun VariableItemCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Show Pill in AR Overlay", style = MaterialTheme.typography.bodyMedium)
+                        Text("Kamera Kartında Göster", style = MaterialTheme.typography.bodyMedium)
                         Switch(
                             checked = varDef.showPill,
                             onCheckedChange = { onUpdate(varDef.copy(showPill = it)) }
@@ -1157,8 +1159,10 @@ fun AddVariableBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 10.dp)
-                .verticalScroll(rememberScrollState()),
+                .navigationBarsPadding()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // Header
@@ -1167,7 +1171,7 @@ fun AddVariableBottomSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     Box(
                         modifier = Modifier
                             .size(36.dp)
@@ -1189,25 +1193,27 @@ fun AddVariableBottomSheet(
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = "Add Variable / Token",
+                            text = "Değişken / Token Ekle",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Configure new token, constant or formula",
+                            text = "Yeni belirteç, sabit veya formül tanımla",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
                 IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, contentDescription = "Close")
+                    Icon(Icons.Default.Close, contentDescription = "Kapat")
                 }
             }
 
-            // Type Segmented Pills
+            // Type Segmented Pills (equal height, centered, clean padding)
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 VariableTypeSelection.entries.forEach { type ->
@@ -1221,18 +1227,24 @@ fun AddVariableBottomSheet(
                         ),
                         modifier = Modifier
                             .weight(1f)
+                            .fillMaxHeight()
                             .clip(RoundedCornerShape(16.dp))
                             .clickable { selectedType = type }
                     ) {
                         Box(
-                            modifier = Modifier.padding(vertical = 10.dp),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 8.dp, vertical = 10.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = type.label,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
-                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }
@@ -1321,8 +1333,8 @@ fun AddVariableBottomSheet(
                         OutlinedTextField(
                             value = tokenPositionStr,
                             onValueChange = { tokenPositionStr = it.filter { c -> c.isDigit() } },
-                            label = { Text("Barcode Token Position") },
-                            placeholder = { Text("0 = 1st token, 1 = 2nd") },
+                            label = { Text("Token Sırası (0..N)", maxLines = 1, softWrap = false) },
+                            placeholder = { Text("0 = 1. parça, 1 = 2.") },
                             modifier = Modifier.weight(1f).testTag("new_variable_position_input"),
                             singleLine = true
                         )
@@ -1330,14 +1342,14 @@ fun AddVariableBottomSheet(
                         OutlinedTextField(
                             value = defaultValueStr,
                             onValueChange = { defaultValueStr = it },
-                            label = { Text("Default Fallback Value") },
+                            label = { Text("Varsayılan Değer", maxLines = 1, softWrap = false) },
                             placeholder = { Text("0") },
                             modifier = Modifier.weight(1f).testTag("new_variable_default_input"),
                             singleLine = true
                         )
                     }
                     Text(
-                        text = "Scanned barcodes split by '$delimiter' will map token index ${tokenPositionStr.ifBlank { "0" }} to '$varName'.",
+                        text = "'$delimiter' ile ayrılan barkodun ${tokenPositionStr.ifBlank { "0" }}. parçası '$varName' değişkenine atanır.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1347,13 +1359,13 @@ fun AddVariableBottomSheet(
                     OutlinedTextField(
                         value = constantValueStr,
                         onValueChange = { constantValueStr = it },
-                        label = { Text("Constant Value *") },
-                        placeholder = { Text("e.g. 100, 1.18, 20240115, or true") },
+                        label = { Text("Sabit Değer *") },
+                        placeholder = { Text("örn. 100, 1.18, 20240115 veya true") },
                         modifier = Modifier.fillMaxWidth().testTag("new_constant_value_input"),
                         singleLine = true
                     )
                     Text(
-                        text = "Manual constant not read from barcode. Can be referenced in any formula.",
+                        text = "Barkoddan okunmaz, tüm formüllerde sabit parametre olarak kullanılır.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1371,7 +1383,7 @@ fun AddVariableBottomSheet(
                 }
             }
 
-            // Prefix and Postfix
+            // Prefix and Postfix (Short single-line labels so heights match identically)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1379,7 +1391,7 @@ fun AddVariableBottomSheet(
                 OutlinedTextField(
                     value = prefixStr,
                     onValueChange = { prefixStr = it },
-                    label = { Text("Prefix (e.g. $, ₺)") },
+                    label = { Text("Ön Ek (₺, $)", maxLines = 1, softWrap = false) },
                     modifier = Modifier.weight(1f),
                     singleLine = true
                 )
@@ -1387,7 +1399,7 @@ fun AddVariableBottomSheet(
                 OutlinedTextField(
                     value = postfixStr,
                     onValueChange = { postfixStr = it },
-                    label = { Text("Postfix (e.g. /g, pcs)") },
+                    label = { Text("Son Ek (/gr, ad)", maxLines = 1, softWrap = false) },
                     modifier = Modifier.weight(1f),
                     singleLine = true
                 )
@@ -1404,7 +1416,7 @@ fun AddVariableBottomSheet(
                     onClick = onDismiss,
                     modifier = Modifier.weight(0.45f)
                 ) {
-                    Text("Cancel")
+                    Text("İptal")
                 }
 
                 Button(
@@ -1460,7 +1472,7 @@ fun AddVariableBottomSheet(
                 ) {
                     Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Add to Profile", fontWeight = FontWeight.Bold)
+                    Text("Profile Ekle", fontWeight = FontWeight.Bold)
                 }
             }
 
