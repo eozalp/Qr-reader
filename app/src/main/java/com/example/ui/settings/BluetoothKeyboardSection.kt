@@ -55,7 +55,7 @@ fun BluetoothKeyboardSection(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val manager = remember(context) { hidManager ?: BluetoothHidManager(context) }
+    val manager = remember(context) { hidManager ?: BluetoothHidManager.getInstance(context) }
 
     val connectionStatus by manager.connectionStatus.collectAsState()
     val connectedDeviceName by manager.connectedDeviceName.collectAsState()
@@ -294,7 +294,7 @@ fun BluetoothKeyboardSection(
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Chrome, ERP veya Excel mobil formunda klavye simgesine dokunup 'ALVETAK QR Klavye'yi seçin: altta kamera okur, yukarıdaki kutuya Tab+Enter ile yazar.",
+                        text = "Chrome, ERP veya Excel mobil formunda klavye simgesine dokunup 'ALVETAK QR Klavye'yi seçin: altta kamera veya yerleşik Klasik Klavye açılır; Yerel ya da Bluetooth ile doğrudan yazar.",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -729,9 +729,9 @@ fun BluetoothKeyboardSection(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             listOf(
-                                3L to "Çok Hızlı (3ms)",
-                                5L to "Dengeli (5ms)",
-                                12L to "Güvenli Eski PC (12ms)"
+                                12L to "Hızlı (12ms)",
+                                16L to "Dengeli (16ms)",
+                                24L to "Güvenli Eski PC (24ms)"
                             ).forEach { (ms, label) ->
                                 FilterChip(
                                     selected = config.typingDelayMs == ms,

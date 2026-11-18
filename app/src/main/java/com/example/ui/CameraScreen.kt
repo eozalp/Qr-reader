@@ -126,7 +126,7 @@ fun CameraScreen(
     }
 
     // Bluetooth HID Keyboard Manager & State
-    val hidManager = remember { BluetoothHidManager(context) }
+    val hidManager = remember { BluetoothHidManager.getInstance(context) }
     val bluetoothConnectionStatus by hidManager.connectionStatus.collectAsState()
     val batchSentMap by hidManager.batchSentMap.collectAsState()
     var showBluetoothSheet by remember { mutableStateOf(false) }

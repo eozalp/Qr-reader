@@ -197,7 +197,7 @@ fun BluetoothKeyboardSheet(
                             }
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Chrome veya Excel mobil uygulamasında form kutusuna dokunun, alttan klavye simgesiyle 'ALVETAK QR Klavye' seçin: altta kamera okur, yukarıdaki kutuya Tab+Enter ile yazar.",
+                                text = "Chrome veya Excel mobil uygulamasında form kutusuna dokunun, alttan klavye simgesiyle 'ALVETAK QR Klavye' seçin: altta kamera veya yerleşik Klasik Klavye açılır; Yerel ya da Bluetooth ile yazar.",
                                 fontSize = 11.sp,
                                 color = Color(0xFF94A3B8)
                             )
@@ -679,9 +679,9 @@ fun BluetoothKeyboardSheet(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     listOf(
-                                        3L to "Çok Hızlı (3ms)",
-                                        5L to "Dengeli (5ms)",
-                                        12L to "Güvenli Eski PC (12ms)"
+                                        12L to "Hızlı (12ms)",
+                                        16L to "Dengeli (16ms)",
+                                        24L to "Güvenli Eski PC (24ms)"
                                     ).forEach { (ms, label) ->
                                         FilterChip(
                                             selected = currentConfig.typingDelayMs == ms,

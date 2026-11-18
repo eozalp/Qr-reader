@@ -74,6 +74,8 @@ class BluetoothHidManager(private val context: Context? = null) {
     private var hidDeviceProfile: BluetoothHidDevice? = null
     private var connectedHostDevice: BluetoothDevice? = null
     private var isAppRegistered: Boolean = false
+    @Volatile
+    private var activeReportId: Int = 1
 
     private val _connectionStatus = MutableStateFlow(HidConnectionStatus.DISCONNECTED)
     val connectionStatus: StateFlow<HidConnectionStatus> = _connectionStatus.asStateFlow()
@@ -227,7 +229,6 @@ class BluetoothHidManager(private val context: Context? = null) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !hasBluetoothPermissions()) return
 
         try {
-            // Re-register cleanly if needed
             val sdp = BluetoothHidDeviceAppSdpSettings(
                 "ALVETAK QR Klavye",
                 "ALVETAK Kablosuz Barkod Klavyesi",
@@ -236,9 +237,22 @@ class BluetoothHidManager(private val context: Context? = null) {
                 HID_KEYBOARD_REPORT_DESCRIPTOR
             )
 
-            // Passing null for inQos and outQos lets Windows/macOS/Linux negotiate default L2CAP HID parameters
-            // smoothly instead of rejecting strict bandwidth constraints.
-            val started = hid.registerApp(sdp, null, null, executor, hidCallback)
+            // Request low-latency (11.25ms) best-effort outQos to avoid 500ms Sniff Mode key repeats,
+            // falling back immediately to null QoS if the remote host rejects QoS negotiation.
+            val lowLatencyOutQos = BluetoothHidDeviceAppQosSettings(
+                BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
+                1600,
+                16,
+                1600,
+                11250,
+                BluetoothHidDeviceAppQosSettings.MAX
+            )
+            var started = runCatching {
+                hid.registerApp(sdp, null, lowLatencyOutQos, executor, hidCallback)
+            }.getOrDefault(false)
+            if (!started) {
+                started = hid.registerApp(sdp, null, null, executor, hidCallback)
+            }
             if (!started) {
                 _connectionDiagnostic.value = "HID profili kaydedilemedi. Bilgisayardan eşleştirmeyi kaldırıp tekrar deneyin."
             }
@@ -255,6 +269,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                     _connectionDiagnostic.value = null
                     if (pluggedDevice != null) {
                         connectedHostDevice = pluggedDevice
+                        activeReportId = 1
                         _connectedDeviceName.value = getDeviceDisplayName(pluggedDevice)
                         _connectionStatus.value = HidConnectionStatus.CONNECTED
                         refreshPairedDevices()
@@ -268,6 +283,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                 when (state) {
                     BluetoothProfile.STATE_CONNECTED -> {
                         connectedHostDevice = device
+                        activeReportId = 1
                         _connectedDeviceName.value = getDeviceDisplayName(device)
                         _connectionStatus.value = HidConnectionStatus.CONNECTED
                         _connectionDiagnostic.value = null
@@ -280,12 +296,32 @@ class BluetoothHidManager(private val context: Context? = null) {
                     BluetoothProfile.STATE_DISCONNECTED, BluetoothProfile.STATE_DISCONNECTING -> {
                         if (connectedHostDevice?.address == device?.address || connectedHostDevice == null) {
                             connectedHostDevice = null
+                            activeReportId = 1
                             _connectedDeviceName.value = null
                             _connectionStatus.value = HidConnectionStatus.DISCONNECTED
                             refreshPairedDevices()
                         }
                     }
                 }
+            }
+
+            @SuppressLint("MissingPermission")
+            override fun onGetReport(device: BluetoothDevice?, type: Byte, id: Byte, bufferSize: Int) {
+                if (device != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    runCatching {
+                        hidDeviceProfile?.replyReport(device, type, id, ByteArray(8))
+                    }
+                }
+            }
+
+            override fun onSetProtocol(device: BluetoothDevice?, protocol: Byte) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    activeReportId = if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) 0 else 1
+                }
+            }
+
+            override fun onSetReport(device: BluetoothDevice?, type: Byte, id: Byte, data: ByteArray?) {
+                // Host keyboard LED state acknowledged cleanly
             }
         }
     } else null
@@ -636,6 +672,49 @@ class BluetoothHidManager(private val context: Context? = null) {
         }
     }
 
+    fun isHidHostConnected(): Boolean {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            hidDeviceProfile != null &&
+            connectedHostDevice != null
+    }
+
+    /**
+     * Sends a single classic-keyboard HID stroke (e.g. Backspace 0x2A, Tab 0x2B, Enter 0x28, or typed char)
+     * using the same Mutex serialization and reliable release pacing.
+     */
+    suspend fun sendSingleHidKey(
+        keyCode: Byte,
+        modifier: Byte = MODIFIER_NONE,
+        typingDelayMs: Long = 12L
+    ): Boolean = sendMutex.withLock {
+        withContext(Dispatchers.IO) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return@withContext false
+            val hid = hidDeviceProfile ?: return@withContext false
+            val dev = connectedHostDevice ?: return@withContext false
+
+            val timing = computeKeyTiming(typingDelayMs, isSameKeyCodeAsPrev = false)
+            try {
+                sendKeyStroke(hid, dev, keyCode, modifier, timing.holdMs, timing.gapMs)
+            } finally {
+                sendReportWithRetry(hid, dev, ZERO_REPORT, maxAttempts = 4)
+            }
+        }
+    }
+
+    suspend fun sendSingleCharacter(
+        ch: Char,
+        layout: KeyboardLayoutType = KeyboardLayoutType.TR_Q,
+        typingDelayMs: Long = 12L
+    ): Boolean {
+        val normalized = if (layout == KeyboardLayoutType.US_Q) {
+            transliterateTurkish(ch.toString()).firstOrNull() ?: ch
+        } else {
+            ch
+        }
+        val hidKey = charToHidKey(normalized, layout) ?: return false
+        return sendSingleHidKey(hidKey.keyCode, hidKey.modifier, typingDelayMs)
+    }
+
     @SuppressLint("MissingPermission")
     private suspend fun sendOverBluetoothHid(
         text: String,
@@ -647,57 +726,62 @@ class BluetoothHidManager(private val context: Context? = null) {
         val hid = hidDeviceProfile ?: return false
         val dev = connectedHostDevice ?: return false
 
-        val holdMs = typingDelayMs.coerceIn(2L, 25L)
-        val gapMs = typingDelayMs.coerceIn(2L, 25L)
+        val baseTiming = computeKeyTiming(typingDelayMs, isSameKeyCodeAsPrev = false)
 
         try {
-            // Ensure clean modifier/key release before starting sequence
-            sendReportWithRetry(hid, dev, byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0))
-            delay(4L)
+            // Wake Bluetooth ACL link from Sniff Mode BEFORE pressing any key so keyDown..keyUp
+            // never straddles a ~400-500ms sniff interval (which causes OS key auto-repeat).
+            sendReportWithRetry(hid, dev, ZERO_REPORT, maxAttempts = 3)
+            delay(38L)
+
+            var prevKeyCode: Byte? = null
 
             for (char in text) {
-                when (char) {
-                    '\t' -> {
-                        if (!sendKeyStroke(hid, dev, 0x2B.toByte(), MODIFIER_NONE, holdMs, gapMs)) return false
+                val keyInfo = when (char) {
+                    '\t' -> HidKey(0x2B.toByte(), MODIFIER_NONE)
+                    '\n' -> HidKey(0x28.toByte(), MODIFIER_NONE)
+                    else -> charToHidKey(char, layout)
+                }
+                if (keyInfo != null) {
+                    val isSameAsPrev = (prevKeyCode == keyInfo.keyCode)
+                    val timing = computeKeyTiming(typingDelayMs, isSameKeyCodeAsPrev = isSameAsPrev)
+                    if (isSameAsPrev) {
+                        delay(10L)
                     }
-                    '\n' -> {
-                        if (!sendKeyStroke(hid, dev, 0x28.toByte(), MODIFIER_NONE, holdMs, gapMs)) return false
+                    if (!sendKeyStroke(hid, dev, keyInfo.keyCode, keyInfo.modifier, timing.holdMs, timing.gapMs)) {
+                        return false
                     }
-                    else -> {
-                        val keyInfo = charToHidKey(char, layout)
-                        if (keyInfo != null) {
-                            if (!sendKeyStroke(hid, dev, keyInfo.keyCode, keyInfo.modifier, holdMs, gapMs)) return false
-                        }
-                    }
+                    prevKeyCode = keyInfo.keyCode
                 }
             }
 
             // Send Suffix / Terminator Key
             when (endingKey) {
                 KeyboardEndingKey.ENTER -> {
-                    if (!sendKeyStroke(hid, dev, 0x28.toByte(), MODIFIER_NONE, holdMs, gapMs)) return false
+                    if (!sendKeyStroke(hid, dev, 0x28.toByte(), MODIFIER_NONE, baseTiming.holdMs, baseTiming.gapMs)) return false
                 }
                 KeyboardEndingKey.TAB -> {
-                    if (!sendKeyStroke(hid, dev, 0x2B.toByte(), MODIFIER_NONE, holdMs, gapMs)) return false
+                    if (!sendKeyStroke(hid, dev, 0x2B.toByte(), MODIFIER_NONE, baseTiming.holdMs, baseTiming.gapMs)) return false
                 }
                 KeyboardEndingKey.TAB_THEN_ENTER -> {
-                    if (!sendKeyStroke(hid, dev, 0x2B.toByte(), MODIFIER_NONE, holdMs, gapMs)) return false
-                    delay(gapMs)
-                    if (!sendKeyStroke(hid, dev, 0x28.toByte(), MODIFIER_NONE, holdMs, gapMs)) return false
+                    if (!sendKeyStroke(hid, dev, 0x2B.toByte(), MODIFIER_NONE, baseTiming.holdMs, baseTiming.gapMs)) return false
+                    delay(12L)
+                    if (!sendKeyStroke(hid, dev, 0x28.toByte(), MODIFIER_NONE, baseTiming.holdMs, baseTiming.gapMs)) return false
                 }
                 KeyboardEndingKey.SPACE -> {
-                    if (!sendKeyStroke(hid, dev, 0x2C.toByte(), MODIFIER_NONE, holdMs, gapMs)) return false
+                    if (!sendKeyStroke(hid, dev, 0x2C.toByte(), MODIFIER_NONE, baseTiming.holdMs, baseTiming.gapMs)) return false
                 }
                 KeyboardEndingKey.NONE -> {
                     // No suffix
                 }
             }
 
-            // Explicit final release report for safety
-            sendReportWithRetry(hid, dev, byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0))
             return true
         } catch (_: Exception) {
             return false
+        } finally {
+            // Guaranteed key release report so no key can ever remain stuck repeating on the host OS
+            runCatching { sendReportWithRetry(hid, dev, ZERO_REPORT, maxAttempts = 5) }
         }
     }
 
@@ -705,14 +789,16 @@ class BluetoothHidManager(private val context: Context? = null) {
     private suspend fun sendReportWithRetry(
         hid: BluetoothHidDevice,
         device: BluetoothDevice,
-        report: ByteArray
+        report: ByteArray,
+        maxAttempts: Int = 4
     ): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
-        repeat(3) { attempt ->
-            if (hid.sendReport(device, 1, report)) {
+        val reportId = activeReportId
+        repeat(maxAttempts) { attempt ->
+            if (hid.sendReport(device, reportId, report)) {
                 return true
             }
-            delay(4L * (attempt + 1))
+            delay(5L * (attempt + 1))
         }
         return false
     }
@@ -728,11 +814,11 @@ class BluetoothHidManager(private val context: Context? = null) {
     ): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
         val reportDown = byteArrayOf(modifier, 0x00, keyCode, 0x00, 0x00, 0x00, 0x00, 0x00)
-        val reportUp = byteArrayOf(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+        val reportUp = ZERO_REPORT
 
-        if (!sendReportWithRetry(hid, device, reportDown)) return false
+        if (!sendReportWithRetry(hid, device, reportDown, maxAttempts = 3)) return false
         delay(holdMs)
-        if (!sendReportWithRetry(hid, device, reportUp)) return false
+        if (!sendReportWithRetry(hid, device, reportUp, maxAttempts = 6)) return false
         delay(gapMs)
         return true
     }
@@ -754,6 +840,35 @@ class BluetoothHidManager(private val context: Context? = null) {
     companion object {
         const val MODIFIER_NONE: Byte = 0x00
         const val MODIFIER_SHIFT: Byte = 0x02
+        const val MODIFIER_ALT_GR: Byte = 0x40
+        const val KEY_BACKSPACE: Byte = 0x2A
+        const val KEY_TAB: Byte = 0x2B
+        const val KEY_ENTER: Byte = 0x28
+        const val KEY_SPACE: Byte = 0x2C
+        private val ZERO_REPORT = byteArrayOf(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+
+        @Volatile
+        private var instance: BluetoothHidManager? = null
+
+        fun getInstance(context: Context): BluetoothHidManager {
+            return instance ?: synchronized(this) {
+                instance ?: BluetoothHidManager(context.applicationContext).also { instance = it }
+            }
+        }
+
+        data class KeyTiming(val holdMs: Long, val gapMs: Long)
+
+        /**
+         * Ensures key hold duration stays safely above 1 Bluetooth polling frame (>=12ms)
+         * and well below host OS key-repeat thresholds (<=25ms), with clean release gaps
+         * so consecutive identical digits like "00326" never coalesce or auto-repeat.
+         */
+        fun computeKeyTiming(requestedDelayMs: Long, isSameKeyCodeAsPrev: Boolean): KeyTiming {
+            val holdMs = requestedDelayMs.coerceIn(12L, 25L)
+            val baseGap = (holdMs + 6L).coerceIn(18L, 35L)
+            val gapMs = if (isSameKeyCodeAsPrev) baseGap + 10L else baseGap
+            return KeyTiming(holdMs = holdMs, gapMs = gapMs)
+        }
 
         data class HidKey(val keyCode: Byte, val modifier: Byte = MODIFIER_NONE)
 
@@ -832,6 +947,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                     '(' -> HidKey(0x25.toByte(), MODIFIER_SHIFT)
                     ')' -> HidKey(0x26.toByte(), MODIFIER_SHIFT)
                     '=' -> HidKey(0x27.toByte(), MODIFIER_SHIFT)
+                    '@' -> HidKey(0x14.toByte(), MODIFIER_ALT_GR)
                     else -> null
                 }
             }

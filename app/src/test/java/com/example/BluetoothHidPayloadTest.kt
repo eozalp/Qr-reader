@@ -233,5 +233,30 @@ class BluetoothHidPayloadTest {
         assertEquals(0x37.toByte(), dotUs!!.keyCode)
         val dashUs = BluetoothHidManager.charToHidKey('-', KeyboardLayoutType.US_Q)
         assertEquals(0x2D.toByte(), dashUs!!.keyCode)
+
+        // Verify Turkish-Q '@' uses AltGr (0x40) + Q (0x14)
+        val atTr = BluetoothHidManager.charToHidKey('@', KeyboardLayoutType.TR_Q)
+        assertNotNull(atTr)
+        assertEquals(0x14.toByte(), atTr!!.keyCode)
+        assertEquals(BluetoothHidManager.MODIFIER_ALT_GR, atTr.modifier)
+    }
+
+    @Test
+    fun testComputeKeyTimingPreventsAutoRepeatOnRepeatedDigits() {
+        // Legacy sub-frame 3ms / 5ms delays must clamp to >= 12ms hold & >= 18ms gap
+        val fastDifferent = BluetoothHidManager.computeKeyTiming(3L, isSameKeyCodeAsPrev = false)
+        assertTrue(fastDifferent.holdMs >= 12L)
+        assertTrue(fastDifferent.gapMs >= 18L)
+
+        // Consecutive identical characters (like '0'->'0' in "00326") get extra release separation
+        val repeatedDigit = BluetoothHidManager.computeKeyTiming(12L, isSameKeyCodeAsPrev = true)
+        assertEquals(12L, repeatedDigit.holdMs)
+        assertTrue(repeatedDigit.gapMs >= fastDifferent.gapMs + 10L)
+
+        // Slow safe preset stays within safe bounds (below OS typematic auto-repeat threshold)
+        val safeSlow = BluetoothHidManager.computeKeyTiming(24L, isSameKeyCodeAsPrev = false)
+        assertEquals(24L, safeSlow.holdMs)
+        assertTrue(safeSlow.holdMs <= 25L)
+        assertTrue(safeSlow.gapMs in 18L..35L)
     }
 }
