@@ -354,6 +354,9 @@ fun CameraScreen(
             for (item in trackedQrs) {
                 when (val decision = hidManager.evaluateAutoSend(item.rawContent, activeProfile.bluetoothKeyboard)) {
                     is AutoSendDecision.SendNow -> {
+                        if (pendingDuplicateConfirm?.first?.rawContent != item.rawContent) {
+                            pendingDuplicateConfirm = null
+                        }
                         hidManager.markBarcodeInFrame(item.rawContent)
                         val payload = hidManager.resolvePayload(
                             result = item.result,
@@ -1318,14 +1321,14 @@ fun CameraScreen(
                                 }
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = "TEKRAR BARKOD ALGILANDI",
+                                        text = "ART ARDA AYNI BARKOD",
                                         color = AmberGold,
                                         fontWeight = FontWeight.ExtraBold,
                                         fontSize = 12.sp,
                                         letterSpacing = 0.5.sp
                                     )
                                     Text(
-                                        text = "Bu kod daha önce ${prevEntry.count} kez gönderildi (${dupTracked.rawContent.take(24)})",
+                                        text = "Az önce gönderilen kod tekrar okundu (${dupTracked.rawContent.take(24)} • Toplam: ${prevEntry.count})",
                                         color = Color(0xFFE2E8F0),
                                         fontSize = 12.sp
                                     )

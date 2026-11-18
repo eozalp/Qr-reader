@@ -208,6 +208,36 @@ class BluetoothHidPayloadTest {
     }
 
     @Test
+    fun testSeparatedBarcodesInSameBatchDoNotWarn() {
+        val hidManager = BluetoothHidManager()
+        val config = testConfig.copy(
+            isAutoSendEnabled = true,
+            sendCooldownMs = 1000L,
+            requireDuplicateConfirmation = true
+        )
+
+        // 1. Scan SKU-A -> SendNow
+        assertEquals(com.example.bluetooth.AutoSendDecision.SendNow, hidManager.evaluateAutoSend("SKU-A", config, nowMs = 1000L))
+        hidManager.recordSentBarcode("SKU-A", "SKU-A", nowMs = 1000L)
+
+        // 2. Scan a different barcode SKU-B -> SendNow
+        assertEquals(com.example.bluetooth.AutoSendDecision.SendNow, hidManager.evaluateAutoSend("SKU-B", config, nowMs = 3000L))
+        hidManager.recordSentBarcode("SKU-B", "SKU-B", nowMs = 3000L)
+
+        // 3. SKU-A left frame earlier (> 1.2s ago) and now re-appears in the same batch after SKU-B
+        // Because SKU-B was scanned in between, SKU-A is NOT an accidental consecutive repeat -> SendNow without warning!
+        hidManager.syncVisibleBarcodes(setOf("SKU-B"), nowMs = 3500L)
+        val separatedInSequence = hidManager.evaluateAutoSend("SKU-A", config, nowMs = 5000L)
+        assertEquals(com.example.bluetooth.AutoSendDecision.SendNow, separatedInSequence)
+
+        // 4. Record SKU-A again, wait past consecutive window (20s later) with no other barcode -> also SendNow without warning
+        hidManager.recordSentBarcode("SKU-A", "SKU-A", nowMs = 5000L)
+        hidManager.syncVisibleBarcodes(emptySet(), nowMs = 24000L)
+        val separatedInTime = hidManager.evaluateAutoSend("SKU-A", config, nowMs = 25500L)
+        assertEquals(com.example.bluetooth.AutoSendDecision.SendNow, separatedInTime)
+    }
+
+    @Test
     fun testTurkishQLayoutHidScancodesPreventGibberish() {
         // On Turkish-Q: '.' is 0x38, '-' is 0x2E, 'i' is 0x34, 'ı' is 0x0C, 'ş' is 0x33, 'ç' is 0x37
         val dotTr = BluetoothHidManager.charToHidKey('.', KeyboardLayoutType.TR_Q)

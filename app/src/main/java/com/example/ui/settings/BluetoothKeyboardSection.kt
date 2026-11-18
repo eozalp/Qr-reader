@@ -643,12 +643,12 @@ fun BluetoothKeyboardSection(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Batch Sayım: Tekrar Okumada Onay İste",
+                                text = "Art Arda Aynı Barkodda Onay İste",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp
                             )
                             Text(
-                                text = "Aynı barkod bir kez gönderildikten sonra kilitlenir; tekrar okunursa onay sorar (${batchSentMap.values.sumOf { it.count }} okuma)",
+                                text = "Aynı barkodun yanlışlıkla arka arkaya okunmasını önler; arada başka kod okununca veya uzakta tekrar gelince uyarmaz (${batchSentMap.values.sumOf { it.count }} okuma)",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

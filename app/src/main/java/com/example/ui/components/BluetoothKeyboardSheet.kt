@@ -587,13 +587,13 @@ fun BluetoothKeyboardSheet(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = "Batch Sayım: Tekrarda Onay İste",
+                                        text = "Art Arda Aynı Barkodda Onay İste",
                                         fontWeight = FontWeight.Bold,
                                         color = Color.White,
                                         fontSize = 13.sp
                                     )
                                     Text(
-                                        text = "Aynı barkod bir kez gönderildikten sonra kilitlenir; tekrar okunursa onay ister (${batchSentMap.values.sumOf { it.count }} okuma)",
+                                        text = "Aynı barkodun yanlışlıkla arka arkaya okunmasını önler; arada başka kod okununca veya uzakta tekrar gelince uyarmaz (${batchSentMap.values.sumOf { it.count }} okuma)",
                                         fontSize = 11.sp,
                                         color = Color(0xFF94A3B8)
                                     )

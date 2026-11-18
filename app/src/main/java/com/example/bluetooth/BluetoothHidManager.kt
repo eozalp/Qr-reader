@@ -518,8 +518,9 @@ class BluetoothHidManager(private val context: Context? = null) {
     /**
      * Batch-safe Auto-Send evaluation using the RAW barcode identifier (not resolved payload!).
      * - Prevents same-frame / continuous spam while barcode stays in view.
-     * - Once sent and acknowledged, locks while in frame.
-     * - When scanned again after leaving view, asks for confirmation if `requireDuplicateConfirmation` is enabled.
+     * - Only asks for confirmation on accidental consecutive back-to-back repeats
+     *   (`lastSentRawBarcode == rawBarcode` within [CONSECUTIVE_DUPLICATE_WINDOW_MS]).
+     * - Same barcodes separated by another scan in between or spaced apart in time send immediately.
      */
     fun evaluateAutoSend(
         rawBarcode: String,
@@ -534,11 +535,17 @@ class BluetoothHidManager(private val context: Context? = null) {
 
         val existingEntry = _batchSentMap.value[rawBarcode]
         if (existingEntry != null) {
-            // Respect cooldown before even asking for confirmation
+            // Respect cooldown before re-sending or asking for confirmation
             if ((nowMs - existingEntry.lastSentTimestamp) < config.sendCooldownMs) {
                 return AutoSendDecision.SkipAlreadyActive
             }
-            return if (config.requireDuplicateConfirmation) {
+            val isConsecutiveRepeat = isAccidentalConsecutiveDuplicate(
+                rawBarcode = rawBarcode,
+                lastSentRawBarcode = lastSentRawBarcode,
+                lastSentTimestampMs = lastSentTimestamp,
+                nowMs = nowMs
+            )
+            return if (config.requireDuplicateConfirmation && isConsecutiveRepeat) {
                 AutoSendDecision.RequireConfirmation(existingEntry)
             } else {
                 AutoSendDecision.SendNow
@@ -845,7 +852,23 @@ class BluetoothHidManager(private val context: Context? = null) {
         const val KEY_TAB: Byte = 0x2B
         const val KEY_ENTER: Byte = 0x28
         const val KEY_SPACE: Byte = 0x2C
+        const val CONSECUTIVE_DUPLICATE_WINDOW_MS: Long = 15_000L
         private val ZERO_REPORT = byteArrayOf(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+
+        /**
+         * Returns true only when [rawBarcode] is the exact same barcode that was just sent
+         * and is being scanned back-to-back within [CONSECUTIVE_DUPLICATE_WINDOW_MS] (accidental repeat).
+         */
+        fun isAccidentalConsecutiveDuplicate(
+            rawBarcode: String,
+            lastSentRawBarcode: String,
+            lastSentTimestampMs: Long,
+            nowMs: Long = System.currentTimeMillis()
+        ): Boolean {
+            if (lastSentRawBarcode.isEmpty() || lastSentRawBarcode != rawBarcode) return false
+            if (lastSentTimestampMs <= 0L) return false
+            return (nowMs - lastSentTimestampMs) < CONSECUTIVE_DUPLICATE_WINDOW_MS
+        }
 
         @Volatile
         private var instance: BluetoothHidManager? = null

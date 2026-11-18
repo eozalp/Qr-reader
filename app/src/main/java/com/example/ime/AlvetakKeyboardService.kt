@@ -110,11 +110,13 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
     private var isTorchOn = false
     private var currentSendTargetOverride: KeyboardSendTarget? = null
 
-    // Batch duplicate guard inside local keyboard
+    // Batch & consecutive duplicate guard inside keyboard
     private val activeInFrameRaw = mutableSetOf<String>()
     private val sentCounts = mutableMapOf<String, Int>()
     private val lastSeenMs = mutableMapOf<String, Long>()
     private val dismissedUntilGone = mutableSetOf<String>()
+    private var lastCommittedRaw: String = ""
+    private var lastCommittedAtMs: Long = 0L
     private var pendingConfirmRaw: String? = null
     private var pendingConfirmPayload: String? = null
 
@@ -1278,13 +1280,24 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         activeInFrameRaw.add(raw)
 
         val prevCount = sentCounts[raw] ?: 0
-        if (prevCount > 0 && effectiveConfig.requireDuplicateConfirmation) {
+        val isConsecutiveRepeat = BluetoothHidManager.isAccidentalConsecutiveDuplicate(
+            rawBarcode = raw,
+            lastSentRawBarcode = lastCommittedRaw,
+            lastSentTimestampMs = lastCommittedAtMs,
+            nowMs = now
+        )
+        if (prevCount > 0 && effectiveConfig.requireDuplicateConfirmation && isConsecutiveRepeat) {
             pendingConfirmRaw = raw
             pendingConfirmPayload = payload
-            duplicateTextView?.text = "Tekrar (${prevCount}x): $payload"
+            duplicateTextView?.text = "Art arda (${prevCount}x): $payload"
             duplicateBanner?.visibility = View.VISIBLE
             showStatusToast("Onay bekleniyor")
         } else {
+            if (pendingConfirmRaw != raw) {
+                pendingConfirmRaw = null
+                pendingConfirmPayload = null
+                duplicateBanner?.visibility = View.GONE
+            }
             commitPayloadToTarget(raw, payload, activeProfile)
         }
     }
@@ -1308,6 +1321,8 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 if (ok) {
                     val newCount = (sentCounts[raw] ?: 0) + 1
                     sentCounts[raw] = newCount
+                    lastCommittedRaw = raw
+                    lastCommittedAtMs = System.currentTimeMillis()
                     val preview = payload.replace("\t", " ⇥ ")
                     showStatusToast("✓ BT (#$newCount): $preview")
                 } else {
@@ -1342,6 +1357,8 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
         val newCount = (sentCounts[raw] ?: 0) + 1
         sentCounts[raw] = newCount
+        lastCommittedRaw = raw
+        lastCommittedAtMs = System.currentTimeMillis()
 
         val displayPreview = payload.replace("\t", " ⇥ ")
         showStatusToast("✓ Yazıldı (#$newCount): $displayPreview")
