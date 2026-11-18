@@ -273,20 +273,97 @@ class BluetoothHidPayloadTest {
 
     @Test
     fun testComputeKeyTimingPreventsAutoRepeatOnRepeatedDigits() {
-        // Legacy sub-frame 3ms / 5ms delays must clamp to >= 12ms hold & >= 18ms gap
-        val fastDifferent = BluetoothHidManager.computeKeyTiming(3L, isSameKeyCodeAsPrev = false)
-        assertTrue(fastDifferent.holdMs >= 12L)
-        assertTrue(fastDifferent.gapMs >= 18L)
+        // Legacy sub-frame 3ms / 12ms delays must clamp to >= 24ms hold & >= 22ms gap
+        val fastDifferent = BluetoothHidManager.computeKeyTiming(12L, isSameKeyCodeAsPrev = false)
+        assertTrue(fastDifferent.holdMs >= 24L)
+        assertTrue(fastDifferent.gapMs >= 22L)
 
-        // Consecutive identical characters (like '0'->'0' in "00326") get extra release separation
-        val repeatedDigit = BluetoothHidManager.computeKeyTiming(12L, isSameKeyCodeAsPrev = true)
-        assertEquals(12L, repeatedDigit.holdMs)
-        assertTrue(repeatedDigit.gapMs >= fastDifferent.gapMs + 10L)
+        // Consecutive identical characters (like '0'->'0' in "00326") get +15ms extra release separation
+        val repeatedDigit = BluetoothHidManager.computeKeyTiming(26L, isSameKeyCodeAsPrev = true)
+        assertEquals(26L, repeatedDigit.holdMs)
+        assertEquals(41L, repeatedDigit.gapMs)
 
         // Slow safe preset stays within safe bounds (below OS typematic auto-repeat threshold)
-        val safeSlow = BluetoothHidManager.computeKeyTiming(24L, isSameKeyCodeAsPrev = false)
-        assertEquals(24L, safeSlow.holdMs)
-        assertTrue(safeSlow.holdMs <= 25L)
-        assertTrue(safeSlow.gapMs in 18L..35L)
+        val safeSlow = BluetoothHidManager.computeKeyTiming(40L, isSameKeyCodeAsPrev = false)
+        assertEquals(40L, safeSlow.holdMs)
+        assertTrue(safeSlow.holdMs <= 50L)
+        assertTrue(safeSlow.gapMs in 22L..45L)
+    }
+
+    @Test
+    fun testBuildMouseReportEncodingAndClamping() {
+        val report = BluetoothHidManager.buildMouseReport(
+            buttonsMask = BluetoothHidManager.MOUSE_BTN_LEFT or BluetoothHidManager.MOUSE_BTN_RIGHT,
+            dx = 200,
+            dy = -250,
+            wheel = 200
+        )
+        assertEquals(4, report.size)
+        assertEquals(0x03.toByte(), report[0])
+        assertEquals(127.toByte(), report[1])
+        assertEquals((-127).toByte(), report[2])
+        assertEquals(127.toByte(), report[3])
+    }
+
+    @Test
+    fun testBuildConsumerReportLittleEndian() {
+        val volUp = BluetoothHidManager.buildConsumerReport(BluetoothHidManager.CONSUMER_VOL_UP)
+        assertEquals(2, volUp.size)
+        assertEquals(0xE9.toByte(), volUp[0])
+        assertEquals(0x00.toByte(), volUp[1])
+
+        val release = BluetoothHidManager.buildConsumerReport(0)
+        assertEquals(0.toByte(), release[0])
+        assertEquals(0.toByte(), release[1])
+    }
+
+    @Test
+    fun testAirMouseMathDeadzoneAndGravityProjection() {
+        // 1. Sub-deadzone hand tremor produces zero movement
+        val jitter = com.example.bluetooth.AirMouseMath.accumulateStep(
+            wx = 0.02f,
+            wy = -0.01f,
+            wz = 0.015f,
+            gx = 0f,
+            gy = 6.9f,
+            gz = 6.9f,
+            dtSec = 0.016f,
+            sensitivity = 1.0f,
+            prevAccumX = 0f,
+            prevAccumY = 0f
+        )
+        assertEquals(0, jitter.dx)
+        assertEquals(0, jitter.dy)
+
+        // 2. Right pan when phone lies flat (gravity along +Z): wz is negative on Android CCW-Z -> -wz > 0 -> +dx
+        val flatRightPan = com.example.bluetooth.AirMouseMath.accumulateStep(
+            wx = 0f,
+            wy = 0f,
+            wz = -1.2f,
+            gx = 0f,
+            gy = 0f,
+            gz = 9.81f,
+            dtSec = 0.016f,
+            sensitivity = 1.2f,
+            prevAccumX = 0f,
+            prevAccumY = 0f
+        )
+        assertTrue("Expected positive dx on right pan, got ${flatRightPan.dx}", flatRightPan.dx > 0)
+        assertEquals(0, flatRightPan.dy)
+
+        // 3. Upward pitch (+wx on Android pitches top edge away/up) moves cursor up (negative dy)
+        val pitchUp = com.example.bluetooth.AirMouseMath.accumulateStep(
+            wx = 1.2f,
+            wy = 0f,
+            wz = 0f,
+            gx = 0f,
+            gy = 7.0f,
+            gz = 7.0f,
+            dtSec = 0.016f,
+            sensitivity = 1.2f,
+            prevAccumX = 0f,
+            prevAccumY = 0f
+        )
+        assertTrue("Expected negative dy on upward pitch, got ${pitchUp.dy}", pitchUp.dy < 0)
     }
 }

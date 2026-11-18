@@ -82,6 +82,7 @@ fun CameraScreen(
     profileRepository: ProfileRepository,
     attachmentRepository: AttachmentRepository,
     onOpenSettings: () -> Unit,
+    onOpenRemoteControl: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1524,6 +1525,27 @@ fun CameraScreen(
                         }
                     }
 
+                    // 3b. Mouse, Air Mouse & Tam Klavye Kumandası
+                    FilledTonalIconButton(
+                        onClick = onOpenRemoteControl,
+                        enabled = !isRawModeActive,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .alpha(if (isRawModeActive) 0f else 1f)
+                            .testTag("open_remote_control_btn"),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = GlassmorphicDockBg,
+                            contentColor = ElectricIndigo
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Mouse,
+                            contentDescription = "PC Mouse, Air Mouse ve Tam Klavye",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
                     // 4. Sayım & Tarama Geçmişi
                     val totalHistoryOrBatch = maxOf(scanHistory.size, batchSentMap.values.sumOf { it.count })
                     FilledTonalIconButton(
@@ -1620,6 +1642,10 @@ fun CameraScreen(
                                 )
                             )
                         }
+                    },
+                    onOpenRemoteControl = {
+                        showBluetoothSheet = false
+                        onOpenRemoteControl()
                     },
                     onDismiss = { showBluetoothSheet = false }
                 )

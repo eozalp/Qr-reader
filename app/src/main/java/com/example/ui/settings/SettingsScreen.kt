@@ -40,6 +40,7 @@ fun SettingsScreen(
     profileRepository: ProfileRepository,
     attachmentRepository: com.example.data.AttachmentRepository? = null,
     onNavigateBack: () -> Unit,
+    onOpenRemoteControl: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // Handle Android system back press
@@ -193,7 +194,8 @@ fun SettingsScreen(
                         onConfigChanged = { updatedKb ->
                             profileRepository.saveProfile(activeProfile.copy(bluetoothKeyboard = updatedKb))
                         },
-                        availableVariables = activeProfile.parsingRules.variables
+                        availableVariables = activeProfile.parsingRules.variables,
+                        onOpenRemoteControl = onOpenRemoteControl
                     )
                 }
                 SettingsTab.OVERLAY -> {

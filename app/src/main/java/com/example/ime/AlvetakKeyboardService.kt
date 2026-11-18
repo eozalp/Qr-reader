@@ -33,11 +33,14 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import com.example.MainActivity
 import com.example.R
+import com.example.bluetooth.AirMouseController
 import com.example.bluetooth.BluetoothHidManager
 import com.example.bluetooth.HidConnectionStatus
 import com.example.camera.QrCodeAnalyzer
@@ -56,19 +59,27 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.abs
 
 /**
- * Compact Dual-Mode Input Keyboard ("ALVETAK QR Klavye"):
- * - Top-left toggle: [ Barkod | Klavye ] (Live Camera Barcode Scanner vs Built-in Turkish-Q Classic Keyboard).
- * - Top-right toggle: [ Yerel | BT ] (Commit to current phone app vs transmit over shared Bluetooth HID to PC).
- * - Occupies bottom ~37% of the screen so Chrome / Edge / Excel forms stay visible above.
- * - Uses TextureView (PreviewView.ImplementationMode.COMPATIBLE) so camera video renders reliably inside IME windows.
+ * Compact 3-Mode Input Keyboard ("ALVETAK QR Klavye & Mouse"):
+ * - Top-left toggle: [ Barkod | Klavye | Mouse ]
+ * - Top-right toggle: [ Yerel | BT ]
+ * - Inset-aware root dynamically reserves bottom navigation / Android keyboard-chooser bar
+ *   insets so system `⌨` and `v` buttons never overlap keys or camera controls.
  */
 class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
     private enum class ScanInputMode {
         BARCODE,
-        CLASSIC_KEYBOARD
+        CLASSIC_KEYBOARD,
+        MOUSE
+    }
+
+    private enum class ClassicPage {
+        LETTERS,
+        SYMBOLS,
+        FUNCTION_NAV
     }
 
     private enum class OutputTarget {
@@ -92,6 +103,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
     private lateinit var profileRepository: ProfileRepository
     private lateinit var hidManager: BluetoothHidManager
+    private lateinit var airMouseController: AirMouseController
     private lateinit var cameraExecutor: ExecutorService
     private val qrTracker = com.example.camera.QrTracker()
 
@@ -102,9 +114,19 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
     private var scanMode: ScanInputMode = ScanInputMode.BARCODE
     private var outputTarget: OutputTarget = OutputTarget.LOCAL
-    private var isSymbolsPage: Boolean = false
+    private var classicPage: ClassicPage = ClassicPage.LETTERS
     private var shiftState: ShiftState = ShiftState.OFF
     private var lastShiftTapMs: Long = 0L
+
+    // Sticky PC Modifiers for Full Keyboard support
+    private var isCtrlSticky = false
+    private var isAltSticky = false
+    private var isWinSticky = false
+
+    // Mouse / Air Mouse states
+    private var isAirMouseContinuous = false
+    private var isAirMouseHoldAiming = false
+    private var isDragLocked = false
 
     private var useFrontCamera = false
     private var isTorchOn = false
@@ -120,6 +142,8 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
     private var pendingConfirmRaw: String? = null
     private var pendingConfirmPayload: String? = null
 
+    private var rootLayout: InsetAwareKeyboardRootLayout? = null
+
     // Top toggle views
     private var barcodeTabContainer: LinearLayout? = null
     private var barcodeTabIcon: ImageView? = null
@@ -127,6 +151,9 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
     private var classicTabContainer: LinearLayout? = null
     private var classicTabIcon: ImageView? = null
     private var classicTabLabel: TextView? = null
+    private var mouseTabContainer: LinearLayout? = null
+    private var mouseTabIcon: ImageView? = null
+    private var mouseTabLabel: TextView? = null
 
     private var localTargetBtn: TextView? = null
     private var bluetoothTargetBtn: TextView? = null
@@ -134,10 +161,21 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
     // Panels
     private var barcodePanel: FrameLayout? = null
     private var classicKeyboardPanel: LinearLayout? = null
+    private var mousePanel: LinearLayout? = null
     private var lettersGrid: LinearLayout? = null
     private var symbolsGrid: LinearLayout? = null
+    private var functionNavGrid: LinearLayout? = null
     private val letterKeyViews = mutableListOf<Pair<TextView, String>>()
     private var shiftKeyButton: TextView? = null
+    private var ctrlKeyBtn: TextView? = null
+    private var altKeyBtn: TextView? = null
+    private var winKeyBtn: TextView? = null
+
+    // Mouse panel views
+    private var airToggleBtn: TextView? = null
+    private var airHoldBtn: TextView? = null
+    private var dragLockBtn: TextView? = null
+    private var touchpadHintView: TextView? = null
 
     // Barcode controls & overlays
     private var statusToastView: TextView? = null
@@ -156,11 +194,17 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         profileRepository = ProfileRepository(applicationContext)
         hidManager = BluetoothHidManager.getInstance(applicationContext)
+        airMouseController = AirMouseController(applicationContext) { dx, dy ->
+            if (hidManager.isHidHostConnected()) {
+                hidManager.sendMouseMove(dx, dy)
+            }
+        }
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         serviceScope.launch {
             hidManager.connectionStatus.collectLatest {
                 refreshTargetStyles()
+                updateTouchpadStatusHint()
             }
         }
     }
@@ -172,13 +216,26 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         fun dp(v: Int): Int = (v * density).toInt()
 
         val screenH = resources.displayMetrics.heightPixels
-        val targetKeyboardHeight = (screenH * 0.37f).toInt().coerceIn(dp(265), dp(310))
+        val targetKeyboardHeight = (screenH * 0.39f).toInt().coerceIn(dp(275), dp(325))
 
         letterKeyViews.clear()
         shiftKeyButton = null
+        ctrlKeyBtn = null
+        altKeyBtn = null
+        winKeyBtn = null
 
-        val root = FixedHeightFrameLayout(this, targetKeyboardHeight).apply {
+        val root = InsetAwareKeyboardRootLayout(this, targetKeyboardHeight).apply {
             setBackgroundColor(Color.parseColor("#0B111E"))
+        }
+        rootLayout = root
+
+        // Reserve bottom space for Android IME navigation / keyboard-chooser bar (`⌨` & `v`)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, windowInsets ->
+            val navInsets = windowInsets.getInsets(
+                WindowInsetsCompat.Type.navigationBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            (view as? InsetAwareKeyboardRootLayout)?.updateBottomInset(navInsets.bottom)
+            windowInsets
         }
 
         // ============================================================
@@ -305,9 +362,9 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 shape = GradientDrawable.OVAL
             }
             setPadding(dp(11), dp(11), dp(11), dp(11))
-            layoutParams = FrameLayout.LayoutParams(dp(46), dp(46), Gravity.BOTTOM or Gravity.START).apply {
-                marginStart = dp(16)
-                bottomMargin = dp(12)
+            layoutParams = FrameLayout.LayoutParams(dp(44), dp(44), Gravity.BOTTOM or Gravity.START).apply {
+                marginStart = dp(14)
+                bottomMargin = dp(14)
             }
             setOnClickListener {
                 useFrontCamera = !useFrontCamera
@@ -372,9 +429,9 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 shape = GradientDrawable.OVAL
             }
             setPadding(dp(11), dp(11), dp(11), dp(11))
-            layoutParams = FrameLayout.LayoutParams(dp(46), dp(46), Gravity.BOTTOM or Gravity.END).apply {
-                marginEnd = dp(16)
-                bottomMargin = dp(12)
+            layoutParams = FrameLayout.LayoutParams(dp(44), dp(44), Gravity.BOTTOM or Gravity.END).apply {
+                marginEnd = dp(14)
+                bottomMargin = dp(14)
             }
             setOnClickListener {
                 if (!useFrontCamera) {
@@ -401,7 +458,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             setPadding(dp(20), dp(48), dp(20), dp(20))
         }
         val permText = TextView(this).apply {
-            text = "Barkod klavyesini kullanmak için kamera izni verin veya Klasik Klavye sekmesine geçin."
+            text = "Barkod klavyesini kullanmak için kamera izni verin veya Klavye / Mouse sekmesine geçin."
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             gravity = Gravity.CENTER
@@ -434,12 +491,12 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         root.addView(camPanel)
 
         // ============================================================
-        // 2. CLASSIC TURKISH-Q KEYBOARD PANEL
+        // 2. CLASSIC TURKISH-Q & FULL PC KEYBOARD PANEL
         // ============================================================
         val kbPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#0B111E"))
-            setPadding(dp(4), dp(54), dp(4), dp(6))
+            setPadding(dp(4), dp(52), dp(4), dp(8))
             visibility = View.GONE
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -456,10 +513,22 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         symbolsGrid = symbolsContainer
         kbPanel.addView(symbolsContainer)
 
+        val fnContainer = buildFunctionNavGrid().apply { visibility = View.GONE }
+        functionNavGrid = fnContainer
+        kbPanel.addView(fnContainer)
+
         root.addView(kbPanel)
 
         // ============================================================
-        // 3. TOP FLOATING HEADER ROW: [ Barkod | Klavye ] & [ Yerel | BT ]
+        // 3. MOUSE & AIR MOUSE PANEL
+        // ============================================================
+        val mPanel = buildMousePanel()
+        mPanel.visibility = View.GONE
+        mousePanel = mPanel
+        root.addView(mPanel)
+
+        // ============================================================
+        // 4. TOP FLOATING HEADER ROW: [ Barkod | Klavye | Mouse ] & [ Yerel | BT ]
         // ============================================================
         val topHeader = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(
@@ -467,25 +536,25 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP
             ).apply {
-                topMargin = dp(8)
-                marginStart = dp(10)
-                marginEnd = dp(10)
+                topMargin = dp(6)
+                marginStart = dp(8)
+                marginEnd = dp(8)
             }
         }
 
-        // Top-Left: [ Barkod | Klavye ]
+        // Top-Left: [ Barkod | Klavye | Mouse ]
         val modePillHost = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#B0090E1A"))
-                cornerRadius = dp(20).toFloat()
+                setColor(Color.parseColor("#C4090E1A"))
+                cornerRadius = dp(18).toFloat()
                 setStroke(dp(1), Color.parseColor("#33FFFFFF"))
             }
             setPadding(dp(3), dp(3), dp(3), dp(3))
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
-                dp(38),
+                dp(36),
                 Gravity.START or Gravity.CENTER_VERTICAL
             )
         }
@@ -504,8 +573,16 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         classicTabIcon = kIcon
         classicTabLabel = kLabel
 
+        val (mTab, mIcon, mLabel) = buildSegmentTab(R.drawable.ic_kb_mouse, "Mouse") {
+            setScanMode(ScanInputMode.MOUSE)
+        }
+        mouseTabContainer = mTab
+        mouseTabIcon = mIcon
+        mouseTabLabel = mLabel
+
         modePillHost.addView(bTab)
         modePillHost.addView(kTab)
+        modePillHost.addView(mTab)
         topHeader.addView(modePillHost)
 
         // Top-Right: [ Yerel | BT ]
@@ -513,14 +590,14 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#B0090E1A"))
-                cornerRadius = dp(20).toFloat()
+                setColor(Color.parseColor("#C4090E1A"))
+                cornerRadius = dp(18).toFloat()
                 setStroke(dp(1), Color.parseColor("#33FFFFFF"))
             }
             setPadding(dp(3), dp(3), dp(3), dp(3))
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
-                dp(38),
+                dp(36),
                 Gravity.END or Gravity.CENTER_VERTICAL
             )
         }
@@ -542,7 +619,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         root.addView(topHeader)
 
         // ============================================================
-        // 4. SHARED STATUS TOAST BANNER (works in both Barkod & Klavye modes)
+        // 5. SHARED STATUS TOAST BANNER (works across all 3 modes)
         // ============================================================
         val statusToast = TextView(this).apply {
             text = ""
@@ -562,7 +639,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP or Gravity.CENTER_HORIZONTAL
             ).apply {
-                topMargin = dp(52)
+                topMargin = dp(48)
             }
         }
         statusToastView = statusToast
@@ -570,8 +647,426 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
         refreshModePanelsAndTabs()
         refreshTargetStyles()
+        refreshModifierUi()
+        updateTouchpadStatusHint()
         updateModeChipLabel(profileRepository.activeProfile.value)
         return root
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun buildMousePanel(): LinearLayout {
+        val density = resources.displayMetrics.density
+        fun dp(v: Int): Int = (v * density).toInt()
+
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#0B111E"))
+            setPadding(dp(8), dp(48), dp(8), dp(8))
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+
+            // Middle: Touchpad Surface + Right Scroll Strip
+            val padRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+                ).apply { bottomMargin = dp(6) }
+            }
+
+            // Touchpad Area Container
+            val touchpadContainer = FrameLayout(context).apply {
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#111A2C"))
+                    cornerRadius = dp(14).toFloat()
+                    setStroke(dp(1), Color.parseColor("#2A3A57"))
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    1f
+                ).apply { marginEnd = dp(6) }
+            }
+
+            // Interactive Touchpad Gesture Surface
+            var lastX = 0f
+            var lastY = 0f
+            var accumDx = 0f
+            var accumDy = 0f
+            var accumWheel = 0f
+            var downTime = 0L
+            var downX = 0f
+            var downY = 0f
+            var maxPointers = 0
+
+            val gestureSurface = View(context).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+                setOnTouchListener { _, event ->
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            lastX = event.x
+                            lastY = event.y
+                            downX = event.x
+                            downY = event.y
+                            downTime = System.currentTimeMillis()
+                            maxPointers = 1
+                            accumDx = 0f
+                            accumDy = 0f
+                            accumWheel = 0f
+                            true
+                        }
+                        MotionEvent.ACTION_POINTER_DOWN -> {
+                            maxPointers = maxOf(maxPointers, event.pointerCount)
+                            if (event.pointerCount >= 2) {
+                                lastY = event.getY(0)
+                            }
+                            true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            if (event.pointerCount >= 2) {
+                                // Two-finger vertical scroll
+                                val curY = event.getY(0)
+                                val dy = curY - lastY
+                                lastY = curY
+                                accumWheel -= dy / dp(14)
+                                val stepW = accumWheel.toInt()
+                                if (stepW != 0) {
+                                    accumWheel -= stepW
+                                    hidManager.sendMouseMove(0, 0, wheel = stepW.coerceIn(-12, 12))
+                                }
+                            } else {
+                                val dx = event.x - lastX
+                                val dy = event.y - lastY
+                                lastX = event.x
+                                lastY = event.y
+                                val speed = kotlin.math.hypot(dx, dy)
+                                val accel = (1.15f + (speed / 28f).coerceIn(0f, 1.4f)) / (density * 0.65f)
+                                accumDx += dx * accel
+                                accumDy += dy * accel
+                                val sendX = accumDx.toInt()
+                                val sendY = accumDy.toInt()
+                                if (sendX != 0 || sendY != 0) {
+                                    accumDx -= sendX
+                                    accumDy -= sendY
+                                    hidManager.sendMouseMove(sendX, sendY)
+                                }
+                            }
+                            true
+                        }
+                        MotionEvent.ACTION_UP -> {
+                            val dt = System.currentTimeMillis() - downTime
+                            val moved = kotlin.math.hypot(event.x - downX, event.y - downY)
+                            if (dt < 230L && moved < dp(12)) {
+                                if (!hidManager.isHidHostConnected()) {
+                                    showStatusToast("PC Bluetooth bağlı değil")
+                                } else if (maxPointers >= 2) {
+                                    hidManager.sendMouseClick(BluetoothHidManager.MOUSE_BTN_RIGHT)
+                                } else {
+                                    hidManager.sendMouseClick(BluetoothHidManager.MOUSE_BTN_LEFT)
+                                }
+                            }
+                            true
+                        }
+                        else -> false
+                    }
+                }
+            }
+            touchpadContainer.addView(gestureSurface)
+
+            // Center Hint Text inside Touchpad
+            val hintTxt = TextView(context).apply {
+                text = "Dokunmatik Alan · Tek Tık = Sol · 2 Parmak = Sağ / Kaydır"
+                setTextColor(Color.parseColor("#64748B"))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+                gravity = Gravity.CENTER
+                setPadding(dp(12), dp(4), dp(12), dp(4))
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                ).apply { bottomMargin = dp(6) }
+            }
+            touchpadHintView = hintTxt
+            touchpadContainer.addView(hintTxt)
+
+            // Top Controls inside Touchpad: [Air Mouse Toggle] & [Air Tut & Oynat / Clutch]
+            val airBar = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                ).apply { topMargin = dp(8) }
+            }
+
+            val toggleAir = TextView(context).apply {
+                text = "✈ Air Mouse: Kapalı"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+                setTypeface(null, Typeface.BOLD)
+                setPadding(dp(10), dp(5), dp(10), dp(5))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dp(6) }
+                setOnClickListener {
+                    if (!airMouseController.isGyroSupported) {
+                        showStatusToast("Bu cihazda jiroskop sensörü bulunamadı")
+                        return@setOnClickListener
+                    }
+                    isAirMouseContinuous = !isAirMouseContinuous
+                    syncAirMouseState()
+                }
+            }
+            airToggleBtn = toggleAir
+            airBar.addView(toggleAir)
+
+            val holdAim = TextView(context).apply {
+                text = "🎯 Tut & Oynat"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+                setTypeface(null, Typeface.BOLD)
+                setPadding(dp(10), dp(5), dp(10), dp(5))
+                setOnTouchListener { _, ev ->
+                    when (ev.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            if (!airMouseController.isGyroSupported) {
+                                showStatusToast("Bu cihazda jiroskop sensörü bulunamadı")
+                                return@setOnTouchListener true
+                            }
+                            isAirMouseHoldAiming = true
+                            syncAirMouseState()
+                            true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            isAirMouseHoldAiming = false
+                            syncAirMouseState()
+                            true
+                        }
+                        else -> false
+                    }
+                }
+            }
+            airHoldBtn = holdAim
+            airBar.addView(holdAim)
+            touchpadContainer.addView(airBar)
+            updateAirMouseButtonsUi()
+
+            padRow.addView(touchpadContainer)
+
+            // Right Edge Dedicated 1-Finger Scroll Wheel Strip
+            var scrollLastY = 0f
+            var scrollAccum = 0f
+            val scrollStrip = FrameLayout(context).apply {
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#162136"))
+                    cornerRadius = dp(12).toFloat()
+                    setStroke(dp(1), Color.parseColor("#2A3A57"))
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    dp(38),
+                    LinearLayout.LayoutParams.MATCH_PARENT
+                )
+                setOnTouchListener { _, ev ->
+                    when (ev.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            scrollLastY = ev.y
+                            scrollAccum = 0f
+                            true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            val dy = ev.y - scrollLastY
+                            scrollLastY = ev.y
+                            scrollAccum -= dy / dp(12)
+                            val steps = scrollAccum.toInt()
+                            if (steps != 0) {
+                                scrollAccum -= steps
+                                hidManager.sendMouseMove(0, 0, wheel = steps.coerceIn(-12, 12))
+                            }
+                            true
+                        }
+                        else -> false
+                    }
+                }
+                addView(TextView(context).apply {
+                    text = "▲\n\n↕\n\n▼"
+                    setTextColor(Color.parseColor("#00F5D4"))
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                    setTypeface(null, Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                    layoutParams = FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                })
+            }
+            padRow.addView(scrollStrip)
+            addView(padRow)
+
+            // Bottom Mouse Click Buttons Row: [Sol Tık] [Sürükle] [Orta] [Sağ Tık]
+            val btnRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(46)
+                )
+            }
+
+            val leftClickBtn = createMouseHardwareButton("Sol Tık", 2.0f, "#1E293B", "#F8FAFC") { isDown ->
+                if (!hidManager.isHidHostConnected()) {
+                    if (isDown) showStatusToast("PC Bluetooth bağlı değil")
+                    return@createMouseHardwareButton
+                }
+                if (isDragLocked && isDown) {
+                    isDragLocked = false
+                    updateAirMouseButtonsUi()
+                }
+                hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDown)
+            }
+            btnRow.addView(leftClickBtn)
+
+            val dragBtn = createKeyBaseView("Sürükle", 1.15f, "#131C2D", "#CBD5E1", 11.5f) {
+                if (!hidManager.isHidHostConnected()) {
+                    showStatusToast("PC Bluetooth bağlı değil")
+                    return@createKeyBaseView
+                }
+                isDragLocked = !isDragLocked
+                hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDragLocked)
+                updateAirMouseButtonsUi()
+            }
+            dragLockBtn = dragBtn
+            btnRow.addView(dragBtn)
+
+            val middleClickBtn = createMouseHardwareButton("Orta", 0.9f, "#131C2D", "#CBD5E1") { isDown ->
+                if (hidManager.isHidHostConnected()) {
+                    hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_MIDDLE, isDown)
+                }
+            }
+            btnRow.addView(middleClickBtn)
+
+            val rightClickBtn = createMouseHardwareButton("Sağ Tık", 1.5f, "#1E293B", "#00F5D4") { isDown ->
+                if (!hidManager.isHidHostConnected()) {
+                    if (isDown) showStatusToast("PC Bluetooth bağlı değil")
+                    return@createMouseHardwareButton
+                }
+                hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_RIGHT, isDown)
+            }
+            btnRow.addView(rightClickBtn)
+
+            addView(btnRow)
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun createMouseHardwareButton(
+        label: String,
+        weight: Float,
+        bgHex: String,
+        fgHex: String,
+        onPressChange: (Boolean) -> Unit
+    ): TextView {
+        val density = resources.displayMetrics.density
+        fun dp(v: Int): Int = (v * density).toInt()
+        return TextView(this).apply {
+            text = label
+            setTextColor(Color.parseColor(fgHex))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            maxLines = 1
+            background = buildKeySelectorDrawable(bgHex, "#334155", dp(8).toFloat())
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                weight
+            ).apply { setMargins(dp(3), dp(2), dp(3), dp(2)) }
+            setOnTouchListener { v, ev ->
+                when (ev.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        v.isPressed = true
+                        onPressChange(true)
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        v.isPressed = false
+                        onPressChange(false)
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+    }
+
+    private fun syncAirMouseState() {
+        val shouldRun = scanMode == ScanInputMode.MOUSE && (isAirMouseContinuous || isAirMouseHoldAiming)
+        if (shouldRun) {
+            if (isAirMouseContinuous && isAirMouseHoldAiming) {
+                // Holding clutch while continuous mode is active temporarily pauses cursor for wrist reposition
+                airMouseController.isClutchPaused = true
+            } else {
+                airMouseController.isClutchPaused = false
+            }
+            if (!airMouseController.isRunning) {
+                airMouseController.start()
+            }
+        } else {
+            airMouseController.isClutchPaused = false
+            airMouseController.stop()
+        }
+        updateAirMouseButtonsUi()
+    }
+
+    private fun updateAirMouseButtonsUi() {
+        val density = resources.displayMetrics.density
+        val r = 14f * density
+
+        airToggleBtn?.apply {
+            val active = isAirMouseContinuous
+            text = if (active) "✈ Air Mouse: AÇIK" else "✈ Air Mouse: Kapalı"
+            setTextColor(if (active) Color.parseColor("#042F2E") else Color.parseColor("#E2E8F0"))
+            background = GradientDrawable().apply {
+                setColor(if (active) Color.parseColor("#00F5D4") else Color.parseColor("#1E293B"))
+                cornerRadius = r
+            }
+        }
+
+        airHoldBtn?.apply {
+            text = when {
+                isAirMouseContinuous && isAirMouseHoldAiming -> "⏸ Duraklatıldı"
+                isAirMouseContinuous -> "⏸ Tut = Duraklat"
+                isAirMouseHoldAiming -> "🎯 Aktif (Oynatın)"
+                else -> "🎯 Tut & Oynat"
+            }
+            val highlighted = isAirMouseHoldAiming && !isAirMouseContinuous
+            setTextColor(if (highlighted) Color.parseColor("#042F2E") else Color.parseColor("#CBD5E1"))
+            background = GradientDrawable().apply {
+                setColor(if (highlighted) Color.parseColor("#F59E0B") else Color.parseColor("#131C2D"))
+                cornerRadius = r
+                setStroke(density.toInt().coerceAtLeast(1), Color.parseColor("#334155"))
+            }
+        }
+
+        dragLockBtn?.apply {
+            setTextColor(if (isDragLocked) Color.parseColor("#042F2E") else Color.parseColor("#CBD5E1"))
+            background = buildKeySelectorDrawable(
+                if (isDragLocked) "#F59E0B" else "#131C2D",
+                "#334155",
+                7f * density
+            )
+        }
+    }
+
+    private fun updateTouchpadStatusHint() {
+        val isConnected = hidManager.connectionStatus.value == HidConnectionStatus.CONNECTED
+        touchpadHintView?.text = if (isConnected) {
+            "Tek tık: Sol · 2 parmak: Sağ/Kaydır · Sağ kenar: Tekerlek"
+        } else {
+            "PC bağlı değil — Uygulamadan Bluetooth ile bilgisayara bağlanın"
+        }
     }
 
     private fun buildLettersKeyboardGrid(): LinearLayout {
@@ -638,8 +1133,8 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             row3.addView(createBackspaceKeyButton(1.35f))
             addView(row3)
 
-            // Row 4: [?123] [⇥] [,] [Boşluk] [.] [↵]
-            addView(buildBottomClassicRow(isSymbolPage = false))
+            // Row 4: [?123] [FN] [⇥] [,] [Boşluk] [.] [↵]
+            addView(buildBottomClassicRow(ClassicPage.LETTERS))
         }
     }
 
@@ -688,12 +1183,94 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             row3.addView(createBackspaceKeyButton(1.5f))
             addView(row3)
 
-            // Row 4: [ABC] [⇥] [,] [Boşluk] [.] [↵]
-            addView(buildBottomClassicRow(isSymbolPage = true))
+            // Row 4
+            addView(buildBottomClassicRow(ClassicPage.SYMBOLS))
         }
     }
 
-    private fun buildBottomClassicRow(isSymbolPage: Boolean): LinearLayout {
+    private fun buildFunctionNavGrid(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.MATCH_PARENT
+            )
+
+            // Row 1: Esc F1..F8 Del
+            val row1 = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+            }
+            row1.addView(createSpecialHidKey("Esc", 1.1f, BluetoothHidManager.KEY_ESCAPE, KeyEvent.KEYCODE_ESCAPE))
+            row1.addView(createSpecialHidKey("F1", 1f, BluetoothHidManager.KEY_F1, KeyEvent.KEYCODE_F1))
+            row1.addView(createSpecialHidKey("F2", 1f, BluetoothHidManager.KEY_F2, KeyEvent.KEYCODE_F2))
+            row1.addView(createSpecialHidKey("F3", 1f, BluetoothHidManager.KEY_F3, KeyEvent.KEYCODE_F3))
+            row1.addView(createSpecialHidKey("F4", 1f, BluetoothHidManager.KEY_F4, KeyEvent.KEYCODE_F4))
+            row1.addView(createSpecialHidKey("F5", 1f, BluetoothHidManager.KEY_F5, KeyEvent.KEYCODE_F5))
+            row1.addView(createSpecialHidKey("F11", 1f, BluetoothHidManager.KEY_F11, KeyEvent.KEYCODE_F11))
+            row1.addView(createSpecialHidKey("F12", 1f, BluetoothHidManager.KEY_F12, KeyEvent.KEYCODE_F12))
+            row1.addView(createSpecialHidKey("Del", 1.1f, BluetoothHidManager.KEY_DELETE, KeyEvent.KEYCODE_FORWARD_DEL))
+            addView(row1)
+
+            // Row 2: Sticky Modifiers + Navigation [Ctrl] [Alt] [Win] [Home] [End] [PgUp] [PgDn] [↑]
+            val row2 = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+            }
+            val ctrl = createActionKeyButton("Ctrl", 1.15f) {
+                isCtrlSticky = !isCtrlSticky
+                refreshModifierUi()
+            }
+            ctrlKeyBtn = ctrl
+            row2.addView(ctrl)
+
+            val alt = createActionKeyButton("Alt", 1.0f) {
+                isAltSticky = !isAltSticky
+                refreshModifierUi()
+            }
+            altKeyBtn = alt
+            row2.addView(alt)
+
+            val win = createActionKeyButton("⊞", 1.0f) {
+                if (outputTarget == OutputTarget.BLUETOOTH && !isCtrlSticky && !isAltSticky && !isWinSticky) {
+                    isWinSticky = true
+                    refreshModifierUi()
+                } else {
+                    isWinSticky = !isWinSticky
+                    refreshModifierUi()
+                }
+            }
+            winKeyBtn = win
+            row2.addView(win)
+
+            row2.addView(createSpecialHidKey("Home", 1.15f, BluetoothHidManager.KEY_HOME, KeyEvent.KEYCODE_MOVE_HOME))
+            row2.addView(createSpecialHidKey("End", 1.0f, BluetoothHidManager.KEY_END, KeyEvent.KEYCODE_MOVE_END))
+            row2.addView(createSpecialHidKey("PgUp", 1.15f, BluetoothHidManager.KEY_PAGE_UP, KeyEvent.KEYCODE_PAGE_UP))
+            row2.addView(createSpecialHidKey("PgDn", 1.15f, BluetoothHidManager.KEY_PAGE_DOWN, KeyEvent.KEYCODE_PAGE_DOWN))
+            row2.addView(createSpecialHidKey("↑", 1.1f, BluetoothHidManager.KEY_UP, KeyEvent.KEYCODE_DPAD_UP))
+            addView(row2)
+
+            // Row 3: Quick PC Shortcuts + Arrows: [Ctrl+C] [Ctrl+V] [Ctrl+Z] [Alt+Tab] [←] [↓] [→] [⌫]
+            val row3 = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+            }
+            row3.addView(createShortcutKey("Kopyala", 1.25f, BluetoothHidManager.KEY_C, BluetoothHidManager.MODIFIER_LEFT_CTRL))
+            row3.addView(createShortcutKey("Yapıştır", 1.3f, BluetoothHidManager.KEY_V, BluetoothHidManager.MODIFIER_LEFT_CTRL))
+            row3.addView(createShortcutKey("Geri Al", 1.2f, BluetoothHidManager.KEY_Z, BluetoothHidManager.MODIFIER_LEFT_CTRL))
+            row3.addView(createShortcutKey("Alt+Tab", 1.25f, BluetoothHidManager.KEY_TAB, BluetoothHidManager.MODIFIER_LEFT_ALT))
+            row3.addView(createSpecialHidKey("←", 1.0f, BluetoothHidManager.KEY_LEFT, KeyEvent.KEYCODE_DPAD_LEFT))
+            row3.addView(createSpecialHidKey("↓", 1.0f, BluetoothHidManager.KEY_DOWN, KeyEvent.KEYCODE_DPAD_DOWN))
+            row3.addView(createSpecialHidKey("→", 1.0f, BluetoothHidManager.KEY_RIGHT, KeyEvent.KEYCODE_DPAD_RIGHT))
+            row3.addView(createBackspaceKeyButton(1.1f))
+            addView(row3)
+
+            // Row 4
+            addView(buildBottomClassicRow(ClassicPage.FUNCTION_NAV))
+        }
+    }
+
+    private fun buildBottomClassicRow(page: ClassicPage): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
@@ -701,23 +1278,124 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             )
 
             addView(
-                createActionKeyButton(if (isSymbolPage) "ABC" else "?123", 1.35f) {
-                    toggleSymbolPage()
+                createActionKeyButton(if (page == ClassicPage.SYMBOLS) "ABC" else "?123", 1.15f) {
+                    setClassicPage(if (page == ClassicPage.SYMBOLS) ClassicPage.LETTERS else ClassicPage.SYMBOLS)
                 }
             )
-            addView(createActionKeyButton("⇥", 1.0f) { sendTabKey() })
-            addView(createSymbolKeyButton(",", 0.85f))
             addView(
-                createKeyBaseView("Boşluk", 3.4f, "#1E293B", "#94A3B8", 12.5f) {
+                createActionKeyButton(if (page == ClassicPage.FUNCTION_NAV) "ABC" else "FN", 0.95f) {
+                    setClassicPage(if (page == ClassicPage.FUNCTION_NAV) ClassicPage.LETTERS else ClassicPage.FUNCTION_NAV)
+                }
+            )
+            addView(createActionKeyButton("⇥", 0.85f) { sendTabKey() })
+            addView(createSymbolKeyButton(",", 0.75f))
+            addView(
+                createKeyBaseView("Boşluk", 3.0f, "#1E293B", "#94A3B8", 12.5f) {
                     sendClassicCharacter(' ')
                 }
             )
-            addView(createSymbolKeyButton(".", 0.85f))
+            addView(createSymbolKeyButton(".", 0.75f))
             addView(
-                createKeyBaseView("↵", 1.55f, "#00F5D4", "#042F2E", 16f, isAccent = true) {
+                createKeyBaseView("↵", 1.35f, "#00F5D4", "#042F2E", 16f, isAccent = true) {
                     sendEnterOrAction()
                 }
             )
+        }
+    }
+
+    private fun setClassicPage(page: ClassicPage) {
+        classicPage = page
+        lettersGrid?.visibility = if (page == ClassicPage.LETTERS) View.VISIBLE else View.GONE
+        symbolsGrid?.visibility = if (page == ClassicPage.SYMBOLS) View.VISIBLE else View.GONE
+        functionNavGrid?.visibility = if (page == ClassicPage.FUNCTION_NAV) View.VISIBLE else View.GONE
+    }
+
+    private fun currentStickyModifiersByte(): Byte {
+        var mod = 0
+        if (isCtrlSticky) mod = mod or BluetoothHidManager.MODIFIER_LEFT_CTRL.toInt()
+        if (isAltSticky) mod = mod or BluetoothHidManager.MODIFIER_LEFT_ALT.toInt()
+        if (isWinSticky) mod = mod or BluetoothHidManager.MODIFIER_LEFT_GUI.toInt()
+        return mod.toByte()
+    }
+
+    private fun consumeStickyModifiersIfNeeded() {
+        if (isCtrlSticky || isAltSticky || isWinSticky) {
+            isCtrlSticky = false
+            isAltSticky = false
+            isWinSticky = false
+            refreshModifierUi()
+        }
+    }
+
+    private fun refreshModifierUi() {
+        val density = resources.displayMetrics.density
+        val radius = 7f * density
+
+        fun styleMod(btn: TextView?, active: Boolean) {
+            btn ?: return
+            btn.setTextColor(if (active) Color.parseColor("#042F2E") else Color.parseColor("#CBD5E1"))
+            btn.background = buildKeySelectorDrawable(
+                if (active) "#00F5D4" else "#131C2D",
+                "#334155",
+                radius
+            )
+        }
+
+        styleMod(ctrlKeyBtn, isCtrlSticky)
+        styleMod(altKeyBtn, isAltSticky)
+        styleMod(winKeyBtn, isWinSticky)
+    }
+
+    private fun createSpecialHidKey(
+        label: String,
+        weight: Float,
+        hidKeyCode: Byte,
+        androidKeyCode: Int
+    ): TextView {
+        return createKeyBaseView(label, weight, "#162033", "#E2E8F0", 11.5f) {
+            val extraMods = currentStickyModifiersByte()
+            if (outputTarget == OutputTarget.BLUETOOTH) {
+                if (!hidManager.isHidHostConnected()) {
+                    showStatusToast("PC Bluetooth bağlı değil")
+                    return@createKeyBaseView
+                }
+                val btCfg = profileRepository.activeProfile.value.bluetoothKeyboard
+                serviceScope.launch {
+                    hidManager.sendHidKeyCombo(hidKeyCode, extraMods, btCfg.typingDelayMs)
+                }
+                consumeStickyModifiersIfNeeded()
+            } else {
+                sendDownUpKeyEvents(androidKeyCode)
+                consumeStickyModifiersIfNeeded()
+            }
+        }
+    }
+
+    private fun createShortcutKey(
+        label: String,
+        weight: Float,
+        hidKeyCode: Byte,
+        modifiers: Byte
+    ): TextView {
+        return createKeyBaseView(label, weight, "#132A2E", "#00F5D4", 10.5f) {
+            if (outputTarget == OutputTarget.BLUETOOTH) {
+                if (!hidManager.isHidHostConnected()) {
+                    showStatusToast("PC Bluetooth bağlı değil")
+                    return@createKeyBaseView
+                }
+                val btCfg = profileRepository.activeProfile.value.bluetoothKeyboard
+                serviceScope.launch {
+                    hidManager.sendHidKeyCombo(hidKeyCode, modifiers, btCfg.typingDelayMs)
+                }
+            } else {
+                val ic = currentInputConnection ?: return@createKeyBaseView
+                when (hidKeyCode) {
+                    BluetoothHidManager.KEY_C -> ic.performContextMenuAction(android.R.id.copy)
+                    BluetoothHidManager.KEY_V -> ic.performContextMenuAction(android.R.id.paste)
+                    BluetoothHidManager.KEY_Z -> ic.performContextMenuAction(android.R.id.undo)
+                    else -> showStatusToast("Bu kısayol BT (PC) modunda çalışır")
+                }
+            }
         }
     }
 
@@ -746,7 +1424,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
     }
 
     private fun createActionKeyButton(label: String, weight: Float, onClick: () -> Unit): TextView {
-        return createKeyBaseView(label, weight, "#131C2D", "#CBD5E1", 13.5f, onClick = onClick)
+        return createKeyBaseView(label, weight, "#131C2D", "#CBD5E1", 12.5f, onClick = onClick)
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -881,12 +1559,6 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         }
     }
 
-    private fun toggleSymbolPage() {
-        isSymbolsPage = !isSymbolsPage
-        lettersGrid?.visibility = if (isSymbolsPage) View.GONE else View.VISIBLE
-        symbolsGrid?.visibility = if (isSymbolsPage) View.VISIBLE else View.GONE
-    }
-
     private fun buildSegmentTab(
         iconRes: Int,
         title: String,
@@ -897,18 +1569,18 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
         val iconView = ImageView(this).apply {
             setImageResource(iconRes)
-            layoutParams = LinearLayout.LayoutParams(dp(15), dp(15)).apply { marginEnd = dp(4) }
+            layoutParams = LinearLayout.LayoutParams(dp(13), dp(13)).apply { marginEnd = dp(3) }
         }
         val labelView = TextView(this).apply {
             text = title
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
             setTypeface(null, Typeface.BOLD)
             maxLines = 1
         }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(dp(10), dp(4), dp(10), dp(4))
+            setPadding(dp(7), dp(4), dp(7), dp(4))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -926,11 +1598,11 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
         return TextView(this).apply {
             text = title
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
             setTypeface(null, Typeface.BOLD)
             gravity = Gravity.CENTER
             maxLines = 1
-            setPadding(dp(10), dp(4), dp(10), dp(4))
+            setPadding(dp(8), dp(4), dp(8), dp(4))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -985,6 +1657,14 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
     private fun setScanMode(mode: ScanInputMode) {
         if (scanMode == mode) return
         scanMode = mode
+        if (mode == ScanInputMode.MOUSE && outputTarget != OutputTarget.BLUETOOTH) {
+            outputTarget = OutputTarget.BLUETOOTH
+            hidManager.refreshState()
+            refreshTargetStyles()
+            if (!hidManager.isHidHostConnected()) {
+                showStatusToast("Mouse için PC Bluetooth bağlayın")
+            }
+        }
         refreshModePanelsAndTabs()
         if (mode == ScanInputMode.BARCODE) {
             previewView?.post { startCameraIfPermitted() } ?: startCameraIfPermitted()
@@ -992,6 +1672,15 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             duplicateBanner?.visibility = View.GONE
             stopCamera()
         }
+        if (mode != ScanInputMode.MOUSE) {
+            isAirMouseHoldAiming = false
+            airMouseController.stop()
+            if (isDragLocked) {
+                isDragLocked = false
+                hidManager.releaseAllMouseButtons()
+            }
+        }
+        syncAirMouseState()
     }
 
     private fun setOutputTarget(target: OutputTarget) {
@@ -1021,28 +1710,31 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
     private fun refreshModePanelsAndTabs() {
         val density = resources.displayMetrics.density
-        val radius = 18f * density
+        val radius = 16f * density
         val isBarcode = scanMode == ScanInputMode.BARCODE
+        val isClassic = scanMode == ScanInputMode.CLASSIC_KEYBOARD
+        val isMouse = scanMode == ScanInputMode.MOUSE
 
         barcodePanel?.visibility = if (isBarcode) View.VISIBLE else View.GONE
-        classicKeyboardPanel?.visibility = if (isBarcode) View.GONE else View.VISIBLE
+        classicKeyboardPanel?.visibility = if (isClassic) View.VISIBLE else View.GONE
+        mousePanel?.visibility = if (isMouse) View.VISIBLE else View.GONE
 
-        barcodeTabContainer?.background = if (isBarcode) {
-            GradientDrawable().apply { setColor(Color.WHITE); cornerRadius = radius }
-        } else null
-        barcodeTabIcon?.setColorFilter(if (isBarcode) Color.parseColor("#0B111E") else Color.WHITE)
-        barcodeTabLabel?.setTextColor(if (isBarcode) Color.parseColor("#0B111E") else Color.WHITE)
+        fun styleTab(container: LinearLayout?, icon: ImageView?, label: TextView?, active: Boolean) {
+            container?.background = if (active) {
+                GradientDrawable().apply { setColor(Color.WHITE); cornerRadius = radius }
+            } else null
+            icon?.setColorFilter(if (active) Color.parseColor("#0B111E") else Color.WHITE)
+            label?.setTextColor(if (active) Color.parseColor("#0B111E") else Color.WHITE)
+        }
 
-        classicTabContainer?.background = if (!isBarcode) {
-            GradientDrawable().apply { setColor(Color.WHITE); cornerRadius = radius }
-        } else null
-        classicTabIcon?.setColorFilter(if (!isBarcode) Color.parseColor("#0B111E") else Color.WHITE)
-        classicTabLabel?.setTextColor(if (!isBarcode) Color.parseColor("#0B111E") else Color.WHITE)
+        styleTab(barcodeTabContainer, barcodeTabIcon, barcodeTabLabel, isBarcode)
+        styleTab(classicTabContainer, classicTabIcon, classicTabLabel, isClassic)
+        styleTab(mouseTabContainer, mouseTabIcon, mouseTabLabel, isMouse)
     }
 
     private fun refreshTargetStyles() {
         val density = resources.displayMetrics.density
-        val radius = 18f * density
+        val radius = 16f * density
         val isLocal = outputTarget == OutputTarget.LOCAL
         val isBtConnected = hidManager.connectionStatus.value == HidConnectionStatus.CONNECTED
 
@@ -1108,6 +1800,8 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         super.onStartInputView(info, restarting)
         hidManager.refreshState()
         refreshTargetStyles()
+        updateTouchpadStatusHint()
+        rootLayout?.let { ViewCompat.requestApplyInsets(it) }
         serviceScope.launch {
             profileRepository.reloadFromDisk()
             updateModeChipLabel(profileRepository.activeProfile.value)
@@ -1129,16 +1823,31 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         if (lifecycleRegistry.currentState == Lifecycle.State.STARTED) {
             lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         }
+        @Suppress("DEPRECATION")
+        window?.window?.let { win ->
+            win.navigationBarColor = Color.parseColor("#0B111E")
+        }
+        rootLayout?.let { ViewCompat.requestApplyInsets(it) }
         hidManager.refreshState()
         refreshTargetStyles()
+        updateTouchpadStatusHint()
         if (scanMode == ScanInputMode.BARCODE) {
             previewView?.post { startCameraIfPermitted() } ?: startCameraIfPermitted()
+        } else if (scanMode == ScanInputMode.MOUSE) {
+            syncAirMouseState()
         }
     }
 
     override fun onWindowHidden() {
         super.onWindowHidden()
         stopBackspaceRepeat()
+        isAirMouseHoldAiming = false
+        airMouseController.stop()
+        if (isDragLocked) {
+            isDragLocked = false
+            hidManager.releaseAllMouseButtons()
+            updateAirMouseButtonsUi()
+        }
         stopCamera()
         if (lifecycleRegistry.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
@@ -1150,6 +1859,8 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
     override fun onDestroy() {
         stopBackspaceRepeat()
+        airMouseController.stop()
+        hidManager.releaseAllMouseButtons()
         stopCamera()
         serviceScope.cancel()
         cameraExecutor.shutdown()
@@ -1370,17 +2081,21 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 showStatusToast("PC Bluetooth bağlı değil")
                 return
             }
+            val extraMods = currentStickyModifiersByte()
             val btCfg = profileRepository.activeProfile.value.bluetoothKeyboard
             serviceScope.launch {
                 hidManager.sendSingleCharacter(
                     ch = ch,
                     layout = btCfg.keyboardLayout,
-                    typingDelayMs = btCfg.typingDelayMs
+                    typingDelayMs = btCfg.typingDelayMs,
+                    extraModifiers = extraMods
                 )
             }
+            consumeStickyModifiersIfNeeded()
             return
         }
         currentInputConnection?.commitText(ch.toString(), 1)
+        consumeStickyModifiersIfNeeded()
     }
 
     private fun sendTabKey() {
@@ -1389,13 +2104,16 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 showStatusToast("PC Bluetooth bağlı değil")
                 return
             }
+            val extraMods = currentStickyModifiersByte()
             val btCfg = profileRepository.activeProfile.value.bluetoothKeyboard
             serviceScope.launch {
                 hidManager.sendSingleHidKey(
                     keyCode = BluetoothHidManager.KEY_TAB,
+                    modifier = extraMods,
                     typingDelayMs = btCfg.typingDelayMs
                 )
             }
+            consumeStickyModifiersIfNeeded()
             return
         }
         sendDownUpKeyEvents(KeyEvent.KEYCODE_TAB)
@@ -1430,13 +2148,16 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 showStatusToast("PC Bluetooth bağlı değil")
                 return
             }
+            val extraMods = currentStickyModifiersByte()
             val btCfg = profileRepository.activeProfile.value.bluetoothKeyboard
             serviceScope.launch {
                 hidManager.sendSingleHidKey(
                     keyCode = BluetoothHidManager.KEY_ENTER,
+                    modifier = extraMods,
                     typingDelayMs = btCfg.typingDelayMs
                 )
             }
+            consumeStickyModifiersIfNeeded()
             return
         }
         val ic = currentInputConnection ?: return
@@ -1449,12 +2170,24 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         }
     }
 
-    private class FixedHeightFrameLayout(
+    private class InsetAwareKeyboardRootLayout(
         context: Context,
-        private val fixedHeightPx: Int
+        private val contentHeightPx: Int
     ) : FrameLayout(context) {
+        private var bottomInsetPx: Int = 0
+
+        fun updateBottomInset(newBottomPx: Int) {
+            val clamped = newBottomPx.coerceAtLeast(0)
+            if (clamped != bottomInsetPx) {
+                bottomInsetPx = clamped
+                setPadding(0, 0, 0, clamped)
+                requestLayout()
+            }
+        }
+
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            val exactHeightSpec = MeasureSpec.makeMeasureSpec(fixedHeightPx, MeasureSpec.EXACTLY)
+            val totalHeight = contentHeightPx + bottomInsetPx
+            val exactHeightSpec = MeasureSpec.makeMeasureSpec(totalHeight, MeasureSpec.EXACTLY)
             super.onMeasure(widthMeasureSpec, exactHeightSpec)
         }
     }

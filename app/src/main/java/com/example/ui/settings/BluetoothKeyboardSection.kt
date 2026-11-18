@@ -51,6 +51,7 @@ fun BluetoothKeyboardSection(
     availableVariables: List<VariableDefinition>,
     hidManager: BluetoothHidManager? = null,
     onRequestBluetoothPermission: (() -> Unit)? = null,
+    onOpenRemoteControl: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -211,6 +212,12 @@ fun BluetoothKeyboardSection(
                                 Text("BT Ayarları", fontSize = 11.sp, maxLines = 1)
                             }
                         }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "İpucu: İlk kez bağlıyorsanız veya bağlantı kopuyorsa PC Bluetooth ayarlarından cihazı 'Kaldır' deyip telefonla yeniden eşleştirin.",
+                            fontSize = 10.5.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
 
                     // Paired Device List
@@ -250,6 +257,32 @@ fun BluetoothKeyboardSection(
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // 1a. Full PC Mouse, Air Mouse & Full Keyboard Launcher
+        if (onOpenRemoteControl != null) {
+            item {
+                Button(
+                    onClick = onOpenRemoteControl,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = NeonCyan,
+                        contentColor = Color(0xFF00382E)
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .testTag("settings_open_remote_btn")
+                ) {
+                    Icon(Icons.Default.Mouse, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Tam Klavye, Mouse & Air Mouse Kumandası Aç",
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 13.sp
+                    )
                 }
             }
         }
@@ -729,9 +762,9 @@ fun BluetoothKeyboardSection(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             listOf(
-                                12L to "Hızlı (12ms)",
-                                16L to "Dengeli (16ms)",
-                                24L to "Güvenli Eski PC (24ms)"
+                                24L to "Hızlı (24ms)",
+                                26L to "Dengeli (26ms)",
+                                40L to "Güvenli Eski PC (40ms)"
                             ).forEach { (ms, label) ->
                                 FilterChip(
                                     selected = config.typingDelayMs == ms,
