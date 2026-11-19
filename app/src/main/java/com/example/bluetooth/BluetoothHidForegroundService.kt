@@ -16,6 +16,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.debug.AppDebugLogger
 
 /**
  * Keeps the Android BluetoothHidDevice profile proxy registered and L2CAP link prioritized
@@ -46,6 +47,8 @@ class BluetoothHidForegroundService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
             true
+        }.onFailure { err ->
+            AppDebugLogger.e("BT-SVC", "HID Foreground Service startForeground hatası ($hostName)", err)
         }.getOrDefault(false)
 
         if (!started) {
@@ -64,6 +67,8 @@ class BluetoothHidForegroundService : Service() {
                 @Suppress("DEPRECATION")
                 stopForeground(true)
             }
+        }.onFailure { err ->
+            AppDebugLogger.w("BT-SVC", "stopForeground hatası", err)
         }
     }
 
@@ -118,6 +123,8 @@ class BluetoothHidForegroundService : Service() {
             }
             runCatching {
                 ContextCompat.startForegroundService(context.applicationContext, intent)
+            }.onFailure { err ->
+                AppDebugLogger.e("BT-SVC", "startForegroundService başlatılamadı ($hostName)", err)
             }
         }
 
@@ -126,6 +133,8 @@ class BluetoothHidForegroundService : Service() {
                 context.applicationContext.stopService(
                     Intent(context, BluetoothHidForegroundService::class.java)
                 )
+            }.onFailure { err ->
+                AppDebugLogger.w("BT-SVC", "stopService hatası", err)
             }
         }
     }

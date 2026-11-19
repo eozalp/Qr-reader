@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.example.bluetooth.BluetoothHidManager
 import com.example.data.ProfileRepository
+import com.example.debug.AppDebugLogger
 import com.example.ui.CameraScreen
 import com.example.ui.RemoteControlScreen
 import com.example.ui.components.BluetoothKeyboardSheet
@@ -33,15 +34,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppDebugLogger.installGlobalExceptionHandler(applicationContext)
         enableEdgeToEdge()
 
         // Set default language to Turkish (tr-TR)
-        val turkishLocale = java.util.Locale("tr", "TR")
-        java.util.Locale.setDefault(turkishLocale)
-        val config = resources.configuration
-        config.setLocale(turkishLocale)
-        @Suppress("DEPRECATION")
-        resources.updateConfiguration(config, resources.displayMetrics)
+        runCatching {
+            val turkishLocale = java.util.Locale("tr", "TR")
+            java.util.Locale.setDefault(turkishLocale)
+            val config = resources.configuration
+            config.setLocale(turkishLocale)
+            @Suppress("DEPRECATION")
+            resources.updateConfiguration(config, resources.displayMetrics)
+        }.onFailure { err ->
+            AppDebugLogger.w("APP", "Türkçe yerel ayar uygulanamadı", err)
+        }
 
         profileRepository = ProfileRepository(applicationContext)
         attachmentRepository = com.example.data.AttachmentRepository(applicationContext)
@@ -57,7 +63,8 @@ class MainActivity : ComponentActivity() {
 
                 val btPermLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestMultiplePermissions()
-                ) {
+                ) { grants ->
+                    AppDebugLogger.i("BT-PERM", "Bluetooth izin sonucu: $grants")
                     hidManager.refreshState()
                 }
 

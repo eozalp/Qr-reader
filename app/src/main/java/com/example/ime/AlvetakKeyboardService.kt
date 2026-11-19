@@ -47,6 +47,7 @@ import com.example.bluetooth.HidConnectionStatus
 import com.example.camera.QrCodeAnalyzer
 import com.example.camera.RawDetectedCode
 import com.example.data.ProfileRepository
+import com.example.debug.AppDebugLogger
 import com.example.engine.QrParser
 import com.example.model.KeyboardEndingKey
 import com.example.model.KeyboardSendTarget
@@ -193,6 +194,8 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
     override fun onCreate() {
         super.onCreate()
+        AppDebugLogger.installGlobalExceptionHandler(applicationContext)
+        AppDebugLogger.i("IME", "AlvetakKeyboardService onCreate")
         lifecycleRegistry = LifecycleRegistry(this)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         profileRepository = ProfileRepository(applicationContext)
@@ -204,15 +207,16 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         }
         cameraExecutor = Executors.newSingleThreadExecutor()
 
-        serviceScope.launch {
+        serviceScope.launch(AppDebugLogger.coroutineHandler("IME")) {
             hidManager.connectionStatus.collectLatest {
                 refreshTargetStyles()
                 updateTouchpadStatusHint()
             }
         }
-        serviceScope.launch {
+        serviceScope.launch(AppDebugLogger.coroutineHandler("IME-BT")) {
             for (task in btHidQueue) {
                 runCatching { task() }
+                    .onFailure { AppDebugLogger.e("IME-BT", "IME HID görev hatası", it) }
             }
         }
     }
@@ -2029,6 +2033,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                     boundCamera?.cameraControl?.enableTorch(true)
                 }
             } catch (e: Exception) {
+                AppDebugLogger.e("IME-CAM", "IME kamera başlatılamadı", e)
                 showStatusToast("Kamera açılamadı: ${e.message}")
             }
         }, ContextCompat.getMainExecutor(this))
@@ -2042,7 +2047,9 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             boundCamera = null
             barcodeAnalyzer?.close()
             barcodeAnalyzer = null
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            AppDebugLogger.w("IME-CAM", "IME kamera durdurma hatası", e)
+        }
     }
 
     private fun handleDetectedCodes(detected: List<RawDetectedCode>) {

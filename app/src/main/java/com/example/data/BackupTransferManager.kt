@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Base64
 import androidx.core.content.FileProvider
+import com.example.debug.AppDebugLogger
 import com.example.model.QrAttachment
 import com.example.model.QrProfile
 import org.json.JSONArray
@@ -92,6 +93,8 @@ object BackupTransferManager {
                         val key = "img_${UUID.randomUUID().toString().take(8)}_${file.name}"
                         val b64 = runCatching {
                             Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
+                        }.onFailure { err ->
+                            AppDebugLogger.w("DATA-BACKUP", "Görsel Base64 kodlanamadı: ${file.name}", err)
                         }.getOrNull()
 
                         if (b64 != null) {
@@ -111,6 +114,8 @@ object BackupTransferManager {
                         val key = "vid_${UUID.randomUUID().toString().take(8)}_${file.name}"
                         val b64 = runCatching {
                             Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
+                        }.onFailure { err ->
+                            AppDebugLogger.w("DATA-BACKUP", "Video Base64 kodlanamadı: ${file.name}", err)
                         }.getOrNull()
 
                         if (b64 != null) {
@@ -339,6 +344,8 @@ object BackupTransferManager {
                 val text = buffered.bufferedReader(Charsets.UTF_8).use { it.readText() }
                 parseImportPreview(text)
             }
+        }.onFailure { err ->
+            AppDebugLogger.e("DATA-BACKUP", "İçe aktarma dosyası okunamadı", err)
         }.getOrElse {
             ImportPreviewData()
         }
@@ -406,6 +413,8 @@ object BackupTransferManager {
                     }
                 }
             }
+        }.onFailure { err ->
+            AppDebugLogger.e("DATA-BACKUP", "Yedek JSON ayrıştırılamadı", err)
         }
 
         return ImportPreviewData(
@@ -479,7 +488,8 @@ object BackupTransferManager {
                                 stagedFile.copyTo(dest, overwrite = true)
                                 resolvedImages.add(dest.absolutePath)
                                 mediaRestored++
-                            }.onFailure {
+                            }.onFailure { err ->
+                                AppDebugLogger.w("DATA-BACKUP", "ZIP görsel geri yüklenemedi: $imgKey", err)
                                 resolvedImages.add(imgKey)
                             }
                         } else {
@@ -491,7 +501,8 @@ object BackupTransferManager {
                                     file.writeBytes(Base64.decode(b64, Base64.DEFAULT))
                                     resolvedImages.add(file.absolutePath)
                                     mediaRestored++
-                                }.onFailure {
+                                }.onFailure { err ->
+                                    AppDebugLogger.w("DATA-BACKUP", "Base64 görsel yazılamadı: $imgKey", err)
                                     resolvedImages.add(imgKey)
                                 }
                             } else if (File(imgKey).exists()) {
@@ -509,7 +520,8 @@ object BackupTransferManager {
                                 stagedFile.copyTo(dest, overwrite = true)
                                 resolvedVideos.add(dest.absolutePath)
                                 mediaRestored++
-                            }.onFailure {
+                            }.onFailure { err ->
+                                AppDebugLogger.w("DATA-BACKUP", "ZIP video geri yüklenemedi: $vidKey", err)
                                 resolvedVideos.add(vidKey)
                             }
                         } else {
@@ -521,7 +533,8 @@ object BackupTransferManager {
                                     file.writeBytes(Base64.decode(b64, Base64.DEFAULT))
                                     resolvedVideos.add(file.absolutePath)
                                     mediaRestored++
-                                }.onFailure {
+                                }.onFailure { err ->
+                                    AppDebugLogger.w("DATA-BACKUP", "Base64 video yazılamadı: $vidKey", err)
                                     resolvedVideos.add(vidKey)
                                 }
                             } else if (File(vidKey).exists()) {

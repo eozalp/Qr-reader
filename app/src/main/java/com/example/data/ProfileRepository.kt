@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.debug.AppDebugLogger
 import com.example.model.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,7 +21,7 @@ private val Context.dataStore by preferencesDataStore(name = "qr_calculator_pref
 
 class ProfileRepository(private val context: Context) {
 
-    private val scope = CoroutineScope(Dispatchers.IO)
+    private val scope = CoroutineScope(Dispatchers.IO + AppDebugLogger.coroutineHandler("DATA-PROFILE"))
 
     private val KEY_PROFILES = stringPreferencesKey("saved_profiles_json")
     private val KEY_ACTIVE_ID = stringPreferencesKey("active_profile_id")
@@ -38,29 +39,42 @@ class ProfileRepository(private val context: Context) {
     }
 
     suspend fun reloadFromDisk() {
-        val prefs = context.dataStore.data.first()
-        val jsonStr = prefs[KEY_PROFILES]
-        val activeId = prefs[KEY_ACTIVE_ID]
+        runCatching {
+            val prefs = context.dataStore.data.first()
+            val jsonStr = prefs[KEY_PROFILES]
+            val activeId = prefs[KEY_ACTIVE_ID]
 
-        val loaded = if (!jsonStr.isNullOrBlank()) {
-            parseProfilesJson(jsonStr)
-        } else {
-            createDefaultPresets()
+            val loaded = if (!jsonStr.isNullOrBlank()) {
+                parseProfilesJson(jsonStr)
+            } else {
+                createDefaultPresets()
+            }
+
+            val listToUse = if (loaded.isNotEmpty()) loaded else createDefaultPresets()
+            _profiles.value = listToUse
+
+            val active = listToUse.find { it.id == activeId } ?: listToUse.first()
+            _activeProfile.value = active
+        }.onFailure { err ->
+            AppDebugLogger.e("DATA-PROFILE", "Profiller diskten yüklenemedi", err)
+            if (_profiles.value.isEmpty()) {
+                val defaults = createDefaultPresets()
+                _profiles.value = defaults
+                _activeProfile.value = defaults.first()
+            }
         }
-
-        val listToUse = if (loaded.isNotEmpty()) loaded else createDefaultPresets()
-        _profiles.value = listToUse
-
-        val active = listToUse.find { it.id == activeId } ?: listToUse.first()
-        _activeProfile.value = active
     }
 
     fun selectProfile(id: String) {
         val target = _profiles.value.find { it.id == id } ?: return
         _activeProfile.value = target
         scope.launch {
-            context.dataStore.edit { prefs ->
-                prefs[KEY_ACTIVE_ID] = id
+            runCatching {
+                context.dataStore.edit { prefs ->
+                    prefs[KEY_ACTIVE_ID] = id
+                }
+            }.onFailure { err ->
+                AppDebugLogger.e("DATA-PROFILE", "Aktif profil ID kaydedilemedi", err)
             }
         }
     }
@@ -199,13 +213,17 @@ class ProfileRepository(private val context: Context) {
 
     private fun persistProfiles(list: List<QrProfile>, newActiveId: String? = null) {
         scope.launch {
-            context.dataStore.edit { prefs ->
-                val array = JSONArray()
-                list.forEach { array.put(it.toJson()) }
-                prefs[KEY_PROFILES] = array.toString()
-                if (newActiveId != null) {
-                    prefs[KEY_ACTIVE_ID] = newActiveId
+            runCatching {
+                context.dataStore.edit { prefs ->
+                    val array = JSONArray()
+                    list.forEach { array.put(it.toJson()) }
+                    prefs[KEY_PROFILES] = array.toString()
+                    if (newActiveId != null) {
+                        prefs[KEY_ACTIVE_ID] = newActiveId
+                    }
                 }
+            }.onFailure { err ->
+                AppDebugLogger.e("DATA-PROFILE", "Profiller diske kaydedilemedi", err)
             }
         }
     }
@@ -226,7 +244,9 @@ class ProfileRepository(private val context: Context) {
                 val obj = JSONObject(trimmed)
                 result.add(QrProfile.fromJson(obj))
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            AppDebugLogger.e("DATA-PROFILE", "Profil JSON ayrıştırma hatası", e)
+        }
         return result
     }
 

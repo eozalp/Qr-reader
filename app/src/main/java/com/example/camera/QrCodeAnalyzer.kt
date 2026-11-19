@@ -6,6 +6,7 @@ import androidx.annotation.OptIn
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import com.example.debug.AppDebugLogger
 import com.example.model.BarcodeCatalog
 import com.example.model.BarcodeScanPreset
 import com.google.mlkit.vision.barcode.BarcodeScanner
@@ -51,6 +52,7 @@ class QrCodeAnalyzer(
 
     fun close() {
         runCatching { currentScanner.close() }
+            .onFailure { AppDebugLogger.w("CAM-QR", "Scanner kapatma uyarısı", it) }
     }
 
     fun updateBarcodeFormats(
@@ -65,6 +67,7 @@ class QrCodeAnalyzer(
             val oldScanner = currentScanner
             currentScanner = createScanner(effective)
             runCatching { oldScanner.close() }
+                .onFailure { AppDebugLogger.w("CAM-QR", "Eski scanner kapatma uyarısı", it) }
         }
     }
 
@@ -147,8 +150,8 @@ class QrCodeAnalyzer(
                     onBarcodesDetected(emptyList())
                 }
             }
-            .addOnFailureListener {
-                // Ignore transient frame detection errors
+            .addOnFailureListener { err ->
+                AppDebugLogger.w("CAM-QR", "ML Kit barkod tarama hatası", err)
             }
             .addOnCompleteListener {
                 if (!handedOffToInverted) {
@@ -230,12 +233,16 @@ class QrCodeAnalyzer(
                     }
                     onBarcodesDetected(detectedList)
                 }
+                .addOnFailureListener { err ->
+                    AppDebugLogger.w("CAM-QR", "Ters renk ML Kit hatası", err)
+                }
                 .addOnCompleteListener {
                     isProcessingInverted.set(false)
                     imageProxy.close()
                 }
             return true
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppDebugLogger.w("CAM-QR", "Ters renk kare işleme hatası", e)
             isProcessingInverted.set(false)
             imageProxy.close()
             return true

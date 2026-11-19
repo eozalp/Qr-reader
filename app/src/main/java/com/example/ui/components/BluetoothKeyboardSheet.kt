@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -31,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.bluetooth.BluetoothHidManager
 import com.example.bluetooth.HidConnectionStatus
+import com.example.debug.AppDebugLogger
 import com.example.model.BluetoothKeyboardConfig
 import com.example.model.KeyboardEndingKey
 import com.example.model.KeyboardLayoutType
@@ -154,9 +156,17 @@ fun BluetoothKeyboardSheet(
                         onRequestPermission = onRequestPermission,
                         onMakeDiscoverable = {
                             runCatching { context.startActivity(hidManager.makeDiscoverableIntent()) }
+                                .onFailure { err ->
+                                    AppDebugLogger.e("BT-UI", "BT görünür yapma ekranı açılamadı", err)
+                                    Toast.makeText(context, "BT ekranı açılamadı: ${err.message}", Toast.LENGTH_SHORT).show()
+                                }
                         },
                         onOpenBtSettings = {
                             runCatching { context.startActivity(hidManager.openBluetoothSettingsIntent()) }
+                                .onFailure { err ->
+                                    AppDebugLogger.e("BT-UI", "BT ayarları açılamadı", err)
+                                    Toast.makeText(context, "BT ayarları açılamadı: ${err.message}", Toast.LENGTH_SHORT).show()
+                                }
                         },
                         onRefresh = { hidManager.refreshState() }
                     )
@@ -245,6 +255,9 @@ fun BluetoothKeyboardSheet(
                                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                                 }
                                             )
+                                        }.onFailure { err ->
+                                            AppDebugLogger.e("IME-UI", "Klavye ayarları açılamadı", err)
+                                            Toast.makeText(context, "Klavye ayarları açılamadı: ${err.message}", Toast.LENGTH_SHORT).show()
                                         }
                                     },
                                     modifier = Modifier.weight(1f).height(44.dp),
@@ -255,8 +268,12 @@ fun BluetoothKeyboardSheet(
                                 }
                                 Button(
                                     onClick = {
-                                        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-                                        imm?.showInputMethodPicker()
+                                        runCatching {
+                                            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                                            imm?.showInputMethodPicker()
+                                        }.onFailure { err ->
+                                            AppDebugLogger.e("IME-UI", "Klavye seçici açılamadı", err)
+                                        }
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = ElectricIndigo, contentColor = Color.White),
                                     modifier = Modifier.weight(1f).height(44.dp),

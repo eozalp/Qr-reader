@@ -5,6 +5,7 @@ import android.graphics.Color as AndroidColor
 import android.graphics.RectF
 import android.net.Uri
 import android.widget.Toast
+import com.example.debug.AppDebugLogger
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -1901,7 +1902,8 @@ fun parseHexColor(hex: String): Color {
             else -> AndroidColor.CYAN
         }
         Color(colorInt)
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        AppDebugLogger.w("UI-CLR", "Geçersiz renk kodu: '$hex'", e)
         Color(0xFF00F5D4)
     }
 }

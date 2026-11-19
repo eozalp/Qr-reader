@@ -48,6 +48,7 @@ import com.example.camera.QrTracker
 import com.example.camera.RawDetectedCode
 import com.example.data.AttachmentRepository
 import com.example.data.ProfileRepository
+import com.example.debug.AppDebugLogger
 import com.example.model.QrAttachment
 import com.example.model.QrProfile
 import com.example.model.TrackedQr
@@ -264,6 +265,7 @@ fun CameraScreen(
     LaunchedEffect(Unit) {
         for (task in autoSendQueue) {
             runCatching { task() }
+                .onFailure { AppDebugLogger.e("CAM-BT", "Otomatik BT gönderim görevi hatası", it) }
         }
     }
 
@@ -275,7 +277,9 @@ fun CameraScreen(
                 if (providerFuture.isDone) {
                     providerFuture.get().unbindAll()
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                AppDebugLogger.w("CAM-X", "Kamera dispose unbindAll hatası", e)
+            }
             analyzer.close()
             cameraExecutor.shutdown()
         }
@@ -462,7 +466,9 @@ fun CameraScreen(
                 if (providerFuture.isDone) {
                     providerFuture.get().unbindAll()
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                AppDebugLogger.w("CAM-X", "İzin/simülatör modunda unbindAll hatası", e)
+            }
             if (!isAttemptingPhysicalCamera && cameraInitError == null) {
                 cameraInitError = "Sanal AR Simülatörü Aktif (Emülatör)"
             }
@@ -495,6 +501,7 @@ fun CameraScreen(
                 if (targetSelector == null) {
                     isAttemptingPhysicalCamera = false
                     cameraInitError = "Sanal emülatör ortamı algılandı. Kamera sensörü simüle ediliyor."
+                    AppDebugLogger.w("CAM-X", "Fiziksel kamera lensi bulunamadı")
                     return@addListener
                 }
 
@@ -519,18 +526,23 @@ fun CameraScreen(
                 cameraControl = cam.cameraControl
                 cameraInfo = cam.cameraInfo
                 cameraInitError = null
+                AppDebugLogger.i("CAM-X", "Kamera başarıyla bağlandı (front=$isFrontCamera)")
 
                 // Monitor camera state; if an error occurs, unbind cleanly to stop reopen loops immediately
                 cam.cameraInfo.cameraState.observe(lifecycleOwner) { state ->
                     if (state.error != null) {
+                        AppDebugLogger.e("CAM-X", "CameraState hatası (code=${state.error?.code}, cause=${state.error?.cause?.message})", state.error?.cause)
                         try {
                             cameraProvider.unbindAll()
-                        } catch (_: Exception) {}
+                        } catch (unbindErr: Exception) {
+                            AppDebugLogger.w("CAM-X", "Hata sonrası unbindAll uyarısı", unbindErr)
+                        }
                         isAttemptingPhysicalCamera = false
                         cameraInitError = "Emülatörde kamera kullanılamıyor (${state.error?.code}). Sanal AR Simülatörü aktif."
                     }
                 }
             } catch (e: Exception) {
+                AppDebugLogger.e("CAM-X", "Kamera bağlama istisnası", e)
                 isAttemptingPhysicalCamera = false
                 cameraInitError = "Sanal kamera modu: ${e.message ?: "Sanal cihaz"}"
             }

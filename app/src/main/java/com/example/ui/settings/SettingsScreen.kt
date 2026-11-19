@@ -31,7 +31,8 @@ enum class SettingsTab(val title: String, val icon: ImageVector) {
     KEYBOARD("Klavye & PC", Icons.Default.Keyboard),
     OVERLAY("Stil & Görünüm", Icons.Default.Layers),
     TRACKING("Kamera & Barkod", Icons.Default.Tune),
-    PROFILES("Profiller", Icons.Default.FolderSpecial)
+    PROFILES("Profiller", Icons.Default.FolderSpecial),
+    DEBUG("Debug Konsolu", Icons.Default.BugReport)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -220,6 +221,9 @@ fun SettingsScreen(
                         profileRepository = profileRepository,
                         attachmentRepository = attachmentRepository
                     )
+                }
+                SettingsTab.DEBUG -> {
+                    DebugConsoleSection()
                 }
             }
         }

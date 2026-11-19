@@ -5,6 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import com.example.debug.AppDebugLogger
 import kotlin.math.abs
 import kotlin.math.sign
 import kotlin.math.sqrt
@@ -62,11 +63,17 @@ class AirMouseController(
         isRunning = true
 
         val samplingUs = 10_000
-        gravitySensor?.let { sm.registerListener(this, it, samplingUs) }
-        accelSensor?.let { sm.registerListener(this, it, samplingUs) }
-        val registered = sm.registerListener(this, gyro, samplingUs)
-        if (!registered) {
-            sm.registerListener(this, gyro, SensorManager.SENSOR_DELAY_GAME)
+        runCatching {
+            gravitySensor?.let { sm.registerListener(this, it, samplingUs) }
+            accelSensor?.let { sm.registerListener(this, it, samplingUs) }
+            val registered = sm.registerListener(this, gyro, samplingUs)
+            if (!registered) {
+                sm.registerListener(this, gyro, SensorManager.SENSOR_DELAY_GAME)
+            }
+            AppDebugLogger.d("BT-MOUSE", "Air Mouse sensörleri başlatıldı (gyro=${gyro.name}, gravity=${gravitySensor != null})")
+        }.onFailure { err ->
+            isRunning = false
+            AppDebugLogger.e("BT-MOUSE", "Air Mouse sensör başlatma hatası", err)
         }
     }
 
@@ -77,6 +84,7 @@ class AirMouseController(
         accumX = 0f
         accumY = 0f
         runCatching { sensorManager?.unregisterListener(this) }
+            .onFailure { err -> AppDebugLogger.w("BT-MOUSE", "Air Mouse sensör durdurma hatası", err) }
     }
 
     override fun onSensorChanged(event: SensorEvent?) {

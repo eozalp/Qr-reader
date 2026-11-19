@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import com.example.bluetooth.AirMouseController
 import com.example.bluetooth.BluetoothHidManager
 import com.example.bluetooth.HidConnectionStatus
+import com.example.debug.AppDebugLogger
 import com.example.model.BluetoothKeyboardConfig
 import com.example.model.KeyboardEndingKey
 import com.example.model.KeyboardLayoutType
@@ -141,6 +142,7 @@ fun RemoteControlScreen(
     LaunchedEffect(Unit) {
         for (task in hidKeyQueue) {
             runCatching { task() }
+                .onFailure { AppDebugLogger.e("BT-HID", "Kumanda tuş görevi hatası", it) }
         }
     }
 
@@ -475,6 +477,7 @@ fun RemoteControlScreen(
                                         .clip(RoundedCornerShape(6.dp))
                                         .clickable {
                                             runCatching { context.startActivity(hidManager.openBluetoothSettingsIntent()) }
+                                                .onFailure { AppDebugLogger.e("UI", "BT ayarları açılamadı", it) }
                                         }
                                         .padding(horizontal = 6.dp, vertical = 4.dp)
                                 )

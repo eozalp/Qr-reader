@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import com.example.debug.AppDebugLogger
 import com.example.model.ImageOptimizationQuality
 import com.example.model.QrAttachment
 import kotlinx.coroutines.CoroutineScope
@@ -30,7 +31,7 @@ data class SavedMediaResult(
 
 class AttachmentRepository(private val context: Context) {
 
-    private val scope = CoroutineScope(Dispatchers.IO)
+    private val scope = CoroutineScope(Dispatchers.IO + AppDebugLogger.coroutineHandler("DATA-ATT"))
     private val storageFile = File(context.filesDir, "qr_attachments_store.json")
     val mediaDir = File(context.filesDir, "qr_media").apply { if (!exists()) mkdirs() }
 
@@ -61,7 +62,8 @@ class AttachmentRepository(private val context: Context) {
                 }
             }
             _attachments.value = list
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppDebugLogger.e("DATA-ATT", "Ekler diskten yüklenemedi", e)
             _attachments.value = emptyList()
         }
     }
@@ -72,6 +74,8 @@ class AttachmentRepository(private val context: Context) {
                 val array = JSONArray()
                 list.forEach { array.put(it.toJson()) }
                 storageFile.writeText(array.toString(), Charsets.UTF_8)
+            }.onFailure { err ->
+                AppDebugLogger.e("DATA-ATT", "Ekler diske yazılamadı", err)
             }
         }
     }
@@ -228,6 +232,8 @@ class AttachmentRepository(private val context: Context) {
                 originalSizeBytes = origSize,
                 savedSizeBytes = destFile.length()
             )
+        }.onFailure { err ->
+            AppDebugLogger.e("DATA-ATT", "Görsel kaydetme/sıkıştırma hatası", err)
         }.getOrNull()
     }
 
@@ -254,6 +260,8 @@ class AttachmentRepository(private val context: Context) {
                 originalSizeBytes = size,
                 savedSizeBytes = destFile.length()
             )
+        }.onFailure { err ->
+            AppDebugLogger.e("DATA-ATT", "Video kaydetme hatası", err)
         }.getOrNull()
     }
 
@@ -294,6 +302,8 @@ class AttachmentRepository(private val context: Context) {
                 persistAttachments(current)
             }
             importedList.size
+        }.onFailure { err ->
+            AppDebugLogger.e("DATA-ATT", "Ek JSON içe aktarma hatası", err)
         }.getOrDefault(0)
     }
 
