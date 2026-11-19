@@ -420,7 +420,7 @@ fun RemoteControlScreen(
                             Text(
                                 text = "${if (hidTelemetry.isBootMode) "Boot" else "Report"} · Klavye ${hidTelemetry.keyboardReportsSent} · Mouse ${hidTelemetry.mouseReportsSent}",
                                 fontSize = 10.5.sp,
-                                fontFamily = FontFamily.Monospace,
+                                fontFamily = AppMonoFontFamily,
                                 color = if (hasFailure) Color(0xFFFCA5A5) else NeonCyan,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -505,7 +505,16 @@ fun RemoteControlScreen(
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             isAirMouseContinuous = !isAirMouseContinuous
                         },
-                        onSensitivityChanged = { airSensitivity = it }
+                        onSensitivityChanged = { airSensitivity = it },
+                        onRecalibrate = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            airMouseController.recalibrate()
+                            android.widget.Toast.makeText(
+                                context,
+                                "Jiroskop ve 1€ filtresi merkezlendi",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
                     )
 
                     // Full Touchpad + Scroll Strip
@@ -824,7 +833,8 @@ private fun AirMouseCard(
     sensitivity: Float,
     onHoldPressChange: (Boolean) -> Unit,
     onToggleContinuous: () -> Unit,
-    onSensitivityChanged: (Float) -> Unit
+    onSensitivityChanged: (Float) -> Unit,
+    onRecalibrate: () -> Unit = {}
 ) {
     val latestOnHoldChange by rememberUpdatedState(onHoldPressChange)
     Surface(
@@ -860,7 +870,7 @@ private fun AirMouseCard(
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = "Air Mouse (Jiroskop İmleç)",
+                            text = "Air Mouse (1€ Jiroskop)",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
@@ -873,6 +883,21 @@ private fun AirMouseCard(
                             else "Havada imleç kontrolü için açın veya basılı tutun",
                             fontSize = 10.5.sp,
                             color = if (isContinuous || isHoldPressed) NeonCyan else Color(0xFF94A3B8)
+                        )
+                    }
+                }
+                if (isGyroSupported) {
+                    IconButton(
+                        onClick = onRecalibrate,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("air_mouse_recalibrate_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MyLocation,
+                            contentDescription = "Jiroskopu Kalibre Et",
+                            tint = NeonCyan,
+                            modifier = Modifier.size(19.dp)
                         )
                     }
                 }

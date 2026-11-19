@@ -1,5 +1,6 @@
 package com.example.ui.settings
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -19,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -27,16 +29,19 @@ import com.example.bluetooth.BluetoothHidManager
 import com.example.data.ProfileRepository
 import com.example.debug.AppDebugLogger
 import com.example.debug.DebugLogLevel
-import com.example.model.QrProfile
 
-enum class SettingsTab(val title: String, val icon: ImageVector) {
-    VARIABLES("Değişkenler & Formül", Icons.Default.QrCodeScanner),
-    TABLE("Veri Tablosu", Icons.Default.TableChart),
-    KEYBOARD("Klavye & PC", Icons.Default.Keyboard),
-    OVERLAY("Stil & Görünüm", Icons.Default.Layers),
-    TRACKING("Kamera & Barkod", Icons.Default.Tune),
-    PROFILES("Profiller", Icons.Default.FolderSpecial),
-    DEBUG("Debug Konsolu", Icons.Default.BugReport)
+enum class SettingsTab(
+    val title: String,
+    val icon: ImageVector,
+    val isAdvanced: Boolean = false
+) {
+    PROFILES("Profiller", Icons.Default.FolderSpecial, isAdvanced = false),
+    VARIABLES("Değişkenler & Formül", Icons.Default.QrCodeScanner, isAdvanced = false),
+    KEYBOARD("Klavye & PC", Icons.Default.Keyboard, isAdvanced = false),
+    TABLE("Veri Tablosu", Icons.Default.TableChart, isAdvanced = true),
+    OVERLAY("Stil & Görünüm", Icons.Default.Layers, isAdvanced = true),
+    TRACKING("Kamera & Barkod", Icons.Default.Tune, isAdvanced = true),
+    DEBUG("Debug Konsolu", Icons.Default.BugReport, isAdvanced = true)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -50,11 +55,11 @@ fun SettingsScreen(
     onOpenRemoteControl: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    // Handle Android system back press
     BackHandler {
         onNavigateBack()
     }
 
+    val context = LocalContext.current
     val activeProfile by profileRepository.activeProfile.collectAsState()
     val debugLogs by AppDebugLogger.logs.collectAsState()
     val lastCrashReport by AppDebugLogger.lastCrashReport.collectAsState()
@@ -62,7 +67,21 @@ fun SettingsScreen(
         debugLogs.count { it.level.severity >= DebugLogLevel.ERROR.severity } +
             if (!lastCrashReport.isNullOrBlank()) 1 else 0
     }
+
+    // Progressive disclosure: Basic mode shows 3 everyday tabs; Expert reveals all 7
+    var showExpertTabs by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(SettingsTab.VARIABLES) }
+    var showWizardDialog by remember { mutableStateOf(false) }
+
+    val visibleTabs = remember(showExpertTabs) {
+        if (showExpertTabs) SettingsTab.entries else SettingsTab.entries.filter { !it.isAdvanced }
+    }
+
+    LaunchedEffect(showExpertTabs) {
+        if (!showExpertTabs && selectedTab.isAdvanced) {
+            selectedTab = SettingsTab.VARIABLES
+        }
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -74,28 +93,19 @@ fun SettingsScreen(
             ) {
                 TopAppBar(
                     title = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
+                        Column {
                             Text(
                                 text = "Ayarlar",
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.ExtraBold
                             )
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
-                            ) {
-                                Text(
-                                    text = activeProfile.name,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    maxLines = 1
-                                )
-                            }
+                            Text(
+                                text = activeProfile.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1
+                            )
                         }
                     },
                     navigationIcon = {
@@ -107,6 +117,71 @@ fun SettingsScreen(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "Kameraya Dön"
                             )
+                        }
+                    },
+                    actions = {
+                        // 1-Tap Smart Tag Wizard Button
+                        FilledTonalButton(
+                            onClick = { showWizardDialog = true },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                            modifier = Modifier
+                                .height(38.dp)
+                                .testTag("open_smart_wizard_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Sihirbaz", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Spacer(modifier = Modifier.width(6.dp))
+
+                        // Temel / Uzman Progressive Disclosure Toggle
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = if (showExpertTabs) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                            },
+                            border = BorderStroke(
+                                1.dp,
+                                when {
+                                    showExpertTabs -> MaterialTheme.colorScheme.primary
+                                    debugErrorCount > 0 -> Color(0xFFEF4444).copy(alpha = 0.7f)
+                                    else -> MaterialTheme.colorScheme.outlineVariant
+                                }
+                            ),
+                            modifier = Modifier
+                                .padding(end = 10.dp)
+                                .height(38.dp)
+                                .clip(RoundedCornerShape(18.dp))
+                                .clickable { showExpertTabs = !showExpertTabs }
+                                .testTag("settings_expert_toggle_btn")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Text(
+                                    text = if (showExpertTabs) "Uzman ✓" else "Uzman",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (showExpertTabs) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (!showExpertTabs && debugErrorCount > 0) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFFEF4444))
+                                    )
+                                }
+                            }
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -123,7 +198,7 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    SettingsTab.entries.forEach { tab ->
+                    visibleTabs.forEach { tab ->
                         val isSelected = selectedTab == tab
                         val showDebugBadge = tab == SettingsTab.DEBUG && debugErrorCount > 0
                         Surface(
@@ -255,5 +330,21 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+
+    if (showWizardDialog) {
+        QuickProfileWizardDialog(
+            onCreateProfile = { created ->
+                profileRepository.importSingleProfile(created, activate = true)
+                showWizardDialog = false
+                selectedTab = SettingsTab.VARIABLES
+                Toast.makeText(
+                    context,
+                    "'${created.name}' oluşturuldu ve aktifleştirildi!",
+                    Toast.LENGTH_SHORT
+                ).show()
+            },
+            onDismiss = { showWizardDialog = false }
+        )
     }
 }

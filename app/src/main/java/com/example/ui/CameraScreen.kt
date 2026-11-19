@@ -46,6 +46,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.camera.QrCodeAnalyzer
 import com.example.camera.QrTracker
 import com.example.camera.RawDetectedCode
+import com.example.camera.TargetReticleFilter
 import com.example.data.AttachmentRepository
 import com.example.data.ProfileRepository
 import com.example.debug.AppDebugLogger
@@ -150,6 +151,7 @@ fun CameraScreen(
     var showZoomBadge by remember { mutableStateOf(false) }
     var hideZoomBadgeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var focusIndicatorOffset by remember { mutableStateOf<androidx.compose.ui.geometry.Offset?>(null) }
+    var isSingleTargetMode by remember { mutableStateOf(false) }
 
     // Screen dimensions
     var screenWidthPx by remember { mutableFloatStateOf(1080f) }
@@ -231,7 +233,16 @@ fun CameraScreen(
     val analyzer = remember {
         QrCodeAnalyzer { rawList ->
             if (!isPaused) {
-                val combined = rawList + simulatedCodes
+                val allDetected = rawList + simulatedCodes
+                val combined = if (isSingleTargetMode) {
+                    TargetReticleFilter.selectSingleTarget(
+                        detectedCodes = allDetected,
+                        viewWidthPx = screenWidthPx,
+                        viewHeightPx = screenHeightPx
+                    )
+                } else {
+                    allDetected
+                }
 
                 for (code in combined) {
                     // Check for embedded profile QR code
@@ -732,6 +743,43 @@ fun CameraScreen(
                     modifier = Modifier.fillMaxSize()
                 )
 
+                // Single-Target Aiming Reticle Overlay (Nişangâh Modu)
+                if (isSingleTargetMode && !isRawModeActive && pinnedQr == null) {
+                    val isLocked = trackedQrs.isNotEmpty()
+                    val reticleColor = if (isLocked) NeonCyan else Color.White.copy(alpha = 0.78f)
+                    androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                        val rect = TargetReticleFilter.computeReticleRect(size.width, size.height)
+                        val cornerLen = 28.dp.toPx()
+                        val strokeW = if (isLocked) 3.dp.toPx() else 2.2.dp.toPx()
+
+                        // Subtle darkened vignette outside target box
+                        val dimColor = Color.Black.copy(alpha = 0.28f)
+                        drawRect(dimColor, topLeft = androidx.compose.ui.geometry.Offset.Zero, size = androidx.compose.ui.geometry.Size(size.width, rect.top))
+                        drawRect(dimColor, topLeft = androidx.compose.ui.geometry.Offset(0f, rect.bottom), size = androidx.compose.ui.geometry.Size(size.width, (size.height - rect.bottom).coerceAtLeast(0f)))
+                        drawRect(dimColor, topLeft = androidx.compose.ui.geometry.Offset(0f, rect.top), size = androidx.compose.ui.geometry.Size(rect.left, rect.height()))
+                        drawRect(dimColor, topLeft = androidx.compose.ui.geometry.Offset(rect.right, rect.top), size = androidx.compose.ui.geometry.Size((size.width - rect.right).coerceAtLeast(0f), rect.height()))
+
+                        // Four sharp HUD corner brackets
+                        // Top-Left
+                        drawLine(reticleColor, androidx.compose.ui.geometry.Offset(rect.left, rect.top), androidx.compose.ui.geometry.Offset(rect.left + cornerLen, rect.top), strokeW)
+                        drawLine(reticleColor, androidx.compose.ui.geometry.Offset(rect.left, rect.top), androidx.compose.ui.geometry.Offset(rect.left, rect.top + cornerLen), strokeW)
+                        // Top-Right
+                        drawLine(reticleColor, androidx.compose.ui.geometry.Offset(rect.right, rect.top), androidx.compose.ui.geometry.Offset(rect.right - cornerLen, rect.top), strokeW)
+                        drawLine(reticleColor, androidx.compose.ui.geometry.Offset(rect.right, rect.top), androidx.compose.ui.geometry.Offset(rect.right, rect.top + cornerLen), strokeW)
+                        // Bottom-Left
+                        drawLine(reticleColor, androidx.compose.ui.geometry.Offset(rect.left, rect.bottom), androidx.compose.ui.geometry.Offset(rect.left + cornerLen, rect.bottom), strokeW)
+                        drawLine(reticleColor, androidx.compose.ui.geometry.Offset(rect.left, rect.bottom), androidx.compose.ui.geometry.Offset(rect.left, rect.bottom - cornerLen), strokeW)
+                        // Bottom-Right
+                        drawLine(reticleColor, androidx.compose.ui.geometry.Offset(rect.right, rect.bottom), androidx.compose.ui.geometry.Offset(rect.right - cornerLen, rect.bottom), strokeW)
+                        drawLine(reticleColor, androidx.compose.ui.geometry.Offset(rect.right, rect.bottom), androidx.compose.ui.geometry.Offset(rect.right, rect.bottom - cornerLen), strokeW)
+
+                        // Center crosshair dot
+                        val cx = rect.centerX()
+                        val cy = rect.centerY()
+                        drawCircle(reticleColor.copy(alpha = 0.65f), radius = 3.dp.toPx(), center = androidx.compose.ui.geometry.Offset(cx, cy))
+                    }
+                }
+
                 // Tap-to-focus visual reticle ring
                 focusIndicatorOffset?.let { pos ->
                     val density = LocalDensity.current
@@ -1169,6 +1217,48 @@ fun CameraScreen(
                             }
                         }
                     )
+                }
+            }
+
+            // Left-Edge Ergonomic Quick Toggle: Single-Target Aiming Reticle (Nişangâh)
+            AnimatedVisibility(
+                visible = !isRawModeActive && pinnedQr == null,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 10.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = if (isSingleTargetMode) Color(0xE6062822) else GlassmorphicHudBg,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.2.dp,
+                        if (isSingleTargetMode) NeonCyan else Color.White.copy(alpha = 0.18f)
+                    ),
+                    shadowElevation = 8.dp,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .clickable {
+                            isSingleTargetMode = !isSingleTargetMode
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            Toast.makeText(
+                                context,
+                                if (isSingleTargetMode) "Nişangâh Modu AÇIK (Sadece Ortadaki Hedef)" else "Çoklu Tarama Modu AÇIK",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        .testTag("single_target_reticle_toggle_btn")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.CenterFocusStrong,
+                            contentDescription = if (isSingleTargetMode) "Nişangâh Modu Açık" else "Nişangâh Modunu Aç",
+                            tint = if (isSingleTargetMode) NeonCyan else OnDarkSurfaceVariant,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
 
@@ -1702,7 +1792,7 @@ fun CameraScreen(
                 }
             }
 
-            // Scan Session History Sheet
+            // Scan Session History & Batch Cart Sheet
             if (showHistorySheet) {
                 ScanHistorySheet(
                     historyItems = scanHistory,
@@ -1710,7 +1800,9 @@ fun CameraScreen(
                         scanHistory = emptyList()
                         recentLoggedQrs.clear()
                     },
-                    onDismiss = { showHistorySheet = false }
+                    onDismiss = { showHistorySheet = false },
+                    hidManager = hidManager,
+                    keyboardConfig = activeProfile.bluetoothKeyboard
                 )
             }
 

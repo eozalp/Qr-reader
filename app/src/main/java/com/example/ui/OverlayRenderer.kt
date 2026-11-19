@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -60,6 +61,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -113,44 +115,37 @@ fun QrOverlaysCanvas(
 
                     val animatedX by animateFloatAsState(
                         targetValue = targetX,
-                        animationSpec = tween(durationMillis = 180),
+                        animationSpec = tween(durationMillis = 160),
                         label = "callout_x_${solved.tracked.id}"
                     )
                     val animatedY by animateFloatAsState(
                         targetValue = targetY,
-                        animationSpec = tween(durationMillis = 180),
+                        animationSpec = tween(durationMillis = 160),
                         label = "callout_y_${solved.tracked.id}"
                     )
                     val animatedAlpha by animateFloatAsState(
                         targetValue = solved.tracked.alpha,
-                        animationSpec = tween(durationMillis = 150),
+                        animationSpec = tween(durationMillis = 140),
                         label = "callout_alpha_${solved.tracked.id}"
                     )
 
+                    var measuredSize by remember { androidx.compose.runtime.mutableStateOf(IntSize.Zero) }
+                    val marginPx = with(density) { 14.dp.toPx() }
+                    val topSafePx = with(density) { 70.dp.toPx() }
+                    val bottomSafePx = with(density) { 84.dp.toPx() }
+
                     Box(
                         modifier = Modifier
-                            .layout { measurable, constraints ->
-                                val placeable = measurable.measure(constraints)
-                                layout(constraints.maxWidth, constraints.maxHeight) {
-                                    val marginPx = with(density) { 14.dp.toPx() }
-                                    val topSafePx = with(density) { 70.dp.toPx() }
-                                    val bottomSafePx = with(density) { 84.dp.toPx() }
-
-                                    val minX = marginPx.roundToInt()
-                                    val maxX = (constraints.maxWidth - placeable.width - marginPx).roundToInt().coerceAtLeast(minX)
-                                    val minY = topSafePx.roundToInt()
-                                    val maxY = (constraints.maxHeight - placeable.height - bottomSafePx).roundToInt().coerceAtLeast(minY)
-
-                                    val rawPosX = (animatedX - placeable.width / 2f).roundToInt()
-                                    val rawPosY = (animatedY - placeable.height / 2f).roundToInt()
-
-                                    val clampedX = rawPosX.coerceIn(minX, maxX)
-                                    val clampedY = rawPosY.coerceIn(minY, maxY)
-
-                                    placeable.placeRelative(clampedX, clampedY)
-                                }
+                            .onSizeChanged { measuredSize = it }
+                            .graphicsLayer {
+                                val cardW = measuredSize.width.toFloat()
+                                val cardH = measuredSize.height.toFloat()
+                                val maxX = (screenWidthPx - cardW - marginPx).coerceAtLeast(marginPx)
+                                val maxY = (screenHeightPx - cardH - bottomSafePx).coerceAtLeast(topSafePx)
+                                translationX = (animatedX - cardW / 2f).coerceIn(marginPx, maxX)
+                                translationY = (animatedY - cardH / 2f).coerceIn(topSafePx, maxY)
+                                alpha = if (showRawQrData) 1f else animatedAlpha
                             }
-                            .alpha(if (showRawQrData) 1f else animatedAlpha)
                     ) {
                         if (showRawQrData) {
                             RawQrOverlayCardContent(

@@ -50,16 +50,25 @@ class AirMouseController(
     private var accumX: Float = 0f
     private var accumY: Float = 0f
     private val biasEstimator = GyroBiasEstimator()
+    private val yawFilter = OneEuroFilter(minCutoffHz = 2.2f, beta = 0.08f, dCutoffHz = 1.0f)
+    private val pitchFilter = OneEuroFilter(minCutoffHz = 2.2f, beta = 0.08f, dCutoffHz = 1.0f)
+
+    fun recalibrate() {
+        lastGyroTimestampNs = 0L
+        accumX = 0f
+        accumY = 0f
+        biasEstimator.reset()
+        yawFilter.reset()
+        pitchFilter.reset()
+        AppDebugLogger.i("BT-MOUSE", "Air Mouse jiroskop ve 1€ filtresi yeniden kalibre edildi")
+    }
 
     fun start() {
         val sm = sensorManager ?: return
         val gyro = gyroSensor ?: return
         if (isRunning) return
 
-        lastGyroTimestampNs = 0L
-        accumX = 0f
-        accumY = 0f
-        biasEstimator.reset()
+        recalibrate()
         isRunning = true
 
         val samplingUs = 10_000
@@ -83,6 +92,8 @@ class AirMouseController(
         lastGyroTimestampNs = 0L
         accumX = 0f
         accumY = 0f
+        yawFilter.reset()
+        pitchFilter.reset()
         runCatching { sensorManager?.unregisterListener(this) }
             .onFailure { err -> AppDebugLogger.w("BT-MOUSE", "Air Mouse sensör durdurma hatası", err) }
     }
@@ -115,6 +126,8 @@ class AirMouseController(
                     lastGyroTimestampNs = event.timestamp
                     accumX = 0f
                     accumY = 0f
+                    yawFilter.reset()
+                    pitchFilter.reset()
                     return
                 }
                 val prevTs = lastGyroTimestampNs
@@ -132,7 +145,9 @@ class AirMouseController(
                     dtSec = dtSec,
                     sensitivity = sensitivity,
                     prevAccumX = accumX,
-                    prevAccumY = accumY
+                    prevAccumY = accumY,
+                    yawFilter = yawFilter,
+                    pitchFilter = pitchFilter
                 )
                 accumX = step.nextAccumX
                 accumY = step.nextAccumY
@@ -145,6 +160,54 @@ class AirMouseController(
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
         // No-op
+    }
+}
+
+/**
+ * 1€ (One Euro) adaptive low-pass filter (Casiez et al., CHI 2012).
+ * Heavily dampens hand tremor / micro-jitter at low speeds while raising the cutoff
+ * frequency dynamically during fast wrist flicks for near-zero cursor lag.
+ */
+class OneEuroFilter(
+    private val minCutoffHz: Float = 2.2f,
+    private val beta: Float = 0.08f,
+    private val dCutoffHz: Float = 1.0f
+) {
+    private var hasPrev: Boolean = false
+    private var prevFilteredValue: Float = 0f
+    private var prevFilteredDerivative: Float = 0f
+
+    fun reset() {
+        hasPrev = false
+        prevFilteredValue = 0f
+        prevFilteredDerivative = 0f
+    }
+
+    fun filter(rawValue: Float, dtSec: Float): Float {
+        val safeDt = dtSec.coerceIn(0.001f, 0.1f)
+        if (!hasPrev) {
+            hasPrev = true
+            prevFilteredValue = rawValue
+            prevFilteredDerivative = 0f
+            return rawValue
+        }
+
+        val rawDerivative = (rawValue - prevFilteredValue) / safeDt
+        val dAlpha = computeAlpha(dCutoffHz, safeDt)
+        val smoothedDerivative = prevFilteredDerivative + dAlpha * (rawDerivative - prevFilteredDerivative)
+        prevFilteredDerivative = smoothedDerivative
+
+        val dynamicCutoff = minCutoffHz + beta * abs(smoothedDerivative)
+        val alpha = computeAlpha(dynamicCutoff, safeDt)
+        val filtered = prevFilteredValue + alpha * (rawValue - prevFilteredValue)
+        prevFilteredValue = filtered
+        return filtered
+    }
+
+    private fun computeAlpha(cutoffHz: Float, dtSec: Float): Float {
+        val safeCutoff = cutoffHz.coerceAtLeast(0.05f)
+        val tau = 1.0f / (2.0f * kotlin.math.PI.toFloat() * safeCutoff)
+        return 1.0f / (1.0f + tau / dtSec)
     }
 }
 
@@ -214,7 +277,9 @@ object AirMouseMath {
         sensitivity: Float,
         prevAccumX: Float,
         prevAccumY: Float,
-        deadzone: Float = DEFAULT_DEADZONE_RAD_S
+        deadzone: Float = DEFAULT_DEADZONE_RAD_S,
+        yawFilter: OneEuroFilter? = null,
+        pitchFilter: OneEuroFilter? = null
     ): AirMouseStepResult {
         val gNorm = sqrt(gx * gx + gy * gy + gz * gz)
         val (nx, ny, nz) = if (gNorm > 0.5f) {
@@ -229,8 +294,11 @@ object AirMouseMath {
         // Device pitch around X: tilting top edge downward -> negative wx -> +dy
         val rawPitch = -wx
 
-        val cleanYaw = applySoftDeadzone(rawYaw, deadzone)
-        val cleanPitch = applySoftDeadzone(rawPitch, deadzone)
+        val filteredYaw = yawFilter?.filter(rawYaw, dtSec) ?: rawYaw
+        val filteredPitch = pitchFilter?.filter(rawPitch, dtSec) ?: rawPitch
+
+        val cleanYaw = applySoftDeadzone(filteredYaw, deadzone)
+        val cleanPitch = applySoftDeadzone(filteredPitch, deadzone)
 
         val gain = BASE_PIXELS_PER_RADIAN * sensitivity.coerceIn(0.3f, 3.0f)
         val totalX = prevAccumX + cleanYaw * dtSec * gain
