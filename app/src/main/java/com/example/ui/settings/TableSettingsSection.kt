@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.example.engine.ResultFormatter
 import com.example.model.*
 import com.example.ui.ExcelTableOverlayContent
+import com.example.ui.theme.AppMonoFontFamily
 import java.util.UUID
 
 @Composable
@@ -133,10 +134,10 @@ fun TableSettingsSection(
         autoPopulateItems()
     }
 
+    val navBottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp + navBottomPadding),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // 1. Live Interactive Real-Time Spreadsheet Preview
@@ -526,7 +527,7 @@ fun TableCellRowCard(
                     IconButton(
                         onClick = onMoveUp,
                         enabled = index > 0,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.KeyboardArrowUp,
@@ -538,7 +539,7 @@ fun TableCellRowCard(
                     IconButton(
                         onClick = onMoveDown,
                         enabled = index < totalCount - 1,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.KeyboardArrowDown,
@@ -558,7 +559,7 @@ fun TableCellRowCard(
                     ) {
                         Text(
                             text = if (item.coordinate.isNotBlank()) item.coordinate else "A${index + 1}",
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = AppMonoFontFamily,
                             fontWeight = FontWeight.Bold,
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -587,7 +588,7 @@ fun TableCellRowCard(
                     // Emphasis toggle (Star)
                     IconButton(
                         onClick = onToggleEmphasis,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
                             imageVector = if (item.isEmphasized) Icons.Default.Star else Icons.Default.StarBorder,
@@ -599,7 +600,7 @@ fun TableCellRowCard(
                     // Visibility toggle (Eye)
                     IconButton(
                         onClick = onToggleVisibility,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
                             imageVector = if (item.isVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
@@ -611,7 +612,7 @@ fun TableCellRowCard(
                     // Delete
                     IconButton(
                         onClick = onDelete,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Delete,

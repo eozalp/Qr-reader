@@ -2,8 +2,10 @@ package com.example.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -41,19 +43,23 @@ fun TrackingCameraSection(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(horizontal = 16.dp),
+        contentPadding = PaddingValues(
+            top = 16.dp,
+            bottom = 24.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        ),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Section: Barcode Reading Options (2D, 3D, 1D)
+        // Section: Barkod Okuma Seçenekleri (2D, 3D, 1D)
         item {
             Text(
-                text = "Barcode Reading Options",
+                text = "Barkod Okuma Seçenekleri",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Configure scanner capabilities for 2D matrix, 3D stacked, and 1D retail & industrial barcodes.",
+                text = "2D matris, 3D yığın ve 1D perakende/endüstriyel barkod formatlarını yapılandırın.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -62,7 +68,7 @@ fun TrackingCameraSection(
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(16.dp)
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Row(
@@ -72,7 +78,7 @@ fun TrackingCameraSection(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Active Scanning Preset",
+                                text = "Aktif Tarama Ön Ayarı",
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 14.sp
                             )
@@ -86,19 +92,22 @@ fun TrackingCameraSection(
 
                         Button(
                             onClick = { showBarcodeOptionsSheet = true },
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                            modifier = Modifier.heightIn(min = 44.dp)
                         ) {
                             Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Options", fontSize = 12.sp)
+                            Text("Formatlar", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Preset Chips Row
+                    // Scrollable Preset Chips Row
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         BarcodeScanPreset.entries.forEach { preset ->
@@ -121,12 +130,12 @@ fun TrackingCameraSection(
                                 label = {
                                     Text(
                                         text = when (preset) {
-                                            BarcodeScanPreset.ALL_FORMATS -> "All (Auto)"
+                                            BarcodeScanPreset.ALL_FORMATS -> "Tümü (Oto)"
                                             BarcodeScanPreset.TWO_D_ONLY -> "2D + 3D"
-                                            BarcodeScanPreset.ONE_D_ONLY -> "1D Only"
-                                            BarcodeScanPreset.CUSTOM -> "Custom"
+                                            BarcodeScanPreset.ONE_D_ONLY -> "Sadece 1D"
+                                            BarcodeScanPreset.CUSTOM -> "Özel"
                                         },
-                                        fontSize = 11.sp
+                                        fontSize = 11.5.sp
                                     )
                                 }
                             )
@@ -143,10 +152,10 @@ fun TrackingCameraSection(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "3D & Inverted Mode",
+                                    text = "3D & Ters Renkli Mod",
                                     fontWeight = FontWeight.SemiBold,
                                     fontSize = 13.sp
                                 )
@@ -155,10 +164,10 @@ fun TrackingCameraSection(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(4.dp))
                                         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
-                                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                                        .padding(horizontal = 5.dp, vertical = 1.dp)
                                 ) {
                                     Text(
-                                        text = "DPM / Laser",
+                                        text = "DPM / Lazer",
                                         fontSize = 8.5.sp,
                                         color = MaterialTheme.colorScheme.primary,
                                         fontWeight = FontWeight.Bold
@@ -166,7 +175,7 @@ fun TrackingCameraSection(
                                 }
                             }
                             Text(
-                                text = "Dual-pass reading for laser-etched, dot-peen, inverted dark-surface, and high-density barcodes.",
+                                text = "Lazer kazıma, koyu zemin üzerine beyaz ve yüksek yoğunluklu barkodlar için çift geçişli analiz.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -177,42 +186,40 @@ fun TrackingCameraSection(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // Status pill showing total supported formats
-                    val effectiveCount = if (tracking.scanPreset == BarcodeScanPreset.ALL_FORMATS) {
-                        "All 13 formats active"
-                    } else if (tracking.scanPreset == BarcodeScanPreset.TWO_D_ONLY) {
-                        "4 formats: QR, Data Matrix, PDF417, Aztec"
-                    } else if (tracking.scanPreset == BarcodeScanPreset.ONE_D_ONLY) {
-                        "9 formats: EAN, UPC, Code 128, 39, 93, Codabar, ITF"
-                    } else {
-                        "${tracking.enabledFormats.size} custom formats active"
+                    val effectiveCount = when (tracking.scanPreset) {
+                        BarcodeScanPreset.ALL_FORMATS -> "Tüm 13 barkod formatı etkin"
+                        BarcodeScanPreset.TWO_D_ONLY -> "4 format etkin: QR, Data Matrix, PDF417, Aztec"
+                        BarcodeScanPreset.ONE_D_ONLY -> "9 format etkin: EAN, UPC, Code 128, 39, 93, Codabar, ITF"
+                        BarcodeScanPreset.CUSTOM -> "${tracking.enabledFormats.size} özel format etkin"
                     }
 
                     Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
                             .clickable { showBarcodeOptionsSheet = true }
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
                                 text = effectiveCount,
-                                fontSize = 11.sp,
+                                fontSize = 11.5.sp,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Medium
                             )
                             Icon(
                                 imageVector = Icons.Default.ChevronRight,
-                                contentDescription = null,
+                                contentDescription = "Formatları Düzenle",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
@@ -220,16 +227,16 @@ fun TrackingCameraSection(
             }
         }
 
-        // Section: Tracking & Continuity Engine
+        // Section: Takip & Süreklilik Motoru
         item {
             Text(
-                text = "Tracking & Continuity Engine",
+                text = "Takip & Kararlılık Motoru",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Adjust spatial bounding-box stabilization, disappearance timeout, and multi-code concurrency.",
+                text = "AR kutusu yumuşatma katsayısı, ekranda kalma süresi ve aynı anda taranacak kod sayısını ayarlayın.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -237,16 +244,17 @@ fun TrackingCameraSection(
 
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(16.dp)
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text(
-                        text = "Spatial EMA Smoothing (${(tracking.smoothingFactor * 100).toInt()}%)",
+                        text = "Konum Yumuşatma (EMA): %${(tracking.smoothingFactor * 100).toInt()}",
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Higher value updates instantly with minimal delay; lower value yields silky-smooth stabilized motion.",
+                        text = "Yüksek değer anlık tepki verir; düşük değer titremesiz ve akıcı bir takip sağlar.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -259,12 +267,12 @@ fun TrackingCameraSection(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
-                        text = "Disappearance Timeout: ${tracking.disappearanceTimeoutMs} ms",
+                        text = "Kaybolma Gecikmesi: ${tracking.disappearanceTimeoutMs} ms",
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Keeps overlay on screen briefly and smoothly fades it out if barcode is temporarily obscured.",
+                        text = "Barkod anlık olarak kadrajdan çıktığında kartı bir süre daha korur ve yumuşakça gizler.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -278,7 +286,7 @@ fun TrackingCameraSection(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
-                        text = "Max Concurrent Codes: ${tracking.maxTrackedCodes}",
+                        text = "Eşzamanlı Maksimum Kod: ${tracking.maxTrackedCodes}",
                         fontWeight = FontWeight.SemiBold
                     )
                     Slider(
@@ -291,10 +299,10 @@ fun TrackingCameraSection(
             }
         }
 
-        // Section: Hardware Camera Preferences
+        // Section: Kamera Donanım Tercihleri
         item {
             Text(
-                text = "Hardware Camera Preferences",
+                text = "Kamera Donanım Tercihleri",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
@@ -302,7 +310,8 @@ fun TrackingCameraSection(
 
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(16.dp)
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Row(
@@ -310,7 +319,7 @@ fun TrackingCameraSection(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Default to Front Camera", fontWeight = FontWeight.SemiBold)
+                        Text("Varsayılan Olarak Ön Kamerayı Aç", fontWeight = FontWeight.SemiBold)
                         Switch(
                             checked = tracking.useFrontCamera,
                             onCheckedChange = { onTrackingChanged(tracking.copy(useFrontCamera = it)) }
@@ -324,7 +333,7 @@ fun TrackingCameraSection(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Torch / Flashlight by Default", fontWeight = FontWeight.SemiBold)
+                        Text("Flaş / El Feneri Varsayılan Açık", fontWeight = FontWeight.SemiBold)
                         Switch(
                             checked = tracking.enableTorch,
                             onCheckedChange = { onTrackingChanged(tracking.copy(enableTorch = it)) }
@@ -334,24 +343,11 @@ fun TrackingCameraSection(
             }
         }
 
-        // Section: Emulator & Test Tools ("Inner Menu")
-        item {
-            Text(
-                text = "Emulator Testing Lab",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Virtual QR & barcode simulation tools have been moved to the inner menu to keep the camera view clean and uncrowded. Access simulation anytime via the top-right menu (⋮) on the scanner screen.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
+        // Section: AR Simülatörü Bilgisi
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(16.dp)
             ) {
                 Row(
                     modifier = Modifier
@@ -368,12 +364,12 @@ fun TrackingCameraSection(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Inner Menu Virtual Simulator",
+                            text = "Sanal AR Barkod Simülatörü",
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp
                         )
                         Text(
-                            text = "Tap the top-right menu icon (⋮) on the live scanner screen to inject test QR, EAN-13, Code 128, or PDF417 codes.",
+                            text = "Canlı kamera ekranındaki sağ üst menüden (⋮) test QR, EAN-13, Code 128 veya PDF417 barkodları enjekte edebilirsiniz.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

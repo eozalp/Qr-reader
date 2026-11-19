@@ -70,6 +70,7 @@ fun BarcodeFormatOptionsSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.90f)
+                .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(horizontal = 20.dp)
         ) {
             // Header
@@ -315,7 +316,7 @@ fun BarcodeFormatOptionsSheet(
                                         color = Color.White
                                     )
                                     Text(
-                                        text = "${itemsInCategory.size} formats",
+                                        text = "${itemsInCategory.size} format",
                                         fontSize = 10.sp,
                                         color = Color(0xFF64748B)
                                     )
@@ -422,7 +423,7 @@ fun BarcodeFormatOptionsSheet(
                                         color = if (isEffectiveEnabled) Color(0xFF94A3B8) else Color(0xFF475569)
                                     )
                                     Text(
-                                        text = "e.g. ${item.exampleUsage}",
+                                        text = "örn. ${item.exampleUsage}",
                                         fontSize = 9.5.sp,
                                         color = Color(0xFF64748B)
                                     )
@@ -453,7 +454,9 @@ fun BarcodeFormatOptionsSheet(
                             newInverted = true
                         )
                     },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF94A3B8))
                 ) {
                     Text("Varsayılana Sıfırla", fontSize = 12.sp)
@@ -461,7 +464,9 @@ fun BarcodeFormatOptionsSheet(
 
                 Button(
                     onClick = onDismiss,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00F5D4), contentColor = Color(0xFF0F172A))
                 ) {
                     Text("Tamam", fontWeight = FontWeight.Bold, fontSize = 12.sp)

@@ -31,9 +31,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.example.ui.theme.AppMonoFontFamily
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -105,68 +107,70 @@ fun QrOverlaysCanvas(
         // Render each data box at its position (Hidden when pinned since pinned card is displayed full width)
         if (pinnedQr == null) {
             for (solved in solvedPositions) {
-                val targetX = if (showRawQrData) solved.tracked.currentBox.centerX() else solved.cardCenterX
-                val targetY = if (showRawQrData) solved.tracked.currentBox.centerY() else solved.cardCenterY
+                key(solved.tracked.id) {
+                    val targetX = if (showRawQrData) solved.tracked.currentBox.centerX() else solved.cardCenterX
+                    val targetY = if (showRawQrData) solved.tracked.currentBox.centerY() else solved.cardCenterY
 
-                val animatedX by animateFloatAsState(
-                    targetValue = targetX,
-                    animationSpec = tween(durationMillis = 180),
-                    label = "callout_x_${solved.tracked.id}"
-                )
-                val animatedY by animateFloatAsState(
-                    targetValue = targetY,
-                    animationSpec = tween(durationMillis = 180),
-                    label = "callout_y_${solved.tracked.id}"
-                )
-                val animatedAlpha by animateFloatAsState(
-                    targetValue = solved.tracked.alpha,
-                    animationSpec = tween(durationMillis = 150),
-                    label = "callout_alpha_${solved.tracked.id}"
-                )
+                    val animatedX by animateFloatAsState(
+                        targetValue = targetX,
+                        animationSpec = tween(durationMillis = 180),
+                        label = "callout_x_${solved.tracked.id}"
+                    )
+                    val animatedY by animateFloatAsState(
+                        targetValue = targetY,
+                        animationSpec = tween(durationMillis = 180),
+                        label = "callout_y_${solved.tracked.id}"
+                    )
+                    val animatedAlpha by animateFloatAsState(
+                        targetValue = solved.tracked.alpha,
+                        animationSpec = tween(durationMillis = 150),
+                        label = "callout_alpha_${solved.tracked.id}"
+                    )
 
-                Box(
-                    modifier = Modifier
-                        .layout { measurable, constraints ->
-                            val placeable = measurable.measure(constraints)
-                            layout(constraints.maxWidth, constraints.maxHeight) {
-                                val marginPx = with(density) { 14.dp.toPx() }
-                                val topSafePx = with(density) { 70.dp.toPx() }
-                                val bottomSafePx = with(density) { 84.dp.toPx() }
+                    Box(
+                        modifier = Modifier
+                            .layout { measurable, constraints ->
+                                val placeable = measurable.measure(constraints)
+                                layout(constraints.maxWidth, constraints.maxHeight) {
+                                    val marginPx = with(density) { 14.dp.toPx() }
+                                    val topSafePx = with(density) { 70.dp.toPx() }
+                                    val bottomSafePx = with(density) { 84.dp.toPx() }
 
-                                val minX = marginPx.roundToInt()
-                                val maxX = (constraints.maxWidth - placeable.width - marginPx).roundToInt().coerceAtLeast(minX)
-                                val minY = topSafePx.roundToInt()
-                                val maxY = (constraints.maxHeight - placeable.height - bottomSafePx).roundToInt().coerceAtLeast(minY)
+                                    val minX = marginPx.roundToInt()
+                                    val maxX = (constraints.maxWidth - placeable.width - marginPx).roundToInt().coerceAtLeast(minX)
+                                    val minY = topSafePx.roundToInt()
+                                    val maxY = (constraints.maxHeight - placeable.height - bottomSafePx).roundToInt().coerceAtLeast(minY)
 
-                                val rawPosX = (animatedX - placeable.width / 2f).roundToInt()
-                                val rawPosY = (animatedY - placeable.height / 2f).roundToInt()
+                                    val rawPosX = (animatedX - placeable.width / 2f).roundToInt()
+                                    val rawPosY = (animatedY - placeable.height / 2f).roundToInt()
 
-                                val clampedX = rawPosX.coerceIn(minX, maxX)
-                                val clampedY = rawPosY.coerceIn(minY, maxY)
+                                    val clampedX = rawPosX.coerceIn(minX, maxX)
+                                    val clampedY = rawPosY.coerceIn(minY, maxY)
 
-                                placeable.placeRelative(clampedX, clampedY)
+                                    placeable.placeRelative(clampedX, clampedY)
+                                }
                             }
-                        }
-                        .alpha(if (showRawQrData) 1f else animatedAlpha)
-                ) {
-                    if (showRawQrData) {
-                        RawQrOverlayCardContent(
-                            tracked = solved.tracked,
-                            config = overlayConfig
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .testTag("overlay_label_${solved.tracked.id}")
-                                .clickable { onPinClick?.invoke(solved.tracked) }
-                        ) {
-                            OverlayCardContent(
-                                result = solved.tracked.result,
-                                config = overlayConfig,
-                                attachment = solved.tracked.attachment,
-                                variableDefs = variableDefs,
-                                onAttachmentClick = onAttachmentClick
+                            .alpha(if (showRawQrData) 1f else animatedAlpha)
+                    ) {
+                        if (showRawQrData) {
+                            RawQrOverlayCardContent(
+                                tracked = solved.tracked,
+                                config = overlayConfig
                             )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .testTag("overlay_label_${solved.tracked.id}")
+                                    .clickable { onPinClick?.invoke(solved.tracked) }
+                            ) {
+                                OverlayCardContent(
+                                    result = solved.tracked.result,
+                                    config = overlayConfig,
+                                    attachment = solved.tracked.attachment,
+                                    variableDefs = variableDefs,
+                                    onAttachmentClick = onAttachmentClick
+                                )
+                            }
                         }
                     }
                 }
@@ -202,8 +206,8 @@ fun PinnedFullWidthOverlayCard(
 
     val resultText = when (val st = tracked.result.status) {
         is CalculationStatus.Success -> st.formattedText
-        is CalculationStatus.ParseError -> "Parse Error"
-        is CalculationStatus.EvaluationError -> "Evaluation Error"
+        is CalculationStatus.ParseError -> "Ayrıştırma Hatası"
+        is CalculationStatus.EvaluationError -> "Hesaplama Hatası"
     }
 
     Card(
@@ -319,13 +323,13 @@ fun PinnedFullWidthOverlayCard(
                                 contentColor = if (config.customerPriceOnly) Color(0xFF00382E) else Color.White
                             ),
                             modifier = Modifier
-                                .size(38.dp)
+                                .size(48.dp)
                                 .testTag("pinned_customer_mode_toggle")
                         ) {
                             Icon(
                                 imageVector = if (config.customerPriceOnly) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                                 contentDescription = if (config.customerPriceOnly) "Müşteri Modu Açık (Maliyeti Gizle)" else "Müşteri Moduna Geç",
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
@@ -342,13 +346,13 @@ fun PinnedFullWidthOverlayCard(
                             contentColor = Color(0xFF00382E)
                         ),
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(48.dp)
                             .testTag("unpin_overlay_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Sabitlemeyi kaldır ve taramaya dön",
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -464,7 +468,7 @@ fun PinnedFullWidthOverlayCard(
                     ),
                     modifier = Modifier
                         .weight(1f)
-                        .height(38.dp)
+                        .height(44.dp)
                         .testTag("copy_result_button"),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                 ) {
@@ -497,7 +501,7 @@ fun PinnedFullWidthOverlayCard(
                         ),
                         modifier = Modifier
                             .weight(1f)
-                            .height(38.dp)
+                            .height(44.dp)
                             .testTag("copy_raw_button"),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                     ) {
@@ -544,7 +548,12 @@ fun PinnedFullWidthOverlayCard(
                             putExtra(Intent.EXTRA_TEXT, shareContent)
                             putExtra(Intent.EXTRA_SUBJECT, "ALVETAK QR - $resultText")
                         }
-                        context.startActivity(Intent.createChooser(shareIntent, "Sonucu Paylaş"))
+                        runCatching {
+                            context.startActivity(Intent.createChooser(shareIntent, "Sonucu Paylaş"))
+                        }.onFailure { err ->
+                            AppDebugLogger.e("OVERLAY", "Sonuç paylaşım penceresi açılamadı", err)
+                            Toast.makeText(context, "Paylaşım uygulaması bulunamadı", Toast.LENGTH_SHORT).show()
+                        }
                     },
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
@@ -553,7 +562,7 @@ fun PinnedFullWidthOverlayCard(
                     ),
                     modifier = Modifier
                         .weight(1f)
-                        .height(38.dp)
+                        .height(44.dp)
                         .testTag("share_result_button"),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                 ) {
@@ -627,7 +636,7 @@ fun RawQrOverlayCardContent(
             text = tracked.rawContent,
             color = Color.White,
             fontSize = (13 * scale).sp,
-            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            fontFamily = AppMonoFontFamily,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = (12 * scale).dp, vertical = (8 * scale).dp)
         )

@@ -149,7 +149,7 @@ fun CameraScreen(
     var zoomLevel by remember { mutableFloatStateOf(0.0f) }
     var showZoomBadge by remember { mutableStateOf(false) }
     var hideZoomBadgeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    var showProfileDropdown by remember { mutableStateOf(false) }
+    var focusIndicatorOffset by remember { mutableStateOf<androidx.compose.ui.geometry.Offset?>(null) }
 
     // Screen dimensions
     var screenWidthPx by remember { mutableFloatStateOf(1080f) }
@@ -289,6 +289,13 @@ fun CameraScreen(
         if (autoSwitchedProfileName != null) {
             delay(2800)
             autoSwitchedProfileName = null
+        }
+    }
+
+    LaunchedEffect(focusIndicatorOffset) {
+        if (focusIndicatorOffset != null) {
+            delay(950)
+            focusIndicatorOffset = null
         }
     }
 
@@ -443,17 +450,16 @@ fun CameraScreen(
         if (multiCodeItems.size >= 2) multiCodeItems.sumOf { it.second } else null
     }
 
-    // Periodic ticker to smoothly fade out lost QRs
-    LaunchedEffect(activeProfile) {
+    // Periodic ticker to smoothly fade out lost QRs (freezes when paused/pinned; emits only on real fade/expiry)
+    LaunchedEffect(activeProfile, isPaused, pinnedQr) {
+        if (isPaused || pinnedQr != null) return@LaunchedEffect
         while (true) {
             kotlinx.coroutines.delay(50)
             if (trackedQrs.isNotEmpty()) {
-                val updated = qrTracker.update(
-                    detectedScreenBoxes = emptyList<RawDetectedCode>(),
-                    profile = activeProfile,
-                    attachmentFinder = { attachmentRepository.findAttachmentForQr(it) }
-                )
-                trackedQrs = updated
+                val updated = qrTracker.tickFade(profile = activeProfile)
+                if (updated != null) {
+                    trackedQrs = updated
+                }
             }
         }
     }
@@ -525,8 +531,16 @@ fun CameraScreen(
                 )
                 cameraControl = cam.cameraControl
                 cameraInfo = cam.cameraInfo
+                if (isFrontCamera) {
+                    isTorchEnabled = false
+                } else if (isTorchEnabled) {
+                    cam.cameraControl.enableTorch(true)
+                }
+                if (zoomLevel > 0f) {
+                    cam.cameraControl.setLinearZoom(zoomLevel)
+                }
                 cameraInitError = null
-                AppDebugLogger.i("CAM-X", "Kamera başarıyla bağlandı (front=$isFrontCamera)")
+                AppDebugLogger.i("CAM-X", "Kamera başarıyla bağlandı (front=$isFrontCamera, zoom=$zoomLevel)")
 
                 // Monitor camera state; if an error occurs, unbind cleanly to stop reopen loops immediately
                 cam.cameraInfo.cameraState.observe(lifecycleOwner) { state ->
@@ -656,10 +670,26 @@ fun CameraScreen(
                 )
             }
 
-            // AR Overlay Layer with Multitouch Zoom to resize the overlay
+            // AR Overlay Layer with Multitouch Zoom to resize the overlay + Tap-to-Focus on preview
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .pointerInput(cameraControl, cameraInitError, pinnedQr) {
+                        detectTapGestures { tapOffset ->
+                            if (cameraInitError == null && pinnedQr == null && cameraControl != null) {
+                                runCatching {
+                                    val point = previewView.meteringPointFactory.createPoint(tapOffset.x, tapOffset.y)
+                                    val action = FocusMeteringAction.Builder(point)
+                                        .setAutoCancelDuration(3, java.util.concurrent.TimeUnit.SECONDS)
+                                        .build()
+                                    cameraControl?.startFocusAndMetering(action)
+                                    focusIndicatorOffset = tapOffset
+                                }.onFailure { err ->
+                                    AppDebugLogger.w("CAM-X", "Dokunarak odaklama hatası", err)
+                                }
+                            }
+                        }
+                    }
                     .pointerInput(activeProfile.id) {
                         detectTransformGestures { _, _, zoom, _ ->
                             if (zoom != 1.0f) {
@@ -670,10 +700,11 @@ fun CameraScreen(
                                 saveScaleJob?.cancel()
                                 saveScaleJob = coroutineScope.launch {
                                     delay(350)
-                                    // Persist the debounced scale to profile repository
+                                    // Persist the debounced scale using the latest active profile
+                                    val latestProfile = profileRepository.activeProfile.value
                                     profileRepository.saveProfile(
-                                        activeProfile.copy(
-                                            overlay = activeProfile.overlay.copy(scale = updated)
+                                        latestProfile.copy(
+                                            overlay = latestProfile.overlay.copy(scale = updated)
                                         )
                                     )
                                     delay(900)
@@ -700,6 +731,24 @@ fun CameraScreen(
                     onAttachmentClick = { att -> viewingAttachment = att },
                     modifier = Modifier.fillMaxSize()
                 )
+
+                // Tap-to-focus visual reticle ring
+                focusIndicatorOffset?.let { pos ->
+                    val density = LocalDensity.current
+                    val ringHalfPx = with(density) { 30.dp.toPx() }
+                    Box(
+                        modifier = Modifier
+                            .offset {
+                                androidx.compose.ui.unit.IntOffset(
+                                    (pos.x - ringHalfPx).toInt(),
+                                    (pos.y - ringHalfPx).toInt()
+                                )
+                            }
+                            .size(60.dp)
+                            .border(2.dp, NeonCyan.copy(alpha = 0.9f), CircleShape)
+                            .background(NeonCyan.copy(alpha = 0.08f), CircleShape)
+                    )
+                }
 
                 // Brief floating badge indicator when user pinches to resize overlay
                 if (showScaleToast) {
@@ -759,7 +808,10 @@ fun CameraScreen(
                         ).show()
                     },
                     isFrontCamera = isFrontCamera,
-                    onToggleCamera = { isFrontCamera = !isFrontCamera },
+                    onToggleCamera = {
+                        isFrontCamera = !isFrontCamera
+                        if (isFrontCamera) isTorchEnabled = false
+                    },
                     isBatterySaverEnabled = isBatterySaverEnabled,
                     onToggleBatterySaver = {
                         isBatterySaverEnabled = !isBatterySaverEnabled
@@ -784,144 +836,142 @@ fun CameraScreen(
                 )
             }
 
-            // Real-Time Bluetooth Auto-Send Keystroke Notification Pill
-            AnimatedVisibility(
-                visible = autoSendToastText != null && !isRawModeActive,
-                enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
-                exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+            // Non-overlapping Stacked Top Floating Status Banners
+            Column(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .windowInsetsPadding(WindowInsets.statusBars)
-                    .padding(top = if (multiCodeSum != null) 120.dp else 70.dp)
+                    .padding(top = 74.dp, start = 16.dp, end = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Surface(
-                    color = Color(0xF2062822),
-                    shape = RoundedCornerShape(20.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.2.dp, NeonCyan),
-                    shadowElevation = 10.dp
+                // 1. Real-Time Multi-Code Sum / Aggregate Pill (When 2+ codes are detected with valid calculations)
+                AnimatedVisibility(
+                    visible = multiCodeSum != null && !isRawModeActive && pinnedQr == null,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { -it })
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        color = Color(0xF2070D18),
+                        shape = RoundedCornerShape(20.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.2.dp, NeonCyan),
+                        shadowElevation = 10.dp,
+                        modifier = Modifier
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                val formattedSum = String.format(java.util.Locale("tr", "TR"), "%.2f", multiCodeSum)
+                                clipboardManager.setText(AnnotatedString(formattedSum))
+                                android.widget.Toast.makeText(context, "Görünümdeki toplam kopyalandı: $formattedSum", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                            .testTag("multi_code_sum_pill")
                     ) {
-                        Icon(
-                            Icons.Default.Keyboard,
-                            contentDescription = null,
-                            tint = NeonCyan,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = autoSendToastText ?: "",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                    }
-                }
-            }
-
-            // Real-Time Multi-Code Sum / Aggregate Pill (When 2+ codes are detected with valid calculations)
-            AnimatedVisibility(
-                visible = multiCodeSum != null && !isRawModeActive && pinnedQr == null,
-                enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
-                exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .windowInsetsPadding(WindowInsets.statusBars)
-                    .padding(top = 70.dp)
-            ) {
-                Surface(
-                    color = Color(0xF2070D18),
-                    shape = RoundedCornerShape(20.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.2.dp, NeonCyan),
-                    shadowElevation = 10.dp,
-                    modifier = Modifier
-                        .clickable {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            val formattedSum = String.format(java.util.Locale("tr", "TR"), "%.2f", multiCodeSum)
-                            clipboardManager.setText(AnnotatedString(formattedSum))
-                            android.widget.Toast.makeText(context, "Görünümdeki toplam kopyalandı: $formattedSum", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                        .testTag("multi_code_sum_pill")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(20.dp)
-                                .clip(CircleShape)
-                                .background(NeonCyan.copy(alpha = 0.2f)),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clip(CircleShape)
+                                    .background(NeonCyan.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Functions,
+                                    contentDescription = null,
+                                    tint = NeonCyan,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Σ GÖRÜNÜMDE (${multiCodeItems.size} KOD):",
+                                color = OnDarkSurfaceVariant,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = String.format(java.util.Locale("tr", "TR"), "%.2f", multiCodeSum ?: 0.0),
+                                color = NeonCyan,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontFamily = AppMonoFontFamily
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
                             Icon(
-                                imageVector = Icons.Default.Functions,
-                                contentDescription = null,
-                                tint = NeonCyan,
-                                modifier = Modifier.size(14.dp)
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Toplamı Kopyala",
+                                tint = NeonCyan.copy(alpha = 0.65f),
+                                modifier = Modifier.size(13.dp)
                             )
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Σ GÖRÜNÜMDE (${multiCodeItems.size} KOD):",
-                            color = OnDarkSurfaceVariant,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = String.format(java.util.Locale("tr", "TR"), "%.2f", multiCodeSum),
-                            color = NeonCyan,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Icon(
-                            imageVector = Icons.Default.ContentCopy,
-                            contentDescription = "Toplamı Kopyala",
-                            tint = NeonCyan.copy(alpha = 0.65f),
-                            modifier = Modifier.size(13.dp)
-                        )
                     }
                 }
-            }
 
-            // Auto-switched Profile Notification Banner (Hidden during raw QR mode)
-            AnimatedVisibility(
-                visible = autoSwitchedProfileName != null && !isRawModeActive,
-                enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
-                exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .windowInsetsPadding(WindowInsets.statusBars)
-                    .padding(top = if (multiCodeSum != null) 115.dp else 70.dp)
-            ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(20.dp),
-                    shadowElevation = 8.dp
+                // 2. Real-Time Bluetooth Auto-Send Keystroke Notification Pill
+                AnimatedVisibility(
+                    visible = autoSendToastText != null && !isRawModeActive,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { -it })
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        color = Color(0xF2062822),
+                        shape = RoundedCornerShape(20.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.2.dp, NeonCyan),
+                        shadowElevation = 10.dp
                     ) {
-                        Icon(
-                            Icons.Default.Bolt,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "'$autoSwitchedProfileName' profiline otomatik geçildi${if (autoSwitchedSignal.isNotBlank()) " ($autoSwitchedSignal)" else ""}",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Keyboard,
+                                contentDescription = null,
+                                tint = NeonCyan,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = autoSendToastText ?: "",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+
+                // 3. Auto-switched Profile Notification Banner
+                AnimatedVisibility(
+                    visible = autoSwitchedProfileName != null && !isRawModeActive,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { -it })
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(20.dp),
+                        shadowElevation = 8.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Bolt,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "'$autoSwitchedProfileName' profiline otomatik geçildi${if (autoSwitchedSignal.isNotBlank()) " ($autoSwitchedSignal)" else ""}",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
                     }
                 }
             }
@@ -1387,7 +1437,7 @@ fun CameraScreen(
                                     text = "İletilecek: \"$payloadPreview\"",
                                     color = NeonCyan,
                                     fontSize = 12.sp,
-                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    fontFamily = AppMonoFontFamily,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 2,
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
@@ -2081,34 +2131,35 @@ fun TopHudBar(
                 }
             }
 
-            // Streamlined Essential Action Controls (Optimal 44dp touch spacing, zero clutter)
+            // Streamlined Essential Action Controls (48dp touch targets, zero clutter)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                horizontalArrangement = Arrangement.spacedBy(0.dp)
             ) {
-                // Torch
+                // Torch (disabled on front camera)
                 IconButton(
                     onClick = onToggleTorch,
-                    modifier = Modifier.size(44.dp)
+                    enabled = !isFrontCamera,
+                    modifier = Modifier.size(48.dp)
                 ) {
                     Icon(
-                        imageVector = if (isTorchEnabled) Icons.Default.FlashOn else Icons.Default.FlashOff,
+                        imageVector = if (isTorchEnabled && !isFrontCamera) Icons.Default.FlashOn else Icons.Default.FlashOff,
                         contentDescription = "Flaş Aç/Kapat",
-                        tint = if (isTorchEnabled) AmberGold else OnDarkSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
+                        tint = if (isTorchEnabled && !isFrontCamera) AmberGold else OnDarkSurfaceVariant.copy(alpha = if (isFrontCamera) 0.35f else 1f),
+                        modifier = Modifier.size(21.dp)
                     )
                 }
 
                 // Pause
                 IconButton(
                     onClick = onTogglePause,
-                    modifier = Modifier.size(44.dp)
+                    modifier = Modifier.size(48.dp)
                 ) {
                     Icon(
                         imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
                         contentDescription = "Taramayı Duraklat/Devam Ettir",
                         tint = if (isPaused) AmberGold else OnDarkSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(21.dp)
                     )
                 }
 
@@ -2116,30 +2167,30 @@ fun TopHudBar(
                 IconButton(
                     onClick = onToggleCustomerMode,
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(48.dp)
                         .testTag("customer_mode_toggle_btn")
                 ) {
                     Icon(
                         imageVector = if (isCustomerMode) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                         contentDescription = if (isCustomerMode) "Müşteri Fiyat Modu Açık" else "Müşteri Fiyat Moduna Geç",
                         tint = if (isCustomerMode) NeonCyan else OnDarkSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(21.dp)
                     )
                 }
 
-                // More Options Menu
+                // Focused Overflow Menu (Secondary tools not duplicated on Bottom Dock)
                 Box {
                     IconButton(
                         onClick = { expandedMoreMenu = true },
                         modifier = Modifier
-                            .size(44.dp)
+                            .size(48.dp)
                             .testTag("top_hud_more_menu_btn")
                     ) {
                         Icon(
                             imageVector = Icons.Default.MoreVert,
                             contentDescription = "Daha Fazla Seçenek",
                             tint = OnDarkSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(21.dp)
                         )
                     }
 
@@ -2148,33 +2199,6 @@ fun TopHudBar(
                         onDismissRequest = { expandedMoreMenu = false },
                         modifier = Modifier.background(DarkSurfaceVariant)
                     ) {
-                        DropdownMenuItem(
-                            text = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.Keyboard,
-                                        contentDescription = null,
-                                        tint = if (isBluetoothConnected) NeonCyan else if (isAutoSendEnabled) CyberLime else AmberGold,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column {
-                                        Text("Bluetooth & Telefon İçi Klavye", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
-                                        Text(
-                                            if (isBluetoothConnected) "Bilgisayara bağlı • ${if (isAutoSendEnabled) "Oto AÇIK" else "Hazır"}"
-                                            else "PC veya Chrome formuna gönder",
-                                            fontSize = 11.sp,
-                                            color = OnDarkSurfaceVariant
-                                        )
-                                    }
-                                }
-                            },
-                            onClick = {
-                                expandedMoreMenu = false
-                                onOpenBluetooth()
-                            }
-                        )
-
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2203,17 +2227,15 @@ fun TopHudBar(
                                     Icon(
                                         imageVector = Icons.Default.FlipCameraAndroid,
                                         contentDescription = null,
-                                        tint = OnDarkSurfaceVariant,
+                                        tint = NeonCyan,
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
-                                    Column {
-                                        Text(
-                                            text = if (isFrontCamera) "Arka Kameraya Geç" else "Ön Kameraya Geç",
-                                            color = OnDarkSurface,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
+                                    Text(
+                                        text = if (isFrontCamera) "Arka Kameraya Geç" else "Ön Kameraya Geç",
+                                        color = OnDarkSurface,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
                                 }
                             },
                             onClick = {
@@ -2248,49 +2270,7 @@ fun TopHudBar(
                             }
                         )
 
-                        DropdownMenuItem(
-                            text = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.History,
-                                        contentDescription = null,
-                                        tint = NeonCyan,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column {
-                                        Text("Tarama Geçmişi & CSV", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
-                                        Text("Oturum kayıtlarını görüntüle", fontSize = 11.sp, color = OnDarkSurfaceVariant)
-                                    }
-                                }
-                            },
-                            onClick = {
-                                expandedMoreMenu = false
-                                onOpenHistory()
-                            }
-                        )
-
-                        DropdownMenuItem(
-                            text = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.QrCodeScanner,
-                                        contentDescription = null,
-                                        tint = ElectricIndigo,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column {
-                                        Text("Barkod Formatları", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
-                                        Text("2D, 3D ve 1D tarayıcı seçenekleri", fontSize = 11.sp, color = OnDarkSurfaceVariant)
-                                    }
-                                }
-                            },
-                            onClick = {
-                                expandedMoreMenu = false
-                                onOpenBarcodeOptions()
-                            }
-                        )
+                        HorizontalDivider(color = DarkCardBorder)
 
                         DropdownMenuItem(
                             text = {
@@ -2298,40 +2278,19 @@ fun TopHudBar(
                                     Icon(
                                         imageVector = Icons.Default.Science,
                                         contentDescription = null,
-                                        tint = NeonCyan,
+                                        tint = ElectricIndigo,
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
                                         Text("AR Kod Simülatörü (Test)", color = OnDarkSurface, fontWeight = FontWeight.SemiBold)
-                                        Text("Sanal barkod test et", fontSize = 11.sp, color = OnDarkSurfaceVariant)
+                                        Text("Sanal barkod enjekte et", fontSize = 11.sp, color = OnDarkSurfaceVariant)
                                     }
                                 }
                             },
                             onClick = {
                                 expandedMoreMenu = false
                                 onOpenSimulation()
-                            }
-                        )
-
-                        HorizontalDivider(color = DarkCardBorder)
-
-                        DropdownMenuItem(
-                            text = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.Settings,
-                                        contentDescription = null,
-                                        tint = NeonCyan,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Text("Tüm Ayarlar", color = OnDarkSurface, fontWeight = FontWeight.Medium)
-                                }
-                            },
-                            onClick = {
-                                expandedMoreMenu = false
-                                onOpenSettings()
                             }
                         )
                     }

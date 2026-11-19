@@ -191,6 +191,8 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
     private var statusClearRunnable: Runnable? = null
     private var backspaceRepeatRunnable: Runnable? = null
+    private var lastLoggedBottomInset: Int = -1
+    private var lastDisconnectedTouchToastMs: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -728,6 +730,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             var downX = 0f
             var downY = 0f
             var maxPointers = 0
+            var didMultiTouchScroll = false
 
             val gestureSurface = View(context).apply {
                 layoutParams = FrameLayout.LayoutParams(
@@ -743,6 +746,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                             downY = event.y
                             downTime = System.currentTimeMillis()
                             maxPointers = 1
+                            didMultiTouchScroll = false
                             accumDx = 0f
                             accumDy = 0f
                             accumWheel = 0f
@@ -751,23 +755,42 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                         MotionEvent.ACTION_POINTER_DOWN -> {
                             maxPointers = maxOf(maxPointers, event.pointerCount)
                             if (event.pointerCount >= 2) {
-                                lastY = event.getY(0)
+                                lastY = (event.getY(0) + event.getY(1)) * 0.5f
+                            }
+                            true
+                        }
+                        MotionEvent.ACTION_POINTER_UP -> {
+                            // Re-anchor remaining finger so lifting 1 finger never causes a cursor jump
+                            val liftedIdx = event.actionIndex
+                            val remainIdx = if (liftedIdx == 0 && event.pointerCount > 1) 1 else 0
+                            if (remainIdx < event.pointerCount) {
+                                lastX = event.getX(remainIdx)
+                                lastY = event.getY(remainIdx)
                             }
                             true
                         }
                         MotionEvent.ACTION_MOVE -> {
+                            if (!hidManager.isHidHostConnected()) {
+                                val nowMs = System.currentTimeMillis()
+                                if (nowMs - lastDisconnectedTouchToastMs > 2000L) {
+                                    lastDisconnectedTouchToastMs = nowMs
+                                    showStatusToast("PC Bluetooth bağlı değil")
+                                }
+                                return@setOnTouchListener true
+                            }
                             if (event.pointerCount >= 2) {
                                 // Two-finger vertical scroll
-                                val curY = event.getY(0)
+                                val curY = (event.getY(0) + event.getY(1)) * 0.5f
                                 val dy = curY - lastY
                                 lastY = curY
+                                if (kotlin.math.abs(dy) > 1.5f) didMultiTouchScroll = true
                                 accumWheel -= dy / dp(14)
                                 val stepW = accumWheel.toInt()
                                 if (stepW != 0) {
                                     accumWheel -= stepW
                                     hidManager.sendMouseMove(0, 0, wheel = stepW.coerceIn(-12, 12))
                                 }
-                            } else {
+                            } else if (!didMultiTouchScroll) {
                                 val dx = event.x - lastX
                                 val dy = event.y - lastY
                                 lastX = event.x
@@ -789,7 +812,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                         MotionEvent.ACTION_UP -> {
                             val dt = System.currentTimeMillis() - downTime
                             val moved = kotlin.math.hypot(event.x - downX, event.y - downY)
-                            if (dt < 230L && moved < dp(12)) {
+                            if (!didMultiTouchScroll && dt < 230L && moved < dp(12)) {
                                 if (!hidManager.isHidHostConnected()) {
                                     showStatusToast("PC Bluetooth bağlı değil")
                                 } else if (maxPointers >= 2) {
@@ -798,6 +821,11 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                                     hidManager.sendMouseClick(BluetoothHidManager.MOUSE_BTN_LEFT)
                                 }
                             }
+                            didMultiTouchScroll = false
+                            true
+                        }
+                        MotionEvent.ACTION_CANCEL -> {
+                            didMultiTouchScroll = false
                             true
                         }
                         else -> false
@@ -837,7 +865,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 text = "✈ Air Mouse: Kapalı"
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
                 setTypeface(null, Typeface.BOLD)
-                setPadding(dp(10), dp(5), dp(10), dp(5))
+                setPadding(dp(12), dp(8), dp(12), dp(8))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
@@ -858,7 +886,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 text = "🎯 Tut & Oynat"
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
                 setTypeface(null, Typeface.BOLD)
-                setPadding(dp(10), dp(5), dp(10), dp(5))
+                setPadding(dp(12), dp(8), dp(12), dp(8))
                 setOnTouchListener { _, ev ->
                     when (ev.action) {
                         MotionEvent.ACTION_DOWN -> {
@@ -1862,6 +1890,10 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         attachDecorInsetsListener()
         syncImeBottomInset(null)
         rootLayout?.post { syncImeBottomInset(null) }
+        serviceScope.launch {
+            profileRepository.reloadFromDisk()
+            updateModeChipLabel(profileRepository.activeProfile.value)
+        }
         hidManager.refreshState()
         refreshTargetStyles()
         updateTouchpadStatusHint()
@@ -1893,6 +1925,8 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
     override fun onDestroy() {
         stopBackspaceRepeat()
+        statusClearRunnable?.let { mainHandler.removeCallbacks(it) }
+        statusClearRunnable = null
         airMouseController.stop()
         hidManager.releaseAllMouseButtons()
         stopCamera()
@@ -1911,9 +1945,9 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
     private fun attachDecorInsetsListener() {
         val decor = window?.window?.decorView ?: return
-        ViewCompat.setOnApplyWindowInsetsListener(decor) { _, insets ->
+        ViewCompat.setOnApplyWindowInsetsListener(decor) { view, insets ->
             syncImeBottomInset(insets)
-            insets
+            ViewCompat.onApplyWindowInsets(view, insets)
         }
         ViewCompat.requestApplyInsets(decor)
     }
@@ -1945,6 +1979,13 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             p = p.parent
         }
         val extraNeeded = (reportedBottom - ancestorPadBottom).coerceAtLeast(0)
+        if (extraNeeded != lastLoggedBottomInset) {
+            lastLoggedBottomInset = extraNeeded
+            AppDebugLogger.d(
+                "IME-INSET",
+                "Alt boşluk güncellendi: reported=${reportedBottom}px ancestorPad=${ancestorPadBottom}px extra=${extraNeeded}px"
+            )
+        }
         root.updateBottomInset(extraNeeded)
     }
 
@@ -2113,6 +2154,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
     private fun commitPayloadToTarget(raw: String, payload: String, profile: QrProfile) {
         if (outputTarget == OutputTarget.BLUETOOTH) {
             if (!hidManager.isHidHostConnected()) {
+                activeInFrameRaw.remove(raw)
                 showStatusToast("PC Bluetooth bağlı değil — Yerel seçin")
                 return
             }
@@ -2134,6 +2176,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                     val preview = payload.replace("\t", " ⇥ ")
                     showStatusToast("✓ BT (#$newCount): $preview")
                 } else {
+                    mainHandler.post { activeInFrameRaw.remove(raw) }
                     showStatusToast("⚠ BT gönderim hatası")
                 }
             }

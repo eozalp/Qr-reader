@@ -49,10 +49,10 @@ fun OverlayAppearanceSection(
         )
     }
 
+    val navBottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp + navBottomPadding),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // Live Real-Time Interactive Preview
@@ -460,7 +460,12 @@ fun OverlayAppearanceSection(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OverlayFillMode.entries.forEach { mode ->
-                    val label = mode.name.replace("_", " ").lowercase().replaceFirstChar { it.uppercase() }
+                    val label = when (mode) {
+                        OverlayFillMode.FILLED_SOLID -> "Düz Dolgu"
+                        OverlayFillMode.FILLED_GRADIENT -> "Gradyan"
+                        OverlayFillMode.OUTLINE_ONLY -> "Sadece Çerçeve"
+                        OverlayFillMode.SEMI_TRANSPARENT -> "Yarı Saydam"
+                    }
                     FilterChip(
                         selected = overlay.fillMode == mode,
                         onClick = { onOverlayChanged(overlay.copy(fillMode = mode)) },
@@ -494,7 +499,7 @@ fun OverlayAppearanceSection(
                     val color = parseHexColor(hex)
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(44.dp)
                             .clip(CircleShape)
                             .background(color)
                             .border(
@@ -513,7 +518,7 @@ fun OverlayAppearanceSection(
                         contentAlignment = Alignment.Center
                     ) {
                         if (overlay.textColorHex.equals(hex, ignoreCase = true)) {
-                            Icon(Icons.Default.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Check, contentDescription = "Seçili renk", tint = Color.Black, modifier = Modifier.size(20.dp))
                         }
                     }
                 }
@@ -652,11 +657,19 @@ fun OverlayAppearanceSection(
                     .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                listOf("calculator", "tag", "qr", "sparkle", "check", "star", "none").forEach { iconKey ->
+                listOf(
+                    "calculator" to "Hesap",
+                    "tag" to "Etiket",
+                    "qr" to "QR",
+                    "sparkle" to "Parıltı",
+                    "check" to "Onay",
+                    "star" to "Yıldız",
+                    "none" to "Yok"
+                ).forEach { (iconKey, iconLabel) ->
                     FilterChip(
                         selected = overlay.iconName == iconKey,
                         onClick = { onOverlayChanged(overlay.copy(iconName = iconKey)) },
-                        label = { Text(iconKey.replaceFirstChar { it.uppercase() }) }
+                        label = { Text(iconLabel) }
                     )
                 }
             }

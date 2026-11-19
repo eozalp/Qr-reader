@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -22,7 +23,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.bluetooth.BluetoothHidManager
 import com.example.data.ProfileRepository
+import com.example.debug.AppDebugLogger
+import com.example.debug.DebugLogLevel
 import com.example.model.QrProfile
 
 enum class SettingsTab(val title: String, val icon: ImageVector) {
@@ -40,6 +44,8 @@ enum class SettingsTab(val title: String, val icon: ImageVector) {
 fun SettingsScreen(
     profileRepository: ProfileRepository,
     attachmentRepository: com.example.data.AttachmentRepository? = null,
+    hidManager: BluetoothHidManager? = null,
+    onRequestBluetoothPermission: (() -> Unit)? = null,
     onNavigateBack: () -> Unit,
     onOpenRemoteControl: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -50,6 +56,12 @@ fun SettingsScreen(
     }
 
     val activeProfile by profileRepository.activeProfile.collectAsState()
+    val debugLogs by AppDebugLogger.logs.collectAsState()
+    val lastCrashReport by AppDebugLogger.lastCrashReport.collectAsState()
+    val debugErrorCount = remember(debugLogs, lastCrashReport) {
+        debugLogs.count { it.level.severity >= DebugLogLevel.ERROR.severity } +
+            if (!lastCrashReport.isNullOrBlank()) 1 else 0
+    }
     var selectedTab by remember { mutableStateOf(SettingsTab.VARIABLES) }
 
     Scaffold(
@@ -102,7 +114,7 @@ fun SettingsScreen(
                     )
                 )
 
-                // Expressive Segmented Capsule Tab Control
+                // Expressive Segmented Capsule Tab Control (48dp min touch target)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -113,20 +125,26 @@ fun SettingsScreen(
                 ) {
                     SettingsTab.entries.forEach { tab ->
                         val isSelected = selectedTab == tab
+                        val showDebugBadge = tab == SettingsTab.DEBUG && debugErrorCount > 0
                         Surface(
-                            shape = RoundedCornerShape(20.dp),
+                            shape = RoundedCornerShape(24.dp),
                             color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
                             border = BorderStroke(
                                 width = 1.dp,
-                                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent
+                                color = when {
+                                    isSelected -> MaterialTheme.colorScheme.primary
+                                    showDebugBadge -> Color(0xFFEF4444).copy(alpha = 0.55f)
+                                    else -> Color.Transparent
+                                }
                             ),
                             modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
+                                .heightIn(min = 48.dp)
+                                .clip(RoundedCornerShape(24.dp))
                                 .clickable { selectedTab = tab }
                                 .testTag("tab_${tab.name.lowercase()}")
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
@@ -143,6 +161,14 @@ fun SettingsScreen(
                                     fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
                                     color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                if (showDebugBadge) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFFEF4444))
+                                    )
+                                }
                             }
                         }
                     }
@@ -196,6 +222,8 @@ fun SettingsScreen(
                             profileRepository.saveProfile(activeProfile.copy(bluetoothKeyboard = updatedKb))
                         },
                         availableVariables = activeProfile.parsingRules.variables,
+                        hidManager = hidManager,
+                        onRequestBluetoothPermission = onRequestBluetoothPermission,
                         onOpenRemoteControl = onOpenRemoteControl
                     )
                 }
@@ -223,7 +251,7 @@ fun SettingsScreen(
                     )
                 }
                 SettingsTab.DEBUG -> {
-                    DebugConsoleSection()
+                    DebugConsoleSection(hidManager = hidManager)
                 }
             }
         }

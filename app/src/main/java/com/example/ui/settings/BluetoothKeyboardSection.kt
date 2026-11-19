@@ -28,6 +28,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.bluetooth.BluetoothHidManager
 import com.example.bluetooth.HidConnectionStatus
 import com.example.debug.AppDebugLogger
@@ -68,11 +71,22 @@ fun BluetoothKeyboardSection(
     val batchSentMap by manager.batchSentMap.collectAsState()
     val telemetry by manager.telemetry.collectAsState()
 
-    val isLocalImeEnabled = remember(context) {
-        runCatching {
-            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-            imm?.enabledInputMethodList?.any { it.packageName == context.packageName } == true
-        }.getOrDefault(false)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    fun checkImeEnabled(): Boolean = runCatching {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.enabledInputMethodList?.any { it.packageName == context.packageName } == true
+    }.getOrDefault(false)
+
+    var isLocalImeEnabled by remember(context) { mutableStateOf(checkImeEnabled()) }
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                isLocalImeEnabled = checkImeEnabled()
+                manager.refreshState()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     var testInputText by remember { mutableStateOf("ALVETAK-PC-TEST") }
@@ -81,7 +95,11 @@ fun BluetoothKeyboardSection(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(horizontal = 16.dp),
+        contentPadding = PaddingValues(
+            top = 16.dp,
+            bottom = 24.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        ),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // 1. Overview & Bluetooth Status Card
@@ -146,23 +164,23 @@ fun BluetoothKeyboardSection(
                         if (connectionStatus == HidConnectionStatus.CONNECTED) {
                             OutlinedButton(
                                 onClick = { manager.disconnectDevice() },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                modifier = Modifier.height(30.dp)
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                modifier = Modifier.heightIn(min = 40.dp)
                             ) {
-                                Text("Bağlantıyı Kes", fontSize = 11.sp, color = Color(0xFFEF4444))
+                                Text("Bağlantıyı Kes", fontSize = 11.5.sp, color = Color(0xFFEF4444))
                             }
                         } else if (connectionStatus == HidConnectionStatus.PERMISSION_REQUIRED) {
                             Button(
                                 onClick = { onRequestBluetoothPermission?.invoke() },
                                 colors = ButtonDefaults.buttonColors(containerColor = NeonCyan, contentColor = Color(0xFF00382E)),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                                modifier = Modifier.height(30.dp)
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                                modifier = Modifier.heightIn(min = 42.dp)
                             ) {
-                                Text("İzin Ver", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("İzin Ver", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         } else {
-                            IconButton(onClick = { manager.refreshState() }, modifier = Modifier.size(28.dp)) {
-                                Icon(Icons.Default.Refresh, contentDescription = "Yenile", tint = NeonCyan, modifier = Modifier.size(16.dp))
+                            IconButton(onClick = { manager.refreshState() }, modifier = Modifier.size(48.dp)) {
+                                Icon(Icons.Default.Refresh, contentDescription = "Yenile", tint = NeonCyan, modifier = Modifier.size(20.dp))
                             }
                         }
                     }

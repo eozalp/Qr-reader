@@ -83,10 +83,10 @@ fun ParsingSettingsSection(
         }
     }
 
+    val navBottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp + navBottomPadding),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // --- 1. Real-Time QR Live Simulator Card ---
@@ -558,7 +558,15 @@ fun ParsingSettingsSection(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 AppRoundingMode.entries.forEach { mode ->
-                                    val cleanLabel = mode.name.replace("_", " ").lowercase().replaceFirstChar { it.uppercase() }
+                                    val cleanLabel = when (mode) {
+                                        AppRoundingMode.NO_ROUNDING -> "Yuvarlama Yok"
+                                        AppRoundingMode.ROUND_HALF_UP -> "Yukarı (0.5)"
+                                        AppRoundingMode.ROUND_HALF_DOWN -> "Aşağı (0.5)"
+                                        AppRoundingMode.ROUND_HALF_EVEN -> "Çift (Bankacı)"
+                                        AppRoundingMode.CEILING -> "Tavan"
+                                        AppRoundingMode.FLOOR -> "Taban"
+                                        AppRoundingMode.TRUNCATE -> "Kesme"
+                                    }
                                     FilterChip(
                                         selected = formatting.roundingMode == mode,
                                         onClick = { onFormattingChanged(formatting.copy(roundingMode = mode)) },

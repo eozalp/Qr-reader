@@ -331,7 +331,7 @@ fun RemoteControlScreen(
                             ),
                             modifier = Modifier
                                 .weight(1f)
-                                .height(42.dp)
+                                .height(48.dp)
                                 .clip(RoundedCornerShape(16.dp))
                                 .clickable { selectedTab = tab }
                                 .testTag("remote_tab_${tab.name.lowercase()}")
@@ -1015,6 +1015,7 @@ private fun PrecisionTouchpadWithScroll(
                         var lastMultiY = firstDown.position.y
                         var maxPointers = 1
                         var movedPastSlop = false
+                        var didTwoFingerScroll = false
                         accumDx = 0f
                         accumDy = 0f
                         accumWheel = 0f
@@ -1027,7 +1028,7 @@ private fun PrecisionTouchpadWithScroll(
                             if (activeChanges.isEmpty()) {
                                 // Gesture lifted
                                 val dt = System.currentTimeMillis() - startTime
-                                if (!movedPastSlop && dt < 240L) {
+                                if (!movedPastSlop && !didTwoFingerScroll && dt < 240L) {
                                     if (!hidManager.isHidHostConnected()) {
                                         onDisconnectedTap()
                                     } else if (maxPointers >= 2) {
@@ -1047,7 +1048,12 @@ private fun PrecisionTouchpadWithScroll(
                                 break
                             }
 
-                            if (event.type == PointerEventType.Move) {
+                            if (event.type == PointerEventType.Release && activeChanges.size == 1) {
+                                // Re-anchor remaining pointer to prevent cursor jump when lifting 1 finger
+                                val remaining = activeChanges.first().position
+                                lastSinglePos = remaining
+                                lastMultiY = remaining.y
+                            } else if (event.type == PointerEventType.Move) {
                                 if (!hidManager.isHidHostConnected()) {
                                     onDisconnectedTap()
                                 }
@@ -1056,7 +1062,10 @@ private fun PrecisionTouchpadWithScroll(
                                     val avgY = activeChanges.map { it.position.y }.average().toFloat()
                                     val dy = avgY - lastMultiY
                                     lastMultiY = avgY
-                                    if (kotlin.math.abs(dy) > 1.5f) movedPastSlop = true
+                                    if (kotlin.math.abs(dy) > 1.5f) {
+                                        movedPastSlop = true
+                                        didTwoFingerScroll = true
+                                    }
                                     accumWheel -= dy / scrollStepPx
                                     val steps = accumWheel.toInt()
                                     if (steps != 0) {
@@ -1064,7 +1073,7 @@ private fun PrecisionTouchpadWithScroll(
                                         hidManager.sendMouseMove(0, 0, wheel = steps.coerceIn(-12, 12))
                                     }
                                     activeChanges.forEach { it.consume() }
-                                } else {
+                                } else if (!didTwoFingerScroll) {
                                     val cur = activeChanges.first().position
                                     if (hypot(cur.x - startPos.x, cur.y - startPos.y) > tapSlopPx) {
                                         movedPastSlop = true
@@ -1133,6 +1142,10 @@ private fun PrecisionTouchpadWithScroll(
                         onDragCancel = { scrollAccum = 0f }
                     ) { change, dragAmount ->
                         change.consume()
+                        if (!hidManager.isHidHostConnected()) {
+                            onDisconnectedTap()
+                            return@detectVerticalDragGestures
+                        }
                         scrollAccum -= dragAmount / scrollStepPx
                         val steps = scrollAccum.toInt()
                         if (steps != 0) {
@@ -1152,7 +1165,7 @@ private fun PrecisionTouchpadWithScroll(
                     .padding(vertical = 18.dp)
             ) {
                 Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Yukarı Kaydır", tint = NeonCyan, modifier = Modifier.size(20.dp))
-                Text("SCROLL", fontSize = 9.sp, color = Color(0xFF64748B), fontWeight = FontWeight.Bold)
+                Text("KAYDIR", fontSize = 8.5.sp, color = Color(0xFF64748B), fontWeight = FontWeight.Bold)
                 Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Aşağı Kaydır", tint = NeonCyan, modifier = Modifier.size(20.dp))
             }
         }

@@ -121,6 +121,7 @@ class BluetoothHidManager(private val context: Context? = null) {
     private var pendingConnectAddress: String? = null
     @Volatile
     private var autoReconnectAttempted: Boolean = false
+    private val autoRegisterRetryPending = AtomicBoolean(false)
     @Volatile
     private var connectedAtMs: Long = 0L
     @Volatile
@@ -381,7 +382,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                 )
 
                 var started = false
-                var tierUsed = qosTierIndex.coerceIn(0, 2)
+                val tierUsed = qosTierIndex.coerceIn(0, 2)
                 for (tier in tierUsed..2) {
                     val (inQos, outQos, tierLabel) = buildQosTier(tier)
                     qosTierIndex = tier
@@ -392,7 +393,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                         isIntentionalUnregister = true
                         runCatching { hid.unregisterApp() }
                             .onFailure { AppDebugLogger.w("BT-HID", "unregisterApp ön temizleme hatası", it) }
-                        sleepQuietly(160L)
+                        sleepQuietly(360L)
                         isIntentionalUnregister = false
                         attemptOk = hid.registerApp(sdp, inQos, outQos, callbackExecutor, hidCallback)
                         AppDebugLogger.i("BT-HID", "registerApp tekrar deneme tier=$tier sonuç=$attemptOk")
@@ -401,13 +402,27 @@ class BluetoothHidManager(private val context: Context? = null) {
                         started = true
                         break
                     }
+                    if (tier < 2) sleepQuietly(120L)
                 }
 
                 if (!started) {
                     isRegistering = false
-                    AppDebugLogger.e("BT-HID", "HID profili hiçbir QoS katmanında kaydedilemedi")
+                    AppDebugLogger.e("BT-HID", "HID profili hiçbir QoS katmanında kaydedilemedi (1.5s sonra tekrar denenecek)")
                     _connectionDiagnostic.value =
                         "HID profili kaydedilemedi. Başka bir BT klavye uygulaması açıksa kapatın veya Bluetooth'u kapatıp açın."
+                    if (!autoRegisterRetryPending.getAndSet(true)) {
+                        callbackExecutor.execute {
+                            sleepQuietly(1500L)
+                            autoRegisterRetryPending.set(false)
+                            val activeProxy = hidDeviceProfile
+                            if (!isAppRegistered && !isRegistering && activeProxy != null && bluetoothAdapter?.isEnabled == true) {
+                                qosTierIndex = 0
+                                registerHidApp(activeProxy)
+                            }
+                        }
+                    }
+                } else {
+                    autoRegisterRetryPending.set(false)
                 }
             } catch (e: Exception) {
                 isRegistering = false
@@ -661,7 +676,6 @@ class BluetoothHidManager(private val context: Context? = null) {
             if (!isAutoReconnect) {
                 _connectionDiagnostic.value = "$name cihazına bağlanılıyor..."
             }
-            context?.let { BluetoothHidForegroundService.startOrUpdate(it, name) }
 
             // Disconnect any previous host first
             connectedHostDevice?.let { prev ->
@@ -673,7 +687,6 @@ class BluetoothHidManager(private val context: Context? = null) {
             val initiated = hid.connect(device)
             AppDebugLogger.i("BT-HID", "hid.connect(${device.address}) initiated=$initiated auto=$isAutoReconnect")
             if (!initiated) {
-                context?.let { BluetoothHidForegroundService.stop(it) }
                 _connectionStatus.value = HidConnectionStatus.DISCONNECTED
                 _connectionDiagnostic.value = if (isAutoReconnect) {
                     null
@@ -1884,9 +1897,9 @@ class BluetoothHidManager(private val context: Context? = null) {
             0x05.toByte(), 0x01.toByte(), // Usage Page (Generic Desktop)
             0x09.toByte(), 0x02.toByte(), // Usage (Mouse)
             0xA1.toByte(), 0x01.toByte(), // Collection (Application)
+            0x85.toByte(), 0x02.toByte(), //   Report ID (2)
             0x09.toByte(), 0x01.toByte(), //   Usage (Pointer)
             0xA1.toByte(), 0x00.toByte(), //   Collection (Physical)
-            0x85.toByte(), 0x02.toByte(), //     Report ID (2)
             0x05.toByte(), 0x09.toByte(), //     Usage Page (Button)
             0x19.toByte(), 0x01.toByte(), //     Usage Minimum (Button 1 - Left)
             0x29.toByte(), 0x03.toByte(), //     Usage Maximum (Button 3 - Middle)

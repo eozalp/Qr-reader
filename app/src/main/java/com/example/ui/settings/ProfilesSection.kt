@@ -37,12 +37,11 @@ import com.example.data.AttachmentRepository
 import com.example.data.BackupTransferManager
 import com.example.data.ImportPreviewData
 import com.example.data.ProfileRepository
+import com.example.debug.AppDebugLogger
 import com.example.engine.QrCodeGenerator
 import com.example.engine.QrParser
 import com.example.model.QrAttachment
 import com.example.model.QrProfile
-import java.io.BufferedReader
-import java.io.InputStreamReader
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,9 +97,10 @@ fun ProfilesSection(
                 context.contentResolver.openOutputStream(uri)?.use { outputStream ->
                     outputStream.write(pendingExportJson.toByteArray(Charsets.UTF_8))
                 }
-                Toast.makeText(context, "Exported file successfully!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Dosya başarıyla dışa aktarıldı!", Toast.LENGTH_SHORT).show()
             }.onFailure { e ->
-                Toast.makeText(context, "Failed to save file: ${e.message}", Toast.LENGTH_LONG).show()
+                AppDebugLogger.e("PROFILE", "JSON dışa aktarım hatası", e)
+                Toast.makeText(context, "Dosya kaydedilemedi: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -119,9 +119,10 @@ fun ProfilesSection(
                         includeMedia = exportIncludeMedia
                     )
                 }
-                Toast.makeText(context, "Exported ZIP archive successfully!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "ZIP arşivi başarıyla dışa aktarıldı!", Toast.LENGTH_SHORT).show()
             }.onFailure { e ->
-                Toast.makeText(context, "Failed to save ZIP: ${e.message}", Toast.LENGTH_LONG).show()
+                AppDebugLogger.e("PROFILE", "ZIP dışa aktarım hatası", e)
+                Toast.makeText(context, "ZIP kaydedilemedi: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -138,39 +139,46 @@ fun ProfilesSection(
                     selectedImportProfileIds = preview.profiles.map { it.id }.toSet()
                     importIncludeMedia = preview.hasMedia
                 } else {
-                    Toast.makeText(context, "No valid profiles found in file", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "Dosyada geçerli profil bulunamadı", Toast.LENGTH_LONG).show()
                 }
             }.onFailure { e ->
-                Toast.makeText(context, "Failed to read file: ${e.message}", Toast.LENGTH_LONG).show()
+                AppDebugLogger.e("PROFILE", "Dosya içe aktarım hatası", e)
+                Toast.makeText(context, "Dosya okunamadı: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
 
     fun shareProfileText(title: String, json: String) {
-        val sendIntent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, title)
-            putExtra(Intent.EXTRA_TEXT, json)
+        runCatching {
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, title)
+                putExtra(Intent.EXTRA_TEXT, json)
+            }
+            val shareIntent = Intent.createChooser(sendIntent, "Profili Paylaş")
+            context.startActivity(shareIntent)
+        }.onFailure { e ->
+            AppDebugLogger.e("SHARE", "Profil paylaşım intent hatası", e)
+            clipboardManager.setText(AnnotatedString(json))
+            Toast.makeText(context, "Paylaşım uygulaması bulunamadı, panoya kopyalandı", Toast.LENGTH_SHORT).show()
         }
-        val shareIntent = Intent.createChooser(sendIntent, "Share Profile via")
-        context.startActivity(shareIntent)
     }
 
+    val navBottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp + navBottomPadding),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
             Text(
-                text = "Configuration Profiles & Presets",
+                text = "Yapılandırma Profilleri & Ön Ayarlar",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Manage, export, import, or beam profiles between phones via QR codes or file sharing. Auto-switch triggers allow codes to pick their own profile.",
+                text = "Profilleri yönetin, dışa/içe aktarın veya QR kod ile başka telefonlara anında aktarın. Otomatik geçiş sinyalleri barkodun kendi profilini seçmesini sağlar.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -196,7 +204,7 @@ fun ProfilesSection(
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Create New Profile", fontWeight = FontWeight.SemiBold)
+                        Text("Yeni Profil Oluştur", fontWeight = FontWeight.SemiBold)
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -217,7 +225,7 @@ fun ProfilesSection(
                         ) {
                             Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Export", maxLines = 1, softWrap = false)
+                            Text("Dışa Aktar", maxLines = 1, softWrap = false)
                         }
 
                         FilledTonalButton(
@@ -228,7 +236,7 @@ fun ProfilesSection(
                         ) {
                             Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Import", maxLines = 1, softWrap = false)
+                            Text("İçe Aktar", maxLines = 1, softWrap = false)
                         }
                     }
                 }
@@ -268,7 +276,7 @@ fun ProfilesSection(
                                             .padding(horizontal = 6.dp, vertical = 2.dp)
                                     ) {
                                         Text(
-                                            text = "ACTIVE",
+                                            text = "AKTİF",
                                             color = MaterialTheme.colorScheme.onPrimary,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold
@@ -290,7 +298,7 @@ fun ProfilesSection(
                                 onClick = { profileRepository.selectProfile(profile.id) },
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                             ) {
-                                Text("Activate")
+                                Text("Seç")
                             }
                         }
                     }
@@ -306,11 +314,11 @@ fun ProfilesSection(
                     ) {
                         AssistChip(
                             onClick = {},
-                            label = { Text("Delim: '${profile.parsingRules.effectiveDelimiter}'", fontSize = 11.sp) }
+                            label = { Text("Ayırıcı: '${profile.parsingRules.effectiveDelimiter}'", fontSize = 11.sp) }
                         )
                         AssistChip(
                             onClick = {},
-                            label = { Text("Formula: ${profile.formula.expression}", fontSize = 11.sp) }
+                            label = { Text("Formül: ${profile.formula.expression}", fontSize = 11.sp) }
                         )
 
                         // Trigger Signal Chip (clickable to edit)
@@ -328,7 +336,7 @@ fun ProfilesSection(
                             },
                             label = {
                                 Text(
-                                    text = if (profile.triggerSignal.isNotBlank()) "Signal: '${profile.triggerSignal}'" else "+ Add Signal",
+                                    text = if (profile.triggerSignal.isNotBlank()) "Sinyal: '${profile.triggerSignal}'" else "+ Sinyal Ekle",
                                     fontSize = 11.sp,
                                     fontWeight = if (profile.triggerSignal.isNotBlank()) FontWeight.SemiBold else FontWeight.Normal
                                 )
@@ -350,7 +358,7 @@ fun ProfilesSection(
                         ) {
                             Icon(
                                 Icons.Default.QrCode2,
-                                contentDescription = "Show QR Code",
+                                contentDescription = "QR Kodunu Göster",
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(22.dp)
                             )
@@ -366,7 +374,7 @@ fun ProfilesSection(
                         ) {
                             Icon(
                                 Icons.Default.Share,
-                                contentDescription = "Export Profile",
+                                contentDescription = "Profili Dışa Aktar",
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -378,17 +386,17 @@ fun ProfilesSection(
                                 showRenameDialog = profile
                             }
                         ) {
-                            Icon(Icons.Default.Edit, contentDescription = "Rename", modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.Edit, contentDescription = "Yeniden Adlandır", modifier = Modifier.size(20.dp))
                         }
 
                         // Duplicate button
                         IconButton(
                             onClick = {
                                 profileRepository.duplicateProfile(profile.id)
-                                Toast.makeText(context, "Profile duplicated", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Profil kopyalandı", Toast.LENGTH_SHORT).show()
                             }
                         ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = "Duplicate", modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.ContentCopy, contentDescription = "Kopyala", modifier = Modifier.size(20.dp))
                         }
 
                         // Delete button
@@ -396,12 +404,12 @@ fun ProfilesSection(
                             IconButton(
                                 onClick = {
                                     profileRepository.deleteProfile(profile.id)
-                                    Toast.makeText(context, "Profile deleted", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Profil silindi", Toast.LENGTH_SHORT).show()
                                 }
                             ) {
                                 Icon(
                                     Icons.Default.Delete,
-                                    contentDescription = "Delete",
+                                    contentDescription = "Sil",
                                     tint = MaterialTheme.colorScheme.error,
                                     modifier = Modifier.size(20.dp)
                                 )
@@ -418,14 +426,14 @@ fun ProfilesSection(
             OutlinedButton(
                 onClick = {
                     profileRepository.resetToDefaults()
-                    Toast.makeText(context, "Reset to default profiles", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Varsayılan profillere sıfırlandı", Toast.LENGTH_SHORT).show()
                 },
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Reset All Profiles to Defaults")
+                Text("Tüm Profilleri Varsayılana Sıfırla")
             }
         }
     }
@@ -434,27 +442,27 @@ fun ProfilesSection(
     if (showCreateDialog) {
         AlertDialog(
             onDismissRequest = { showCreateDialog = false },
-            title = { Text("Create New Profile") },
+            title = { Text("Yeni Profil Oluştur") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = newProfileName,
                         onValueChange = { newProfileName = it },
-                        label = { Text("Profile Name") },
+                        label = { Text("Profil Adı") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
                     OutlinedTextField(
                         value = newProfileDesc,
                         onValueChange = { newProfileDesc = it },
-                        label = { Text("Description (Optional)") },
+                        label = { Text("Açıklama (İsteğe Bağlı)") },
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
                         value = newProfileSignal,
                         onValueChange = { newProfileSignal = it },
-                        label = { Text("Auto-Switch Signal (Optional)") },
-                        placeholder = { Text("e.g. TESBIH-, GOLD, [P:amber]") },
+                        label = { Text("Otomatik Geçiş Sinyali (İsteğe Bağlı)") },
+                        placeholder = { Text("örn. TESBIH-, GOLD, [P:amber]") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
@@ -472,12 +480,12 @@ fun ProfilesSection(
                         }
                     }
                 ) {
-                    Text("Create")
+                    Text("Oluştur")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showCreateDialog = false }) {
-                    Text("Cancel")
+                    Text("İptal")
                 }
             }
         )
@@ -487,12 +495,12 @@ fun ProfilesSection(
     showRenameDialog?.let { target ->
         AlertDialog(
             onDismissRequest = { showRenameDialog = null },
-            title = { Text("Rename Profile") },
+            title = { Text("Profili Yeniden Adlandır") },
             text = {
                 OutlinedTextField(
                     value = renameText,
                     onValueChange = { renameText = it },
-                    label = { Text("New Name") },
+                    label = { Text("Yeni Ad") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
@@ -506,12 +514,12 @@ fun ProfilesSection(
                         }
                     }
                 ) {
-                    Text("Save")
+                    Text("Kaydet")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showRenameDialog = null }) {
-                    Text("Cancel")
+                    Text("İptal")
                 }
             }
         )
@@ -521,11 +529,11 @@ fun ProfilesSection(
     showSignalDialog?.let { target ->
         AlertDialog(
             onDismissRequest = { showSignalDialog = null },
-            title = { Text("QR Auto-Switch Signal") },
+            title = { Text("QR Otomatik Geçiş Sinyali") },
             text = {
                 Column {
                     Text(
-                        text = "When a scanned QR code starts with or contains this text or tag, the camera automatically switches to '${target.name}'.",
+                        text = "Taranan bir QR kodu bu metinle başladığında veya içerdiğinde kamera otomatik olarak '${target.name}' profiline geçer.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -533,8 +541,8 @@ fun ProfilesSection(
                     OutlinedTextField(
                         value = signalEditText,
                         onValueChange = { signalEditText = it },
-                        label = { Text("Trigger Signal") },
-                        placeholder = { Text("e.g. TESBIH-, GOLD, or [P:amber]") },
+                        label = { Text("Tetikleyici Sinyal") },
+                        placeholder = { Text("örn. TESBIH-, GOLD veya [P:amber]") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
@@ -547,12 +555,12 @@ fun ProfilesSection(
                         showSignalDialog = null
                     }
                 ) {
-                    Text("Save Signal")
+                    Text("Sinyali Kaydet")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showSignalDialog = null }) {
-                    Text("Cancel")
+                    Text("İptal")
                 }
             }
         )
@@ -588,7 +596,7 @@ fun ProfilesSection(
                     Icon(Icons.Default.Share, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        if (exportTargetProfile != null && selectedExportProfileIds.size == 1) "Export '${exportTargetProfile?.name}'" else "Export Profiles & Data"
+                        if (exportTargetProfile != null && selectedExportProfileIds.size == 1) "'${exportTargetProfile?.name}' Dışa Aktar" else "Profilleri ve Verileri Dışa Aktar"
                     )
                 }
             },
@@ -601,14 +609,14 @@ fun ProfilesSection(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Customize your export package. Choose individual profiles and whether to include linked media files:",
+                        text = "Dışa aktarım paketini özelleştirin. Profilleri ve bağlı medya dosyalarının dahil edilip edilmeyeceğini seçin:",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     // 1. Profile Scope Selection
                     Text(
-                        text = "1. SELECT PROFILES TO EXPORT (${targetExportProfiles.size}/${profiles.size})",
+                        text = "1. DIŞA AKTARILACAK PROFİLLER (${targetExportProfiles.size}/${profiles.size})",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -624,7 +632,7 @@ fun ProfilesSection(
                                 exportTargetProfile = null
                                 selectedExportProfileIds = profiles.map { it.id }.toSet()
                             },
-                            label = { Text("All (${profiles.size})", fontSize = 11.sp) }
+                            label = { Text("Tümü (${profiles.size})", fontSize = 11.sp) }
                         )
                         FilterChip(
                             selected = selectedExportProfileIds.size == 1 && selectedExportProfileIds.contains(activeProfile.id),
@@ -632,7 +640,7 @@ fun ProfilesSection(
                                 exportTargetProfile = activeProfile
                                 selectedExportProfileIds = setOf(activeProfile.id)
                             },
-                            label = { Text("Active Only", fontSize = 11.sp) }
+                            label = { Text("Yalnızca Aktif", fontSize = 11.sp) }
                         )
                     }
 
@@ -681,7 +689,7 @@ fun ProfilesSection(
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(p.name, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                         Text(
-                                            text = "Formula: ${p.formula.expression.ifBlank { "a+b+c+d" }}${if (p.triggerSignal.isNotBlank()) " • Signal: ${p.triggerSignal}" else ""}",
+                                            text = "Formül: ${p.formula.expression.ifBlank { "a+b+c+d" }}${if (p.triggerSignal.isNotBlank()) " • Sinyal: ${p.triggerSignal}" else ""}",
                                             fontSize = 10.sp,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -693,7 +701,7 @@ fun ProfilesSection(
 
                     // 2. Media Inclusion Choice (With Media vs Without Media)
                     Text(
-                        text = "2. MEDIA INCLUSION CHOICE",
+                        text = "2. MEDYA DAHİL ETME SEÇENEĞİ",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -719,11 +727,11 @@ fun ProfilesSection(
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("With Media", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    Text("Medya Dahil", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = if (mediaCount > 0) "Includes $mediaCount attached photo(s)/video(s). Portable bundle." else "Full bundle with media support.",
+                                    text = if (mediaCount > 0) "$mediaCount ekli fotoğraf/video dahil. Taşınabilir paket." else "Medya destekli tam paket.",
                                     fontSize = 10.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -749,11 +757,11 @@ fun ProfilesSection(
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Without Media", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    Text("Medyasız", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "Formulas, rules & settings only. Ultra-lightweight JSON (<20 KB).",
+                                    text = "Sadece formüller, kurallar ve ayarlar. Çok hafif JSON (<20 KB).",
                                     fontSize = 10.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -763,7 +771,7 @@ fun ProfilesSection(
 
                     // 3. Export Actions (Save File, Share, Copy)
                     Text(
-                        text = "3. CHOOSE EXPORT DESTINATION",
+                        text = "3. DIŞA AKTARIM HEDEFİ",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -787,25 +795,30 @@ fun ProfilesSection(
                     Button(
                         onClick = {
                             if (exportIncludeMedia && mediaCount > 0) {
-                                val zipFile = BackupTransferManager.createExportZipFile(
-                                    context = context,
-                                    profiles = targetExportProfiles,
-                                    attachments = relevantAttachments,
-                                    includeMedia = true,
-                                    filePrefix = baseExportName
-                                )
-                                val shareIntent = BackupTransferManager.getShareIntentForZip(
-                                    context = context,
-                                    zipFile = zipFile,
-                                    subject = "QR Live Calc Profiles Export ($mediaCount media files)"
-                                )
-                                context.startActivity(Intent.createChooser(shareIntent, "Share Backup Archive via"))
+                                runCatching {
+                                    val zipFile = BackupTransferManager.createExportZipFile(
+                                        context = context,
+                                        profiles = targetExportProfiles,
+                                        attachments = relevantAttachments,
+                                        includeMedia = true,
+                                        filePrefix = baseExportName
+                                    )
+                                    val shareIntent = BackupTransferManager.getShareIntentForZip(
+                                        context = context,
+                                        zipFile = zipFile,
+                                        subject = "ALVETAK QR Profil Yedeği ($mediaCount medya dosyası)"
+                                    )
+                                    context.startActivity(Intent.createChooser(shareIntent, "Yedek Arşivini Paylaş"))
+                                }.onFailure { e ->
+                                    AppDebugLogger.e("SHARE", "ZIP paylaşım hatası", e)
+                                    Toast.makeText(context, "ZIP paylaşılamadı: ${e.message}", Toast.LENGTH_LONG).show()
+                                }
                             } else {
                                 val json = generateExportPayload()
                                 val title = if (targetExportProfiles.size == 1) {
-                                    "Profile: ${targetExportProfiles.first().name}"
+                                    "Profil: ${targetExportProfiles.first().name}"
                                 } else {
-                                    "${targetExportProfiles.size} Profiles"
+                                    "${targetExportProfiles.size} Profil"
                                 }
                                 shareProfileText(title, json)
                             }
@@ -817,7 +830,7 @@ fun ProfilesSection(
                         Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            if (exportIncludeMedia && mediaCount > 0) "Share Single ZIP (Media + JSON)" else "Share via Apps",
+                            if (exportIncludeMedia && mediaCount > 0) "Tek ZIP Olarak Paylaş (Medya + JSON)" else "Uygulamalarla Paylaş",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -837,7 +850,7 @@ fun ProfilesSection(
                     ) {
                         Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Save as ZIP Archive (.zip)", fontSize = 12.sp)
+                        Text("ZIP Arşivi Olarak Kaydet (.zip)", fontSize = 12.sp)
                     }
 
                     // Save as JSON File
@@ -854,7 +867,7 @@ fun ProfilesSection(
                     ) {
                         Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Save as JSON File (.json)", fontSize = 12.sp)
+                        Text("JSON Dosyası Olarak Kaydet (.json)", fontSize = 12.sp)
                     }
 
                     // Copy JSON to clipboard
@@ -862,7 +875,7 @@ fun ProfilesSection(
                         onClick = {
                             val json = generateExportPayload()
                             clipboardManager.setText(AnnotatedString(json))
-                            Toast.makeText(context, "Copied export JSON to clipboard!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Dışa aktarım JSON panoya kopyalandı!", Toast.LENGTH_SHORT).show()
                             showExportOptionsDialog = false
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -870,14 +883,14 @@ fun ProfilesSection(
                     ) {
                         Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Copy JSON to Clipboard", fontSize = 12.sp)
+                        Text("JSON'u Panoya Kopyala", fontSize = 12.sp)
                     }
                 }
             },
             confirmButton = {},
             dismissButton = {
                 TextButton(onClick = { showExportOptionsDialog = false }) {
-                    Text("Close")
+                    Text("Kapat")
                 }
             }
         )
@@ -889,14 +902,14 @@ fun ProfilesSection(
 
         AlertDialog(
             onDismissRequest = { showImportOptionsDialog = false },
-            title = { Text(if (isPastingMode) "Paste Profile JSON" else "Import Profiles") },
+            title = { Text(if (isPastingMode) "Profil JSON Yapıştır" else "Profilleri İçe Aktar") },
             text = {
                 if (isPastingMode) {
                     Column {
                         OutlinedTextField(
                             value = importJsonText,
                             onValueChange = { importJsonText = it },
-                            placeholder = { Text("[{ \"name\": \"My Profile\", ... }]") },
+                            placeholder = { Text("[{ \"name\": \"Profilim\", ... }]") },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(180.dp),
@@ -906,7 +919,7 @@ fun ProfilesSection(
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
-                            text = "Import profiles from a saved file, clipboard, or phone-to-phone QR scan:",
+                            text = "Kayıtlı bir dosyadan, panodan veya başka bir telefondaki QR koddan profil içe aktarın:",
                             style = MaterialTheme.typography.bodyMedium
                         )
 
@@ -920,7 +933,7 @@ fun ProfilesSection(
                         ) {
                             Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Open ZIP Archive or JSON File")
+                            Text("ZIP Arşivi veya JSON Dosyası Aç")
                         }
 
                         // Paste JSON
@@ -930,7 +943,7 @@ fun ProfilesSection(
                         ) {
                             Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Paste from Clipboard")
+                            Text("Panodan Yapıştır")
                         }
 
                         Card(
@@ -948,7 +961,7 @@ fun ProfilesSection(
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Text(
-                                    text = "💡 Tip: You can also point your camera directly at another device's Profile QR code to import instantly!",
+                                    text = "İpucu: Anında içe aktarmak için kameranızı doğrudan başka bir cihazın Profil QR koduna da tutabilirsiniz.",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
@@ -968,11 +981,11 @@ fun ProfilesSection(
                                 importIncludeMedia = preview.hasMedia
                                 importJsonText = ""
                             } else {
-                                Toast.makeText(context, "Invalid JSON data or empty profile bundle.", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Geçersiz JSON verisi veya boş profil paketi.", Toast.LENGTH_SHORT).show()
                             }
                         }
                     ) {
-                        Text("Review & Import")
+                        Text("İncele ve İçe Aktar")
                     }
                 }
             },
@@ -986,7 +999,7 @@ fun ProfilesSection(
                         }
                     }
                 ) {
-                    Text("Cancel")
+                    Text("İptal")
                 }
             }
         )
@@ -1001,7 +1014,7 @@ fun ProfilesSection(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Download, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Import Review & Control")
+                    Text("İçe Aktarım İncelemesi")
                 }
             },
             text = {
@@ -1013,7 +1026,7 @@ fun ProfilesSection(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Found ${preview.profiles.size} Profile(s)${if (preview.attachments.isNotEmpty()) ", ${preview.attachments.size} Linked Data" else ""}${if (preview.hasMedia) " with embedded media (~${BackupTransferManager.formatBytes(preview.totalMediaBytesEstimate)})" else ""}. Select what to import:",
+                        text = "${preview.profiles.size} profil${if (preview.attachments.isNotEmpty()) ", ${preview.attachments.size} bağlı veri" else ""}${if (preview.hasMedia) " ve gömülü medya (~${BackupTransferManager.formatBytes(preview.totalMediaBytesEstimate)})" else ""} bulundu. İçe aktarılacakları seçin:",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1026,7 +1039,7 @@ fun ProfilesSection(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "SELECT PROFILES (${selectedImportProfileIds.size}/${preview.profiles.size})",
+                                text = "PROFİL SEÇİMİ (${selectedImportProfileIds.size}/${preview.profiles.size})",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
@@ -1036,13 +1049,13 @@ fun ProfilesSection(
                                     onClick = { selectedImportProfileIds = preview.profiles.map { it.id }.toSet() },
                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
-                                    Text("Select All", fontSize = 11.sp)
+                                    Text("Tümünü Seç", fontSize = 11.sp)
                                 }
                                 TextButton(
                                     onClick = { selectedImportProfileIds = emptySet() },
                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
-                                    Text("None", fontSize = 11.sp)
+                                    Text("Temizle", fontSize = 11.sp)
                                 }
                             }
                         }
@@ -1079,7 +1092,7 @@ fun ProfilesSection(
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(p.name, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                             Text(
-                                                text = "Delimiter: '${p.parsingRules.effectiveDelimiter}' • Formula: ${p.formula.expression.ifBlank { "a+b+c+d" }}",
+                                                text = "Ayırıcı: '${p.parsingRules.effectiveDelimiter}' • Formül: ${p.formula.expression.ifBlank { "a+b+c+d" }}",
                                                 fontSize = 10.sp,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
@@ -1093,7 +1106,7 @@ fun ProfilesSection(
                     // 2. Media Choice (Import with media or without media)
                     if (preview.hasMedia || preview.attachments.isNotEmpty()) {
                         Text(
-                            text = "MEDIA IMPORT CHOICE",
+                            text = "MEDYA İÇE AKTARIM SEÇENEĞİ",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -1119,10 +1132,10 @@ fun ProfilesSection(
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text("With Media", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        Text("Medya Dahil", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                     }
                                     Spacer(modifier = Modifier.height(2.dp))
-                                    Text("Restore photos & videos to device storage.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("Fotoğraf ve videoları cihaz depolamasına geri yükler.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
 
@@ -1145,10 +1158,10 @@ fun ProfilesSection(
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Without Media", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        Text("Medyasız", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                     }
                                     Spacer(modifier = Modifier.height(2.dp))
-                                    Text("Rules & specs only. Skip saving media files.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("Yalnızca kurallar ve ayarlar; medya dosyaları atlanır.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                         }
@@ -1169,7 +1182,7 @@ fun ProfilesSection(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Overwrite existing profile if ID or name matches",
+                            text = "ID veya ad eşleşirse mevcut profilin üzerine yaz",
                             fontSize = 11.sp
                         )
                     }
@@ -1189,19 +1202,19 @@ fun ProfilesSection(
                         )
                         Toast.makeText(
                             context,
-                            "Successfully imported ${result.profilesCount} profile(s)${if (result.mediaFilesCount > 0) " & ${result.mediaFilesCount} media file(s)" else ""}!",
+                            "${result.profilesCount} profil${if (result.mediaFilesCount > 0) " ve ${result.mediaFilesCount} medya dosyası" else ""} içe aktarıldı!",
                             Toast.LENGTH_LONG
                         ).show()
                         pendingImportPreview = null
                     },
                     enabled = selectedImportProfileIds.isNotEmpty() || preview.attachments.isNotEmpty()
                 ) {
-                    Text("Import Selected (${selectedImportProfileIds.size})")
+                    Text("Seçilenleri Aktar (${selectedImportProfileIds.size})")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { pendingImportPreview = null }) {
-                    Text("Cancel")
+                    Text("İptal")
                 }
             }
         )
@@ -1230,7 +1243,7 @@ fun ProfilesSection(
                         Icon(Icons.Default.QrCode2, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Beam Profile via QR",
+                            text = "QR ile Profil Aktar",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -1265,7 +1278,7 @@ fun ProfilesSection(
                             Icon(Icons.Default.Bolt, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "GZIP Compressed: $comp B (${pct}% smaller) • Fast Scan",
+                                text = "GZIP Sıkıştırılmış: $comp B (%${pct} daha küçük) • Hızlı Tarama",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -1284,13 +1297,13 @@ fun ProfilesSection(
                         ) {
                             Image(
                                 bitmap = qrBitmap.asImageBitmap(),
-                                contentDescription = "Compressed Profile QR Code for ${targetProfile.name}",
+                                contentDescription = "${targetProfile.name} için sıkıştırılmış profil QR kodu",
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
                     } else {
                         Text(
-                            text = "Unable to generate QR code bitmap.",
+                            text = "QR kod görseli oluşturulamadı.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                             textAlign = TextAlign.Center
@@ -1300,7 +1313,7 @@ fun ProfilesSection(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Text(
-                        text = "Point another phone running QR Live Calc at this QR code. The camera will automatically detect, decompress, and offer to activate '${targetProfile.name}'.",
+                        text = "ALVETAK QR yüklü başka bir telefonu bu koda tutun. Kamera profili otomatik algılayıp açacak ve '${targetProfile.name}' profilini aktifleştirmeyi önerecektir.",
                         style = MaterialTheme.typography.bodySmall,
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1312,28 +1325,28 @@ fun ProfilesSection(
                     OutlinedButton(
                         onClick = {
                             clipboardManager.setText(AnnotatedString(qrString))
-                            Toast.makeText(context, "Copied compressed QR payload to clipboard!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Sıkıştırılmış QR verisi panoya kopyalandı!", Toast.LENGTH_SHORT).show()
                         }
                     ) {
                         Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Copy Code", fontSize = 12.sp)
+                        Text("Kodu Kopyala", fontSize = 12.sp)
                     }
                     FilledTonalButton(
                         onClick = {
                             val json = profileRepository.exportSingleProfileJson(targetProfile.id)
-                            shareProfileText("QR Live Calc Profile - ${targetProfile.name}", json)
+                            shareProfileText("ALVETAK QR Profili - ${targetProfile.name}", json)
                         }
                     ) {
                         Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Share JSON", fontSize = 12.sp)
+                        Text("JSON Paylaş", fontSize = 12.sp)
                     }
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showQrDisplayDialog = null }) {
-                    Text("Close")
+                    Text("Kapat")
                 }
             }
         )

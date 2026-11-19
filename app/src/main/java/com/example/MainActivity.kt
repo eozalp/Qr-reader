@@ -68,6 +68,24 @@ class MainActivity : ComponentActivity() {
                     hidManager.refreshState()
                 }
 
+                val requestBluetoothPermissions: () -> Unit = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        btPermLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.BLUETOOTH_CONNECT,
+                                Manifest.permission.BLUETOOTH_ADVERTISE
+                            )
+                        )
+                    } else {
+                        btPermLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.BLUETOOTH,
+                                Manifest.permission.BLUETOOTH_ADMIN
+                            )
+                        )
+                    }
+                }
+
                 Crossfade(
                     targetState = currentScreen,
                     label = "screen_navigation",
@@ -90,6 +108,8 @@ class MainActivity : ComponentActivity() {
                             SettingsScreen(
                                 profileRepository = profileRepository,
                                 attachmentRepository = attachmentRepository,
+                                hidManager = hidManager,
+                                onRequestBluetoothPermission = requestBluetoothPermissions,
                                 onNavigateBack = { currentScreen = AppScreen.CAMERA },
                                 onOpenRemoteControl = {
                                     remoteReturnScreen = AppScreen.SETTINGS
@@ -118,23 +138,7 @@ class MainActivity : ComponentActivity() {
                         onConfigChanged = { updatedKb ->
                             profileRepository.saveProfile(activeProfile.copy(bluetoothKeyboard = updatedKb))
                         },
-                        onRequestPermission = {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                btPermLauncher.launch(
-                                    arrayOf(
-                                        Manifest.permission.BLUETOOTH_CONNECT,
-                                        Manifest.permission.BLUETOOTH_ADVERTISE
-                                    )
-                                )
-                            } else {
-                                btPermLauncher.launch(
-                                    arrayOf(
-                                        Manifest.permission.BLUETOOTH,
-                                        Manifest.permission.BLUETOOTH_ADMIN
-                                    )
-                                )
-                            }
-                        },
+                        onRequestPermission = requestBluetoothPermissions,
                         onDismiss = { showRemoteBtSheet = false }
                     )
                 }

@@ -30,6 +30,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.bluetooth.BluetoothHidManager
 import com.example.bluetooth.HidConnectionStatus
 import com.example.debug.AppDebugLogger
@@ -66,11 +69,22 @@ fun BluetoothKeyboardSheet(
     val batchSentMap by hidManager.batchSentMap.collectAsState()
     val telemetry by hidManager.telemetry.collectAsState()
 
-    val isLocalImeEnabled = remember(context) {
-        runCatching {
-            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-            imm?.enabledInputMethodList?.any { it.packageName == context.packageName } == true
-        }.getOrDefault(false)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    fun checkImeEnabled(): Boolean = runCatching {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.enabledInputMethodList?.any { it.packageName == context.packageName } == true
+    }.getOrDefault(false)
+
+    var isLocalImeEnabled by remember(context) { mutableStateOf(checkImeEnabled()) }
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                isLocalImeEnabled = checkImeEnabled()
+                hidManager.refreshState()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     var testInputText by remember { mutableStateOf("ALVETAK-TEST-100") }
@@ -130,7 +144,7 @@ fun BluetoothKeyboardSheet(
 
                 IconButton(
                     onClick = onDismiss,
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(48.dp)
                 ) {
                     Icon(Icons.Default.Close, contentDescription = "Kapat", tint = Color(0xFF94A3B8))
                 }
@@ -476,7 +490,9 @@ fun BluetoothKeyboardSheet(
                                     Spacer(modifier = Modifier.height(6.dp))
                                     Row(
                                         horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        modifier = Modifier.fillMaxWidth()
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .horizontalScroll(rememberScrollState())
                                     ) {
                                         availableVariables.forEach { variable ->
                                             val isChosen = currentConfig.selectedVariableName == variable.name ||
@@ -511,7 +527,9 @@ fun BluetoothKeyboardSheet(
                                     Spacer(modifier = Modifier.height(6.dp))
                                     Row(
                                         horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        modifier = Modifier.fillMaxWidth()
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .horizontalScroll(rememberScrollState())
                                     ) {
                                         availableVariables.forEach { variable ->
                                             val inList = if (currentConfig.selectedVariables.isEmpty()) true else currentConfig.selectedVariables.contains(variable.name)
@@ -543,7 +561,12 @@ fun BluetoothKeyboardSheet(
                                         color = Color.White
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .horizontalScroll(rememberScrollState())
+                                    ) {
                                         listOf(
                                             "\t" to "Tab ⇥ (Excel Sütunu)",
                                             " " to "Boşluk",

@@ -32,6 +32,7 @@ import com.example.debug.AppDebugLogger
 import com.example.debug.DebugLogEntry
 import com.example.debug.DebugLogLevel
 import com.example.ui.theme.AmberGold
+import com.example.ui.theme.AppMonoFontFamily
 import com.example.ui.theme.NeonCyan
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -176,7 +177,7 @@ fun DebugConsoleSection(
                         Text(
                             text = lastCrashReport ?: "",
                             fontSize = 10.5.sp,
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = AppMonoFontFamily,
                             color = Color(0xFFFEE2E2),
                             maxLines = 8,
                             overflow = TextOverflow.Ellipsis
@@ -267,25 +268,25 @@ fun DebugConsoleSection(
                     Text(
                         text = AppDebugLogger.buildDeviceSummary(),
                         fontSize = 10.5.sp,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = AppMonoFontFamily,
                         color = Color(0xFF94A3B8)
                     )
                     Text(
                         text = "Durum: ${connectionStatus.label} (${connectedDeviceName ?: "Yok"}) · Eşleşmiş: ${pairedDevices.size}",
                         fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = AppMonoFontFamily,
                         color = Color.White
                     )
                     Text(
                         text = "Protokol: ${if (hidTelemetry.isBootMode) "BOOT MODE" else "REPORT MODE"} · ${hidTelemetry.qosLabel}",
                         fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = AppMonoFontFamily,
                         color = NeonCyan
                     )
                     Text(
                         text = "Klavye TX: ${hidTelemetry.keyboardReportsSent} (Hata: ${hidTelemetry.keyboardReportsFailed}) · Mouse TX: ${hidTelemetry.mouseReportsSent} (Hata: ${hidTelemetry.mouseReportsFailed})",
                         fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = AppMonoFontFamily,
                         color = Color(0xFFCBD5E1)
                     )
                     if (!hidTelemetry.lastFailureReason.isNullOrBlank()) {
@@ -303,7 +304,7 @@ fun DebugConsoleSection(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Button(
-                            onClick = { copyFullReport(filteredLogs.ifEmpty { logs }) },
+                            onClick = { copyFullReport(logs) },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = NeonCyan,
                                 contentColor = Color(0xFF00382E)
@@ -321,7 +322,7 @@ fun DebugConsoleSection(
                         }
 
                         OutlinedButton(
-                            onClick = { shareFullReport(filteredLogs.ifEmpty { logs }) },
+                            onClick = { shareFullReport(logs) },
                             shape = RoundedCornerShape(12.dp),
                             contentPadding = PaddingValues(horizontal = 10.dp),
                             modifier = Modifier
@@ -547,7 +548,7 @@ private fun DebugLogEntryCard(
                             text = entry.level.shortLabel,
                             fontSize = 9.5.sp,
                             fontWeight = FontWeight.ExtraBold,
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = AppMonoFontFamily,
                             color = badgeColor,
                             modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                         )
@@ -556,19 +557,19 @@ private fun DebugLogEntryCard(
                         text = entry.tag,
                         fontSize = 10.5.sp,
                         fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = AppMonoFontFamily,
                         color = Color(0xFFE2E8F0)
                     )
                     Text(
                         text = timeText,
                         fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = AppMonoFontFamily,
                         color = Color(0xFF64748B)
                     )
                     Text(
                         text = "(${entry.threadName})",
                         fontSize = 9.5.sp,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = AppMonoFontFamily,
                         color = Color(0xFF475569),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -591,7 +592,7 @@ private fun DebugLogEntryCard(
             Text(
                 text = entry.message,
                 fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = AppMonoFontFamily,
                 color = if (entry.level.severity >= DebugLogLevel.ERROR.severity) Color(0xFFFCA5A5) else Color(0xFFE2E8F0)
             )
 
@@ -605,7 +606,7 @@ private fun DebugLogEntryCard(
                         Text(
                             text = entry.stackTrace,
                             fontSize = 9.5.sp,
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = AppMonoFontFamily,
                             color = Color(0xFFFDA4AF),
                             modifier = Modifier.padding(8.dp)
                         )

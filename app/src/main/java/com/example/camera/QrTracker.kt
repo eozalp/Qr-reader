@@ -23,8 +23,50 @@ data class RawDetectedCode(
 
 class QrTracker {
 
+    private val lock = Any()
     private val activeTracked = mutableListOf<TrackedQr>()
     private val mathEvaluator = MathExpressionEvaluator()
+
+    /**
+     * Clears all currently tracked QR entries safely.
+     */
+    fun clear() {
+        synchronized(lock) {
+            activeTracked.clear()
+        }
+    }
+
+    /**
+     * Advances fade-out / expiration for tracked items without injecting a new camera frame.
+     * Returns null when nothing is tracked or no alpha/expiry change occurred, preventing
+     * redundant UI recompositions and effect cancellations.
+     */
+    fun tickFade(
+        profile: QrProfile,
+        currentTimeMs: Long = System.currentTimeMillis()
+    ): List<TrackedQr>? = synchronized(lock) {
+        if (activeTracked.isEmpty()) return@synchronized null
+
+        val timeoutMs = profile.tracking.disappearanceTimeoutMs.coerceAtLeast(100L)
+        var changed = false
+        val iterator = activeTracked.iterator()
+        while (iterator.hasNext()) {
+            val item = iterator.next()
+            val elapsed = currentTimeMs - item.lastSeenMs
+            if (elapsed > timeoutMs) {
+                iterator.remove()
+                changed = true
+            } else if (elapsed > 60L) {
+                val newAlpha = (1.0f - (elapsed.toFloat() / timeoutMs)).coerceIn(0f, 1f)
+                if (kotlin.math.abs(newAlpha - item.alpha) >= 0.02f) {
+                    item.alpha = newAlpha
+                    changed = true
+                }
+            }
+        }
+        if (!changed) return@synchronized null
+        activeTracked.map { it.copy(currentBox = RectF(it.currentBox)) }
+    }
 
     /**
      * Updates tracked QR codes with newly detected codes in screen coordinates.
@@ -34,9 +76,9 @@ class QrTracker {
         profile: QrProfile,
         currentTimeMs: Long = System.currentTimeMillis(),
         attachmentFinder: ((String) -> QrAttachment?)? = null
-    ): List<TrackedQr> {
+    ): List<TrackedQr> = synchronized(lock) {
         val smoothingFactor = profile.tracking.smoothingFactor.coerceIn(0.1f, 1.0f)
-        val timeoutMs = profile.tracking.disappearanceTimeoutMs
+        val timeoutMs = profile.tracking.disappearanceTimeoutMs.coerceAtLeast(100L)
 
         val matchedIds = mutableSetOf<String>()
         val unmatchedDetected = detectedScreenBoxes.toMutableList()
@@ -107,7 +149,7 @@ class QrTracker {
             }
         }
 
-        return activeTracked.map { it.copy(currentBox = RectF(it.currentBox)) }
+        activeTracked.map { it.copy(currentBox = RectF(it.currentBox)) }
     }
 
     private fun smoothRect(current: RectF, target: RectF, alpha: Float) {

@@ -24,7 +24,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.debug.AppDebugLogger
 import com.example.model.ScanHistoryItem
+import com.example.ui.theme.AppMonoFontFamily
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.OnDarkSurface
 import com.example.ui.theme.OnDarkSurfaceVariant
@@ -53,6 +55,7 @@ fun ScanHistorySheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(horizontal = 20.dp, vertical = 10.dp)
         ) {
             // Header Bar
@@ -96,7 +99,7 @@ fun ScanHistorySheet(
 
                 IconButton(
                     onClick = onDismiss,
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(48.dp)
                 ) {
                     Icon(Icons.Default.Close, contentDescription = "Kapat", tint = OnDarkSurfaceVariant)
                 }
@@ -132,7 +135,13 @@ fun ScanHistorySheet(
                             putExtra(Intent.EXTRA_SUBJECT, "Barkod_Tarama_Gecmisi_${System.currentTimeMillis()}.csv")
                             putExtra(Intent.EXTRA_TITLE, "Tarama Geçmişini CSV Olarak Dışa Aktar")
                         }
-                        context.startActivity(Intent.createChooser(sendIntent, "Tarama Geçmişini Paylaş (CSV)"))
+                        runCatching {
+                            context.startActivity(Intent.createChooser(sendIntent, "Tarama Geçmişini Paylaş (CSV)"))
+                        }.onFailure { err ->
+                            AppDebugLogger.e("HISTORY", "CSV paylaşım penceresi açılamadı", err)
+                            clipboardManager.setText(AnnotatedString(csvContent))
+                            Toast.makeText(context, "Paylaşım açılamadı, CSV panoya kopyalandı", Toast.LENGTH_SHORT).show()
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = NeonCyan,
@@ -141,7 +150,7 @@ fun ScanHistorySheet(
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .weight(1f)
-                        .height(44.dp)
+                        .height(48.dp)
                         .testTag("export_csv_button")
                 ) {
                     Icon(
@@ -169,7 +178,7 @@ fun ScanHistorySheet(
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.5f)),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
-                        .height(44.dp)
+                        .height(48.dp)
                         .testTag("clear_history_button")
                 ) {
                     Icon(
@@ -274,7 +283,7 @@ fun ScanHistorySheet(
                                         text = timeFormat.format(Date(item.timestamp)),
                                         color = OnDarkSurfaceVariant,
                                         fontSize = 11.sp,
-                                        fontFamily = FontFamily.Monospace
+                                        fontFamily = AppMonoFontFamily
                                     )
                                 }
 
@@ -285,7 +294,7 @@ fun ScanHistorySheet(
                                     text = item.rawText,
                                     color = OnDarkSurface,
                                     fontSize = 12.sp,
-                                    fontFamily = FontFamily.Monospace,
+                                    fontFamily = AppMonoFontFamily,
                                     fontWeight = FontWeight.Medium,
                                     maxLines = 2
                                 )
@@ -318,13 +327,13 @@ fun ScanHistorySheet(
                                                 clipboardManager.setText(AnnotatedString(item.rawText))
                                                 Toast.makeText(context, "Ham barkod kopyalandı", Toast.LENGTH_SHORT).show()
                                             },
-                                            modifier = Modifier.size(30.dp)
+                                            modifier = Modifier.size(48.dp)
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.DataObject,
                                                 contentDescription = "Ham Veriyi Kopyala",
                                                 tint = OnDarkSurfaceVariant,
-                                                modifier = Modifier.size(16.dp)
+                                                modifier = Modifier.size(18.dp)
                                             )
                                         }
 
@@ -334,13 +343,13 @@ fun ScanHistorySheet(
                                                 clipboardManager.setText(AnnotatedString(item.resultText))
                                                 Toast.makeText(context, "Sonuç kopyalandı: ${item.resultText}", Toast.LENGTH_SHORT).show()
                                             },
-                                            modifier = Modifier.size(30.dp)
+                                            modifier = Modifier.size(48.dp)
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.ContentCopy,
                                                 contentDescription = "Sonucu Kopyala",
                                                 tint = NeonCyan,
-                                                modifier = Modifier.size(16.dp)
+                                                modifier = Modifier.size(18.dp)
                                             )
                                         }
                                     }
