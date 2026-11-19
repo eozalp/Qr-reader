@@ -487,4 +487,18 @@ class BluetoothHidPayloadTest {
         assertEquals(biasZBeforePan, estimator.biasZ, 1e-6f)
         assertTrue("Wrist pan should pass unattenuated", panCompensated.third > 1.44f)
     }
+
+    @Test
+    fun testSimpleKeyboardDescriptorValidForLinuxBlueZ() {
+        val desc = BluetoothHidManager.HID_SIMPLE_KEYBOARD_DESCRIPTOR
+        assertEquals(63, desc.size)
+        assertTrue(
+            "Simple Keyboard descriptor must have balanced HID collections",
+            BluetoothHidManager.checkDescriptorCollectionBalance(desc)
+        )
+        assertTrue(
+            "Simple Keyboard boot descriptor must have no Report IDs (uses reportId=0)",
+            BluetoothHidManager.extractReportIdsFromDescriptor(desc).isEmpty()
+        )
+    }
 }

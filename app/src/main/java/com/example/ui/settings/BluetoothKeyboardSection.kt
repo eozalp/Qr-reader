@@ -32,8 +32,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import com.example.bluetooth.BluetoothHidManager
 import com.example.bluetooth.HidConnectionStatus
+import com.example.bluetooth.HidProfileMode
 import com.example.debug.AppDebugLogger
 import com.example.model.BluetoothKeyboardConfig
 import com.example.model.KeyboardEndingKey
@@ -64,6 +67,7 @@ fun BluetoothKeyboardSection(
     val coroutineScope = rememberCoroutineScope()
     val manager = remember(context) { hidManager ?: BluetoothHidManager.getInstance(context) }
 
+    val clipboard = LocalClipboardManager.current
     val connectionStatus by manager.connectionStatus.collectAsState()
     val connectedDeviceName by manager.connectedDeviceName.collectAsState()
     val connectionDiagnostic by manager.connectionDiagnostic.collectAsState()
@@ -71,6 +75,7 @@ fun BluetoothKeyboardSection(
     val pairedDevices by manager.pairedDevices.collectAsState()
     val batchSentMap by manager.batchSentMap.collectAsState()
     val telemetry by manager.telemetry.collectAsState()
+    val hidProfileMode by manager.hidProfileMode.collectAsState()
 
     val lifecycleOwner = LocalLifecycleOwner.current
     fun checkImeEnabled(): Boolean = runCatching {
@@ -275,6 +280,39 @@ fun BluetoothKeyboardSection(
 
                     if (connectionStatus == HidConnectionStatus.DISCONNECTED || connectionStatus == HidConnectionStatus.CONNECTING) {
                         Spacer(modifier = Modifier.height(10.dp))
+                        // HID Profile Compatibility Mode Selector (Combo vs Simple Keyboard for Linux/BlueZ)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            HidProfileMode.entries.forEach { mode ->
+                                val selected = hidProfileMode == mode
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (selected) NeonCyan.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface,
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (selected) NeonCyan else Color(0xFF334155)
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { manager.setHidProfileMode(mode) }
+                                        .testTag("settings_hid_mode_${mode.name.lowercase()}")
+                                ) {
+                                    Text(
+                                        text = if (mode == HidProfileMode.COMBO) "Kombo (Klavye+Fare)" else "Saf Klavye (Linux)",
+                                        fontSize = 11.sp,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (selected) NeonCyan else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -283,11 +321,38 @@ fun BluetoothKeyboardSection(
                                 onClick = { manager.reregisterHidProfile() },
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                                 modifier = Modifier
+                                    .weight(1f)
                                     .heightIn(min = 40.dp)
                                     .testTag("settings_hid_reset_disconnected_btn")
                             ) {
                                 Text("HID Sıfırla", fontSize = 11.sp, color = NeonCyan, fontWeight = FontWeight.Bold)
                             }
+                            OutlinedButton(
+                                onClick = {
+                                    val report = AppDebugLogger.buildShareableReport(
+                                        hidStatus = connectionStatus.label,
+                                        connectedHost = connectedDeviceName,
+                                        hidTelemetry = telemetry,
+                                        pairedCount = pairedDevices.size,
+                                        entries = AppDebugLogger.logs.value
+                                    )
+                                    clipboard.setText(AnnotatedString(report))
+                                    Toast.makeText(context, "BT Debug raporu kopyalandı", Toast.LENGTH_SHORT).show()
+                                },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 40.dp)
+                                    .testTag("settings_bt_copy_log_btn")
+                            ) {
+                                Text("Log Kopyala", fontSize = 11.sp, color = AmberGold, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             OutlinedButton(
                                 onClick = {
                                     runCatching { context.startActivity(manager.makeDiscoverableIntent()) }
@@ -323,7 +388,7 @@ fun BluetoothKeyboardSection(
                         }
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "İpucu: İlk kez bağlıyorsanız veya bağlantı kopuyorsa PC Bluetooth ayarlarından cihazı 'Kaldır' deyip telefonla yeniden eşleştirin.",
+                            text = "İpucu: İlk kez bağlıyorsanız veya bağlantı reddediliyorsa PC/Linux Bluetooth ayarlarından telefonu 'Kaldır' deyip ALVETAK açıkken yeniden eşleştirin.",
                             fontSize = 10.5.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

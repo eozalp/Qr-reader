@@ -40,6 +40,11 @@ enum class HidConnectionStatus(val label: String) {
     NOT_SUPPORTED("HID Desteklenmiyor (Sanal Test Modu)")
 }
 
+enum class HidProfileMode(val label: String) {
+    COMBO("Kombo (Klavye + Mouse)"),
+    SIMPLE_KEYBOARD("Saf Klavye (Linux / Uyumluluk)")
+}
+
 data class KeystrokeLogItem(
     val timestamp: Long = System.currentTimeMillis(),
     val text: String,
@@ -135,6 +140,7 @@ class BluetoothHidManager(private val context: Context? = null) {
     private val connectAttemptSeq = AtomicLong(0L)
     private val registerAttemptSeq = AtomicLong(0L)
     private val aclConnectedAddresses = ConcurrentHashMap.newKeySet<String>()
+    private val compatFallbackTriedForAddress = ConcurrentHashMap.newKeySet<String>()
     @Volatile
     private var activeConnectWatchdog: ScheduledFuture<*>? = null
     @Volatile
@@ -148,6 +154,9 @@ class BluetoothHidManager(private val context: Context? = null) {
     @Volatile
     var lastSendWasSimulated: Boolean = false
         private set
+
+    private val _hidProfileMode = MutableStateFlow(loadSavedProfileMode())
+    val hidProfileMode: StateFlow<HidProfileMode> = _hidProfileMode.asStateFlow()
 
     private val _connectionStatus = MutableStateFlow(HidConnectionStatus.DISCONNECTED)
     val connectionStatus: StateFlow<HidConnectionStatus> = _connectionStatus.asStateFlow()
@@ -172,6 +181,14 @@ class BluetoothHidManager(private val context: Context? = null) {
 
     private val _telemetry = MutableStateFlow(HidProtocolTelemetry())
     val telemetry: StateFlow<HidProtocolTelemetry> = _telemetry.asStateFlow()
+
+    private fun loadSavedProfileMode(): HidProfileMode {
+        val saved = prefs?.getString(KEY_HID_PROFILE_MODE, null)
+        return HidProfileMode.entries.firstOrNull { it.name == saved } ?: HidProfileMode.COMBO
+    }
+
+    private fun currentKeyboardReportId(): Int =
+        if (_hidProfileMode.value == HidProfileMode.SIMPLE_KEYBOARD) 0 else REPORT_ID_KEYBOARD
 
     // Dedicated NON-BLOCKING executor strictly for Android BluetoothHidDevice.Callback binder callbacks!
     // Never sleep or run slow operations here or onAppStatusChanged/onConnectionStateChanged will deadlock.
@@ -588,22 +605,37 @@ class BluetoothHidManager(private val context: Context? = null) {
 
         controlExecutor.execute {
             try {
-                val sdp = BluetoothHidDeviceAppSdpSettings(
-                    "ALVETAK QR Klavye & Mouse",
-                    "ALVETAK Kablosuz Klavye, Mouse & Air Mouse",
-                    "ALVETAK",
-                    BluetoothHidDevice.SUBCLASS1_COMBO,
-                    HID_COMBO_REPORT_DESCRIPTOR
-                )
+                val mode = _hidProfileMode.value
+                val isSimpleKb = mode == HidProfileMode.SIMPLE_KEYBOARD
+                activeReportId = currentKeyboardReportId()
+                val sdp = if (isSimpleKb) {
+                    BluetoothHidDeviceAppSdpSettings(
+                        "ALVETAK QR Klavye",
+                        "ALVETAK Bluetooth Klavye (Uyumluluk)",
+                        "ALVETAK",
+                        BluetoothHidDevice.SUBCLASS1_KEYBOARD,
+                        HID_SIMPLE_KEYBOARD_DESCRIPTOR
+                    )
+                } else {
+                    BluetoothHidDeviceAppSdpSettings(
+                        "ALVETAK QR Klavye & Mouse",
+                        "ALVETAK Kablosuz Klavye, Mouse & Air Mouse",
+                        "ALVETAK",
+                        BluetoothHidDevice.SUBCLASS1_COMBO,
+                        HID_COMBO_REPORT_DESCRIPTOR
+                    )
+                }
 
                 var started = false
-                val tierUsed = qosTierIndex.coerceIn(0, 2)
+                // Simple Keyboard mode always uses Compatibility QoS (null, null) for maximum Linux/BlueZ/macOS compatibility
+                val tierUsed = if (isSimpleKb) 2 else qosTierIndex.coerceIn(0, 2)
                 for (tier in tierUsed..2) {
                     val (inQos, outQos, tierLabel) = buildQosTier(tier)
                     qosTierIndex = tier
-                    _telemetry.value = _telemetry.value.copy(qosLabel = tierLabel)
+                    val modeTag = if (isSimpleKb) "Saf Klavye · $tierLabel" else tierLabel
+                    _telemetry.value = _telemetry.value.copy(qosLabel = modeTag)
                     var attemptOk = hid.registerApp(sdp, inQos, outQos, callbackExecutor, hidCallback)
-                    AppDebugLogger.i("BT-HID", "registerApp tier=$tier ($tierLabel) sonuç=$attemptOk")
+                    AppDebugLogger.i("BT-HID", "registerApp mode=$mode tier=$tier ($modeTag) sonuç=$attemptOk")
                     if (!attemptOk && tier == tierUsed) {
                         isIntentionalUnregister = true
                         runCatching { hid.unregisterApp() }
@@ -678,7 +710,7 @@ class BluetoothHidManager(private val context: Context? = null) {
     }
 
     @SuppressLint("MissingPermission")
-    private fun rebindHidProxyInternal() {
+    private fun rebindHidProxyInternal(targetTier: Int? = null, keepPendingAddress: String? = null) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !hasBluetoothPermissions()) return
         val oldProxy = hidDeviceProfile
         isIntentionalUnregister = true
@@ -690,20 +722,32 @@ class BluetoothHidManager(private val context: Context? = null) {
         isAppRegistered = false
         isRegistering = false
         isProxyRequested = false
-        qosTierIndex = 0
+        qosTierIndex = targetTier ?: if (_hidProfileMode.value == HidProfileMode.SIMPLE_KEYBOARD) 2 else 0
+        pendingConnectAddress = keepPendingAddress
         sleepQuietly(320L)
         isIntentionalUnregister = false
         initHidProfile()
     }
 
     @SuppressLint("MissingPermission")
+    fun setHidProfileMode(mode: HidProfileMode) {
+        if (_hidProfileMode.value == mode) return
+        _hidProfileMode.value = mode
+        prefs?.edit()?.putString(KEY_HID_PROFILE_MODE, mode.name)?.apply()
+        compatFallbackTriedForAddress.clear()
+        AppDebugLogger.i("BT-HID", "HID profil modu değiştirildi: ${mode.label}")
+        reregisterHidProfile()
+    }
+
+    @SuppressLint("MissingPermission")
     fun reregisterHidProfile() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !hasBluetoothPermissions()) return
-        AppDebugLogger.i("BT-HID", "Kullanıcı tarafından tam HID Proxy + Profil Sıfırlama tetiklendi")
+        AppDebugLogger.i("BT-HID", "Kullanıcı tarafından tam HID Proxy + Profil Sıfırlama tetiklendi (mode=${_hidProfileMode.value})")
         connectAttemptSeq.incrementAndGet()
         cancelConnectWatchdog()
         cancelRegisterWatchdog()
         pendingConnectAddress = null
+        compatFallbackTriedForAddress.clear()
         _connectionStatus.value = HidConnectionStatus.DISCONNECTED
         _connectionDiagnostic.value = "Bluetooth HID servisi sıfırlanıyor..."
         controlExecutor.execute {
@@ -844,30 +888,66 @@ class BluetoothHidManager(private val context: Context? = null) {
                         _connectionDiagnostic.value = "Bilgisayarla HID bağlantısı kuruluyor..."
                     }
                     BluetoothProfile.STATE_DISCONNECTED, BluetoothProfile.STATE_DISCONNECTING -> {
-                        if (device != null && hidDeviceProfile != null) {
-                            // Ensure host keyboard & mouse buffers have zero held inputs before dropping
+                        val wasConnectedToThis = device != null && connectedHostDevice?.address == device.address
+                        val wasConnectingToThis = device != null && (
+                            connectingTargetAddress == device.address ||
+                                (_connectionStatus.value == HidConnectionStatus.CONNECTING && connectedHostDevice == null)
+                            )
+                        if (wasConnectedToThis && device != null && hidDeviceProfile != null) {
+                            // Only send zero release reports when an active HID link is dropping
                             hidDeviceProfile?.let { hid ->
                                 sendRawHidReportImmediate(hid, device, activeReportId, newZeroReport())
-                                sendRawHidReportImmediate(
-                                    hid,
-                                    device,
-                                    REPORT_ID_MOUSE,
-                                    if (isBootProtocolMode) buildBootMouseReport(0, 0, 0) else buildMouseReport(0, 0, 0, 0)
-                                )
+                                if (_hidProfileMode.value == HidProfileMode.COMBO) {
+                                    sendRawHidReportImmediate(
+                                        hid,
+                                        device,
+                                        REPORT_ID_MOUSE,
+                                        if (isBootProtocolMode) buildBootMouseReport(0, 0, 0) else buildMouseReport(0, 0, 0, 0)
+                                    )
+                                }
                             }
                         }
-                        val matchesActiveOrTarget = connectedHostDevice?.address == device?.address ||
-                            connectingTargetAddress == device?.address ||
-                            connectedHostDevice == null
+
+                        // AUTO-FALLBACK: If remote host (e.g. Linux BlueZ / strict Windows) rejected L2CAP
+                        // while using custom non-null QoS (tier < 2), immediately re-register with Compatibility
+                        // QoS (null, null) and retry once automatically!
+                        if (state == BluetoothProfile.STATE_DISCONNECTED &&
+                            wasConnectingToThis &&
+                            device != null &&
+                            qosTierIndex < 2 &&
+                            compatFallbackTriedForAddress.add(device.address)
+                        ) {
+                            val targetAddr = device.address
+                            AppDebugLogger.w(
+                                "BT-HID",
+                                "Host ($targetAddr) QoS tier=$qosTierIndex bağlantısını reddetti -> Uyumluluk QoS (null,null) ile otomatik yeniden kayıt & deneme başlatılıyor"
+                            )
+                            cancelConnectWatchdog()
+                            _connectionStatus.value = HidConnectionStatus.CONNECTING
+                            _connectionDiagnostic.value = "Bilgisayar özel QoS'u reddetti — Uyumluluk Modu (QoS=Varsayılan) ile tekrar deneniyor..."
+                            controlExecutor.execute {
+                                rebindHidProxyInternal(targetTier = 2, keepPendingAddress = targetAddr)
+                            }
+                            return
+                        }
+
+                        val matchesActiveOrTarget = wasConnectedToThis || wasConnectingToThis || connectedHostDevice == null
                         if (matchesActiveOrTarget) {
                             if (state == BluetoothProfile.STATE_DISCONNECTED) {
                                 cancelConnectWatchdog()
                             }
                             clearConnectionState(stopService = true)
                             _connectionStatus.value = HidConnectionStatus.DISCONNECTED
-                            if (state == BluetoothProfile.STATE_DISCONNECTED && _connectionDiagnostic.value == null) {
-                                _connectionDiagnostic.value =
-                                    "Bağlantı kesildi. Sorun sürerse PC Bluetooth ayarlarından cihazı kaldırıp yeniden eşleştirin."
+                            if (state == BluetoothProfile.STATE_DISCONNECTED) {
+                                val devName = getDeviceDisplayName(device)
+                                val sysAcl = if (device != null) isDeviceSystemConnected(device) else false
+                                _connectionDiagnostic.value = if (wasConnectingToThis && sysAcl) {
+                                    "Android '$devName' ile bağlı ama bilgisayar HID (Klavye/Fare) kanalını reddetti. 'Saf Klavye (Linux/Uyumluluk)' modunu deneyin veya PC/Linux Bluetooth'tan telefonu kaldırıp ALVETAK açıkken yeniden eşleştirin."
+                                } else if (wasConnectingToThis) {
+                                    "'$devName' HID bağlantısını reddetti. PC'den 'Bağlan' demeyi veya telefonu kaldırıp ALVETAK açıkken yeniden eşleştirmeyi deneyin."
+                                } else {
+                                    "Bağlantı kesildi ($devName)."
+                                }
                             }
                             refreshPairedDevices()
                         }
@@ -898,10 +978,9 @@ class BluetoothHidManager(private val context: Context? = null) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     protocolNegotiatedForConnection = true
                     isBootProtocolMode = (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE)
-                    // Under Bluetooth HID SUBCLASS1_COMBO, Boot Keyboard uses Report ID 1 and Boot Mouse uses Report ID 2.
-                    activeReportId = REPORT_ID_KEYBOARD
+                    activeReportId = currentKeyboardReportId()
                     _telemetry.value = _telemetry.value.copy(isBootMode = isBootProtocolMode)
-                    AppDebugLogger.i("BT-HID", "onSetProtocol protocol=$protocol (isBootMode=$isBootProtocolMode)")
+                    AppDebugLogger.i("BT-HID", "onSetProtocol protocol=$protocol (isBootMode=$isBootProtocolMode, reportId=$activeReportId)")
                 }
             }
 
@@ -925,14 +1004,15 @@ class BluetoothHidManager(private val context: Context? = null) {
     private fun onHostConnected(device: BluetoothDevice) {
         cancelConnectWatchdog()
         pendingConnectAddress = null
+        compatFallbackTriedForAddress.remove(device.address)
         connectedHostDevice = device
         connectedAtMs = System.currentTimeMillis()
         if (!protocolNegotiatedForConnection) {
             isBootProtocolMode = false
-            activeReportId = REPORT_ID_KEYBOARD
+            activeReportId = currentKeyboardReportId()
         }
         val name = getDeviceDisplayName(device)
-        AppDebugLogger.i("BT-HID", "Host bağlandı: $name (${device.address}) · ${_telemetry.value.qosLabel} · boot=$isBootProtocolMode")
+        AppDebugLogger.i("BT-HID", "Host bağlandı: $name (${device.address}) · ${_telemetry.value.qosLabel} · boot=$isBootProtocolMode · reportId=$activeReportId")
         _connectedDeviceName.value = name
         _connectionStatus.value = HidConnectionStatus.CONNECTED
         _connectionDiagnostic.value = null
@@ -950,7 +1030,7 @@ class BluetoothHidManager(private val context: Context? = null) {
         connectedAtMs = 0L
         protocolNegotiatedForConnection = false
         isBootProtocolMode = false
-        activeReportId = REPORT_ID_KEYBOARD
+        activeReportId = currentKeyboardReportId()
         activeMouseButtons = 0
         pendingMouseDx.set(0)
         pendingMouseDy.set(0)
@@ -1012,6 +1092,15 @@ class BluetoothHidManager(private val context: Context? = null) {
                 val device = bluetoothAdapter.getRemoteDevice(address) ?: return@execute
                 val name = getDeviceDisplayName(device)
                 val bondState = runCatching { device.bondState }.getOrDefault(BluetoothDevice.BOND_NONE)
+                val deviceType = runCatching { device.type }.getOrDefault(BluetoothDevice.DEVICE_TYPE_UNKNOWN)
+                val deviceTypeLabel = when (deviceType) {
+                    BluetoothDevice.DEVICE_TYPE_CLASSIC -> "CLASSIC"
+                    BluetoothDevice.DEVICE_TYPE_LE -> "LE_ONLY"
+                    BluetoothDevice.DEVICE_TYPE_DUAL -> "DUAL"
+                    else -> "UNKNOWN($deviceType)"
+                }
+                val majorClass = runCatching { device.bluetoothClass?.majorDeviceClass }.getOrNull()
+                val uuidsCount = runCatching { device.uuids?.size ?: 0 }.getOrDefault(0)
                 val preHidState = runCatching { hid.getConnectionState(device) }.getOrDefault(BluetoothProfile.STATE_DISCONNECTED)
                 val alreadyConnectedList = runCatching {
                     hid.getDevicesMatchingConnectionStates(intArrayOf(BluetoothProfile.STATE_CONNECTED))
@@ -1020,8 +1109,13 @@ class BluetoothHidManager(private val context: Context? = null) {
                 val sysAclNow = isDeviceSystemConnected(device)
                 AppDebugLogger.i(
                     "BT-HID",
-                    "connectToDevice($address / $name) bond=$bondState preHidState=$preHidState activeHidHosts=${alreadyConnectedList.size} sysAcl=$sysAclNow auto=$isAutoReconnect"
+                    "connectToDevice($address / $name) type=$deviceTypeLabel class=$majorClass uuids=$uuidsCount bond=$bondState preHidState=$preHidState activeHidHosts=${alreadyConnectedList.size} sysAcl=$sysAclNow mode=${_hidProfileMode.value} tier=$qosTierIndex auto=$isAutoReconnect"
                 )
+
+                // Warn clearly if paired exclusively as BLE (BluetoothHidDevice requires Classic BR/EDR!)
+                if (deviceType == BluetoothDevice.DEVICE_TYPE_LE && !isAutoReconnect) {
+                    AppDebugLogger.w("BT-HID", "$name ($address) yalnızca BLE (DEVICE_TYPE_LE) eşleşmiş; Classic HID reddedilebilir")
+                }
 
                 // Fast-path: if Android already has this host connected via HID AND physical link is alive
                 if ((preHidState == BluetoothProfile.STATE_CONNECTED || alreadyConnectedList.any { it.address == address }) && querySystemAclConnected(device) != false) {
@@ -1032,7 +1126,7 @@ class BluetoothHidManager(private val context: Context? = null) {
 
                 _connectionStatus.value = HidConnectionStatus.CONNECTING
                 if (!isAutoReconnect) {
-                    _connectionDiagnostic.value = "$name cihazına bağlanılıyor..."
+                    _connectionDiagnostic.value = "$name cihazına HID bağlantısı kuruluyor..."
                 }
 
                 // Disconnect any OTHER previous host first and give Bluetooth stack a short settle gap
@@ -1049,7 +1143,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                 val postHidState = runCatching { hid.getConnectionState(device) }.getOrDefault(BluetoothProfile.STATE_DISCONNECTED)
                 AppDebugLogger.i(
                     "BT-HID",
-                    "hid.connect(${device.address}) initiated=$initiated postHidState=$postHidState auto=$isAutoReconnect"
+                    "hid.connect(${device.address}) initiated=$initiated postHidState=$postHidState tier=$qosTierIndex mode=${_hidProfileMode.value} auto=$isAutoReconnect"
                 )
 
                 if (postHidState == BluetoothProfile.STATE_CONNECTED) {
@@ -1058,12 +1152,22 @@ class BluetoothHidManager(private val context: Context? = null) {
                 }
 
                 if (!initiated) {
+                    if (!isAutoReconnect && qosTierIndex < 2 && compatFallbackTriedForAddress.add(address)) {
+                        AppDebugLogger.w("BT-HID", "hid.connect($address) false döndü (tier=$qosTierIndex); Uyumluluk QoS (null,null) ile yeniden deneniyor")
+                        cancelConnectWatchdog()
+                        _connectionStatus.value = HidConnectionStatus.CONNECTING
+                        _connectionDiagnostic.value = "Özel QoS kabul edilmedi — Uyumluluk Modu (QoS=Varsayılan) ile yeniden deneniyor..."
+                        rebindHidProxyInternal(targetTier = 2, keepPendingAddress = address)
+                        return@execute
+                    }
                     cancelConnectWatchdog()
                     _connectionStatus.value = HidConnectionStatus.DISCONNECTED
                     _connectionDiagnostic.value = if (isAutoReconnect) {
                         null
+                    } else if (deviceType == BluetoothDevice.DEVICE_TYPE_LE) {
+                        "'$name' yalnızca BLE (Low Energy) olarak eşleşmiş. HID Klavye için Classic Bluetooth gerekir — cihazı kaldırıp yeniden eşleştirin."
                     } else {
-                        "Bağlantı başlatılamadı (HID reddedildi). PC Bluetooth ayarlarından telefonu 'Kaldır' yapıp ALVETAK açıkken yeniden eşleştirin."
+                        "Bağlantı başlatılamadı (hid.connect=false). 'Saf Klavye (Linux/Uyumluluk)' modunu seçip PC/Linux Bluetooth'tan telefonu kaldırıp ALVETAK açıkken yeniden eşleştirin."
                     }
                     return@execute
                 }
@@ -1109,20 +1213,34 @@ class BluetoothHidManager(private val context: Context? = null) {
                         return@scheduleAtFixedRate
                     }
 
-                    // 3) Hard 10s timeout -> NEVER stay stuck on "Bağlanıyor..."!
+                    // 3) Hard 10s timeout -> auto-fallback to Compatibility QoS once if on custom QoS, else cleanly exit!
                     if (elapsedMs >= 10000L) {
                         val isAclConnected = isDeviceSystemConnected(device)
+                        if (!isAutoReconnect && qosTierIndex < 2 && compatFallbackTriedForAddress.add(address)) {
+                            AppDebugLogger.w(
+                                "BT-HID",
+                                "10s zaman aşımı (tier=$qosTierIndex, dev=$address); Uyumluluk QoS (null,null) ile otomatik yeniden deneniyor"
+                            )
+                            runCatching { currentProxy.disconnect(device) }
+                            cancelConnectWatchdog()
+                            _connectionStatus.value = HidConnectionStatus.CONNECTING
+                            _connectionDiagnostic.value = "Özel QoS yanıt vermedi — Uyumluluk Modu (QoS=Varsayılan) ile tekrar deneniyor..."
+                            rebindHidProxyInternal(targetTier = 2, keepPendingAddress = address)
+                            return@scheduleAtFixedRate
+                        }
                         AppDebugLogger.e(
                             "BT-HID",
-                            "Bağlantı zaman aşımı (10s): dev=$address ($name) polledHidState=$polledState bond=$bondState aclConnected=$isAclConnected reg=$isAppRegistered"
+                            "Bağlantı zaman aşımı (10s): dev=$address ($name) type=$deviceTypeLabel polledHidState=$polledState bond=$bondState aclConnected=$isAclConnected reg=$isAppRegistered mode=${_hidProfileMode.value} tier=$qosTierIndex"
                         )
                         runCatching { currentProxy.disconnect(device) }
                         cancelConnectWatchdog()
                         _connectionStatus.value = HidConnectionStatus.DISCONNECTED
                         _connectionDiagnostic.value = if (isAutoReconnect) {
                             null
+                        } else if (deviceType == BluetoothDevice.DEVICE_TYPE_LE) {
+                            "'$name' yalnızca BLE (Low Energy) eşleşmiş. HID Klavye için Classic Bluetooth gerekir — cihazı kaldırıp yeniden eşleştirin."
                         } else if (isAclConnected) {
-                            "Android '$name' cihazına bağlı ancak bilgisayar HID (Klavye/Fare) kanalını açmadı. PC/Linux Bluetooth ayarlarından telefonu 'Kaldır' yapıp ALVETAK açıkken yeniden eşleştirin."
+                            "Android '$name' cihazına bağlı ancak bilgisayar HID (Klavye/Fare) kanalını açmadı. 'Saf Klavye (Linux)' modunu deneyin veya PC/Linux Bluetooth'tan telefonu 'Kaldır' yapıp ALVETAK açıkken yeniden eşleştirin."
                         } else {
                             "'$name' cihazı 10 sn içinde HID bağlantısını kabul etmedi. PC Bluetooth açıkken tekrar deneyin veya 'HID Sıfırla'ya basın."
                         }
@@ -1987,6 +2105,7 @@ class BluetoothHidManager(private val context: Context? = null) {
     companion object {
         private const val PREFS_NAME = "alvetak_bt_prefs"
         private const val KEY_LAST_HOST_ADDRESS = "last_host_address"
+        private const val KEY_HID_PROFILE_MODE = "hid_profile_mode"
 
         const val REPORT_ID_KEYBOARD = 1
         const val REPORT_ID_MOUSE = 2
@@ -2394,6 +2513,43 @@ class BluetoothHidManager(private val context: Context? = null) {
             0x75.toByte(), 0x10.toByte(), //   Report Size (16)
             0x95.toByte(), 0x01.toByte(), //   Report Count (1)
             0x81.toByte(), 0x00.toByte(), //   Input (Data, Array, Absolute)
+            0xC0.toByte()                 // End Collection
+        )
+
+        // Pure 63-byte Standard Boot Keyboard Descriptor (NO Report ID, SUBCLASS1_KEYBOARD).
+        // Universally accepted by Linux BlueZ, macOS, BIOS, and strict Windows Bluetooth stacks.
+        val HID_SIMPLE_KEYBOARD_DESCRIPTOR = byteArrayOf(
+            0x05.toByte(), 0x01.toByte(), // Usage Page (Generic Desktop)
+            0x09.toByte(), 0x06.toByte(), // Usage (Keyboard)
+            0xA1.toByte(), 0x01.toByte(), // Collection (Application)
+            0x05.toByte(), 0x07.toByte(), //   Usage Page (Key Codes)
+            0x19.toByte(), 0xE0.toByte(), //   Usage Minimum (224)
+            0x29.toByte(), 0xE7.toByte(), //   Usage Maximum (231)
+            0x15.toByte(), 0x00.toByte(), //   Logical Minimum (0)
+            0x25.toByte(), 0x01.toByte(), //   Logical Maximum (1)
+            0x75.toByte(), 0x01.toByte(), //   Report Size (1)
+            0x95.toByte(), 0x08.toByte(), //   Report Count (8)
+            0x81.toByte(), 0x02.toByte(), //   Input (Data, Variable, Absolute) - Modifier byte
+            0x95.toByte(), 0x01.toByte(), //   Report Count (1)
+            0x75.toByte(), 0x08.toByte(), //   Report Size (8)
+            0x81.toByte(), 0x01.toByte(), //   Input (Constant) - Reserved byte
+            0x95.toByte(), 0x05.toByte(), //   Report Count (5)
+            0x75.toByte(), 0x01.toByte(), //   Report Size (1)
+            0x05.toByte(), 0x08.toByte(), //   Usage Page (LEDs)
+            0x19.toByte(), 0x01.toByte(), //   Usage Minimum (1)
+            0x29.toByte(), 0x05.toByte(), //   Usage Maximum (5)
+            0x91.toByte(), 0x02.toByte(), //   Output (Data, Variable, Absolute)
+            0x95.toByte(), 0x01.toByte(), //   Report Count (1)
+            0x75.toByte(), 0x03.toByte(), //   Report Size (3)
+            0x91.toByte(), 0x01.toByte(), //   Output (Constant)
+            0x95.toByte(), 0x06.toByte(), //   Report Count (6)
+            0x75.toByte(), 0x08.toByte(), //   Report Size (8)
+            0x15.toByte(), 0x00.toByte(), //   Logical Minimum (0)
+            0x25.toByte(), 0x65.toByte(), //   Logical Maximum (101)
+            0x05.toByte(), 0x07.toByte(), //   Usage Page (Key Codes)
+            0x19.toByte(), 0x00.toByte(), //   Usage Minimum (0)
+            0x29.toByte(), 0x65.toByte(), //   Usage Maximum (101)
+            0x81.toByte(), 0x00.toByte(), //   Input (Data, Array)
             0xC0.toByte()                 // End Collection
         )
     }

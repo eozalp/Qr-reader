@@ -34,8 +34,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import com.example.bluetooth.BluetoothHidManager
 import com.example.bluetooth.HidConnectionStatus
+import com.example.bluetooth.HidProfileMode
 import com.example.debug.AppDebugLogger
 import com.example.model.BluetoothKeyboardConfig
 import com.example.model.KeyboardEndingKey
@@ -62,6 +65,7 @@ fun BluetoothKeyboardSheet(
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    val clipboard = LocalClipboardManager.current
     val connectionStatus by hidManager.connectionStatus.collectAsState()
     val connectedDeviceName by hidManager.connectedDeviceName.collectAsState()
     val connectionDiagnostic by hidManager.connectionDiagnostic.collectAsState()
@@ -69,6 +73,7 @@ fun BluetoothKeyboardSheet(
     val pairedDevices by hidManager.pairedDevices.collectAsState()
     val batchSentMap by hidManager.batchSentMap.collectAsState()
     val telemetry by hidManager.telemetry.collectAsState()
+    val hidProfileMode by hidManager.hidProfileMode.collectAsState()
 
     val lifecycleOwner = LocalLifecycleOwner.current
     fun checkImeEnabled(): Boolean = runCatching {
@@ -164,6 +169,7 @@ fun BluetoothKeyboardSheet(
                         connectedName = connectedDeviceName,
                         diagnosticMessage = connectionDiagnostic,
                         telemetry = telemetry,
+                        hidProfileMode = hidProfileMode,
                         pairedDevices = pairedDevices,
                         onConnectDevice = { hidManager.connectToDevice(it) },
                         onDisconnect = {
@@ -174,6 +180,18 @@ fun BluetoothKeyboardSheet(
                             }
                         },
                         onReregisterHid = { hidManager.reregisterHidProfile() },
+                        onSelectProfileMode = { hidManager.setHidProfileMode(it) },
+                        onCopyDebugLog = {
+                            val report = AppDebugLogger.buildShareableReport(
+                                hidStatus = connectionStatus.label,
+                                connectedHost = connectedDeviceName,
+                                hidTelemetry = telemetry,
+                                pairedCount = pairedDevices.size,
+                                entries = AppDebugLogger.logs.value
+                            )
+                            clipboard.setText(AnnotatedString(report))
+                            Toast.makeText(context, "BT Debug raporu kopyalandı", Toast.LENGTH_SHORT).show()
+                        },
                         onRequestPermission = onRequestPermission,
                         onMakeDiscoverable = {
                             runCatching { context.startActivity(hidManager.makeDiscoverableIntent()) }
@@ -921,10 +939,13 @@ private fun ConnectionStatusCard(
     connectedName: String?,
     diagnosticMessage: String?,
     telemetry: com.example.bluetooth.HidProtocolTelemetry,
+    hidProfileMode: HidProfileMode,
     pairedDevices: List<com.example.bluetooth.PairedBluetoothDevice>,
     onConnectDevice: (String) -> Unit,
     onDisconnect: () -> Unit,
     onReregisterHid: () -> Unit,
+    onSelectProfileMode: (HidProfileMode) -> Unit,
+    onCopyDebugLog: () -> Unit,
     onRequestPermission: () -> Unit,
     onMakeDiscoverable: () -> Unit,
     onOpenBtSettings: () -> Unit,
@@ -1115,25 +1136,67 @@ private fun ConnectionStatusCard(
 
             if (status == HidConnectionStatus.DISCONNECTED || status == HidConnectionStatus.CONNECTING) {
                 Spacer(modifier = Modifier.height(8.dp))
+                // HID Profile Compatibility Mode Selector (Combo vs Simple Keyboard for Linux/BlueZ)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    HidProfileMode.entries.forEach { mode ->
+                        val selected = hidProfileMode == mode
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (selected) NeonCyan.copy(alpha = 0.18f) else Color(0xFF0B111E),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (selected) NeonCyan else Color(0xFF334155)
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onSelectProfileMode(mode) }
+                                .testTag("sheet_hid_mode_${mode.name.lowercase()}")
+                        ) {
+                            Text(
+                                text = if (mode == HidProfileMode.COMBO) "Kombo (Klavye+Fare)" else "Saf Klavye (Linux)",
+                                fontSize = 10.5.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (selected) NeonCyan else Color(0xFF94A3B8),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     OutlinedButton(
                         onClick = onReregisterHid,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                         modifier = Modifier
                             .height(34.dp)
                             .testTag("sheet_hid_reset_disconnected_btn")
                     ) {
-                        Text("HID Sıfırla", fontSize = 11.sp, color = NeonCyan, fontWeight = FontWeight.Bold)
+                        Text("HID Sıfırla", fontSize = 10.5.sp, color = NeonCyan, fontWeight = FontWeight.Bold)
                     }
                     OutlinedButton(
                         onClick = onRefresh,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                         modifier = Modifier.height(34.dp)
                     ) {
-                        Text("Durumu Yenile", fontSize = 11.sp, color = Color.White)
+                        Text("Yenile", fontSize = 10.5.sp, color = Color.White)
+                    }
+                    OutlinedButton(
+                        onClick = onCopyDebugLog,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier
+                            .height(34.dp)
+                            .testTag("sheet_bt_copy_log_btn")
+                    ) {
+                        Text("Log Kopyala", fontSize = 10.5.sp, color = AmberGold, fontWeight = FontWeight.Bold)
                     }
                 }
             }
