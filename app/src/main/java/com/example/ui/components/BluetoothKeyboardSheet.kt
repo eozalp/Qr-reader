@@ -165,7 +165,13 @@ fun BluetoothKeyboardSheet(
                         telemetry = telemetry,
                         pairedDevices = pairedDevices,
                         onConnectDevice = { hidManager.connectToDevice(it) },
-                        onDisconnect = { hidManager.disconnectDevice() },
+                        onDisconnect = {
+                            if (connectionStatus == HidConnectionStatus.CONNECTING) {
+                                hidManager.cancelConnecting()
+                            } else {
+                                hidManager.disconnectDevice()
+                            }
+                        },
                         onReregisterHid = { hidManager.reregisterHidProfile() },
                         onRequestPermission = onRequestPermission,
                         onMakeDiscoverable = {
@@ -988,6 +994,16 @@ private fun ConnectionStatusCard(
                     ) {
                         Text("Bağlantıyı Kes", fontSize = 11.sp, color = Color(0xFFEF4444))
                     }
+                } else if (status == HidConnectionStatus.CONNECTING) {
+                    OutlinedButton(
+                        onClick = onDisconnect,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        modifier = Modifier
+                            .height(34.dp)
+                            .testTag("sheet_bt_cancel_connect_btn")
+                    ) {
+                        Text("İptal", fontSize = 11.sp, color = AmberGold, fontWeight = FontWeight.Bold)
+                    }
                 } else if (status == HidConnectionStatus.PERMISSION_REQUIRED) {
                     Button(
                         onClick = onRequestPermission,
@@ -1075,6 +1091,28 @@ private fun ConnectionStatusCard(
 
             // Show paired PC list & pairing helpers if disconnected or connecting
             if (status == HidConnectionStatus.DISCONNECTED || status == HidConnectionStatus.CONNECTING) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onReregisterHid,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        modifier = Modifier
+                            .height(34.dp)
+                            .testTag("sheet_hid_reset_disconnected_btn")
+                    ) {
+                        Text("HID Sıfırla", fontSize = 11.sp, color = NeonCyan, fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(
+                        onClick = onRefresh,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text("Durumu Yenile", fontSize = 11.sp, color = Color.White)
+                    }
+                }
                 if (pairedDevices.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(

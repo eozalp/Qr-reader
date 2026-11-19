@@ -169,6 +169,16 @@ fun BluetoothKeyboardSection(
                             ) {
                                 Text("Bağlantıyı Kes", fontSize = 11.5.sp, color = Color(0xFFEF4444))
                             }
+                        } else if (connectionStatus == HidConnectionStatus.CONNECTING) {
+                            OutlinedButton(
+                                onClick = { manager.cancelConnecting() },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                modifier = Modifier
+                                    .heightIn(min = 40.dp)
+                                    .testTag("settings_bt_cancel_connect_btn")
+                            ) {
+                                Text("İptal", fontSize = 11.5.sp, color = AmberGold, fontWeight = FontWeight.Bold)
+                            }
                         } else if (connectionStatus == HidConnectionStatus.PERMISSION_REQUIRED) {
                             Button(
                                 onClick = { onRequestBluetoothPermission?.invoke() },
@@ -268,6 +278,15 @@ fun BluetoothKeyboardSection(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            OutlinedButton(
+                                onClick = { manager.reregisterHidProfile() },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                modifier = Modifier
+                                    .heightIn(min = 40.dp)
+                                    .testTag("settings_hid_reset_disconnected_btn")
+                            ) {
+                                Text("HID Sıfırla", fontSize = 11.sp, color = NeonCyan, fontWeight = FontWeight.Bold)
+                            }
                             OutlinedButton(
                                 onClick = {
                                     runCatching { context.startActivity(manager.makeDiscoverableIntent()) }
