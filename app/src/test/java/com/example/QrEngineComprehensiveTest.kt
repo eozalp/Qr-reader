@@ -429,6 +429,44 @@ class QrEngineComprehensiveTest {
         assertTrue(row2.first.isEmphasized)
     }
 
+    @Test
+    fun testResolveTableRowsDeduplicatesPrefixPostfixAndAppliesVarPrecision() {
+        val varDefs = listOf(
+            VariableDefinition(position = 0, name = "fiyat", decimalPlaces = 2, prefix = "₺", postfix = " TL"),
+            VariableDefinition(position = 1, name = "adet", decimalPlaces = 0)
+        )
+        val result = ParsedQrResult(
+            rawText = "50-2",
+            extractedVariables = mapOf("fiyat" to 50.0, "adet" to 2.0),
+            formulaExpression = "fiyat * adet",
+            status = CalculationStatus.Success(100.0, "₺100.00 TL")
+        )
+
+        // 1. Explicit formula item with overlapping prefix/postfix spacing should never double as "₺₺100.00 TL TL"
+        val explicitConfig = ExcelTableConfig(
+            items = listOf(
+                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "fiyat", label = "Liste", isVisible = true),
+                ExcelTableCellItem(
+                    source = TableItemSource.FORMULA_RESULT,
+                    label = "NET TUTAR",
+                    prefix = "₺ ",
+                    postfix = " TL ",
+                    isVisible = true
+                )
+            )
+        )
+        val explicitRows = com.example.ui.resolveTableRows(explicitConfig, result, variableDefs = varDefs)
+        assertEquals("₺50.00 TL", explicitRows[0].second)
+        assertEquals("₺100.00 TL", explicitRows[1].second)
+
+        // 2. Empty tableConfig.items auto-generates variable rows + TOPLAM formula row
+        val autoRows = com.example.ui.resolveTableRows(ExcelTableConfig(items = emptyList()), result, variableDefs = varDefs)
+        assertEquals(3, autoRows.size)
+        assertEquals("TOPLAM", autoRows.last().first.label)
+        assertEquals(TableItemSource.FORMULA_RESULT, autoRows.last().first.source)
+        assertEquals("₺100.00 TL", autoRows.last().second)
+    }
+
     // --- Manual Variables, Signals & Embedded Profile QR Tests ---
 
     @Test

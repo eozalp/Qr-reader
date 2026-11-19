@@ -69,7 +69,7 @@ fun OverlayAppearanceSection(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "LIVE OVERLAY & LEADER LINE PREVIEW",
+                        text = "CANLI OVERLAY & REHBER ÇİZGİ ÖNİZLEME",
                         style = MaterialTheme.typography.labelSmall,
                         color = Color(0xFF94A3B8),
                         letterSpacing = 1.2.sp,
@@ -80,9 +80,10 @@ fun OverlayAppearanceSection(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(140.dp)
+                            .heightIn(min = 140.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF020617)),
+                            .background(Color(0xFF020617))
+                            .padding(vertical = 8.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         // Render mini demo barcode and bonded leader line when callout mode is enabled
@@ -132,7 +133,8 @@ fun OverlayAppearanceSection(
 
                         OverlayCardContent(
                             result = sampleResult,
-                            config = overlay
+                            config = overlay,
+                            variableDefs = definedVariables
                         )
                     }
                 }
@@ -153,7 +155,7 @@ fun OverlayAppearanceSection(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Overlay Display Mode",
+                            text = "Görünüm Modu",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -163,12 +165,12 @@ fun OverlayAppearanceSection(
                                 .background(Color(0xFF107C41))
                                 .padding(horizontal = 8.dp, vertical = 2.dp)
                         ) {
-                            Text("SPREADSHEET", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("TABLO", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         }
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Choose between the Mini Excel Cells Grid, Classic Card with pills, or Hybrid display.",
+                        text = "Mini Excel tablo, klasik özet kart veya ikisi bir arada hibrit görünüm arasından seçin.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -188,9 +190,9 @@ fun OverlayAppearanceSection(
                                 label = {
                                     Text(
                                         when (mode) {
-                                            OverlayDisplayMode.EXCEL_TABLE -> "Mini Excel Grid"
-                                            OverlayDisplayMode.COMPACT_CARD -> "Compact Card"
-                                            OverlayDisplayMode.HYBRID -> "Hybrid (Both)"
+                                            OverlayDisplayMode.EXCEL_TABLE -> "Mini Excel Tablo"
+                                            OverlayDisplayMode.COMPACT_CARD -> "Özet Kart"
+                                            OverlayDisplayMode.HYBRID -> "Hibrit (İkisi)"
                                         }
                                     )
                                 },
@@ -256,19 +258,19 @@ fun OverlayAppearanceSection(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Callout Layout & Bonded Lines",
+                        text = "Çakışma Önleme & Rehber Çizgiler",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Prevents multi-QR data boxes from overlapping by repelling boxes and bonding them with a thin leader line to the barcode dashed line.",
+                        text = "Çoklu barkod kutularının üst üste binmesini önler ve her kutuyu ince rehber çizgiyle barkoda bağlar.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Text("Layout Placement Mode", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    Text("Yerleşim Modu", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.height(6.dp))
 
                     Row(
@@ -285,9 +287,9 @@ fun OverlayAppearanceSection(
                                 label = {
                                     Text(
                                         when (mode) {
-                                            CalloutLayoutMode.SMART_ANTI_COLLISION -> "Anti-Collision (Bonded)"
-                                            CalloutLayoutMode.DOCKED_SIDEBAR -> "Docked Margin Rail"
-                                            CalloutLayoutMode.DIRECT_FOLLOW -> "Direct Follow (Attached)"
+                                            CalloutLayoutMode.SMART_ANTI_COLLISION -> "Akıllı Çakışma Önleme"
+                                            CalloutLayoutMode.DOCKED_SIDEBAR -> "Kenar Şeridi"
+                                            CalloutLayoutMode.DIRECT_FOLLOW -> "Doğrudan Takip"
                                         },
                                         fontSize = 12.sp
                                     )
@@ -304,7 +306,7 @@ fun OverlayAppearanceSection(
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        Text("Leader Line Visual Style", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                        Text("Rehber Çizgi Stili", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                         Spacer(modifier = Modifier.height(6.dp))
 
                         Row(
@@ -321,9 +323,9 @@ fun OverlayAppearanceSection(
                                     label = {
                                         Text(
                                             when (style) {
-                                                LeaderLineStyle.DASHED -> "Technical Dashed"
-                                                LeaderLineStyle.THIN_SOLID -> "Thin Glowing Solid"
-                                                LeaderLineStyle.ELBOW_JOINT -> "HUD 90° Elbow"
+                                                LeaderLineStyle.DASHED -> "Kesikli Çizgi"
+                                                LeaderLineStyle.THIN_SOLID -> "İnce Düz Çizgi"
+                                                LeaderLineStyle.ELBOW_JOINT -> "HUD 90° Dirsek"
                                             },
                                             fontSize = 12.sp
                                         )
@@ -342,7 +344,7 @@ fun OverlayAppearanceSection(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Barcode Dashed Outline", style = MaterialTheme.typography.bodyMedium)
+                            Text("Barkod Çevresi Kesikli Çerçeve", style = MaterialTheme.typography.bodyMedium)
                             Switch(
                                 checked = overlay.showBarcodeDashedOutline,
                                 onCheckedChange = { onOverlayChanged(overlay.copy(showBarcodeDashedOutline = it)) }
@@ -354,7 +356,7 @@ fun OverlayAppearanceSection(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Anchor Pin Dot on Barcode", style = MaterialTheme.typography.bodyMedium)
+                            Text("Barkod Bağlantı Noktası", style = MaterialTheme.typography.bodyMedium)
                             Switch(
                                 checked = overlay.showAnchorDot,
                                 onCheckedChange = { onOverlayChanged(overlay.copy(showAnchorDot = it)) }
@@ -363,7 +365,7 @@ fun OverlayAppearanceSection(
 
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Line Thickness: ${"%.1f".format(overlay.leaderLineWidthDp)} dp",
+                            text = "Çizgi Kalınlığı: ${"%.1f".format(overlay.leaderLineWidthDp)} dp",
                             style = MaterialTheme.typography.bodySmall
                         )
                         Slider(
@@ -379,7 +381,7 @@ fun OverlayAppearanceSection(
 
         // Anchor Position
         item {
-            Text(text = "Anchor Position Relative to QR", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(text = "Barkoda Göre Konum", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(8.dp))
 
             Row(
@@ -389,7 +391,15 @@ fun OverlayAppearanceSection(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OverlayAnchorPosition.entries.forEach { anchor ->
-                    val label = anchor.name.replace("_", " ").lowercase().replaceFirstChar { it.uppercase() }
+                    val label = when (anchor) {
+                        OverlayAnchorPosition.CENTER -> "Orta"
+                        OverlayAnchorPosition.ABOVE -> "Üstte"
+                        OverlayAnchorPosition.BELOW -> "Altta"
+                        OverlayAnchorPosition.TOP_LEFT -> "Sol Üst"
+                        OverlayAnchorPosition.TOP_RIGHT -> "Sağ Üst"
+                        OverlayAnchorPosition.BOTTOM_LEFT -> "Sol Alt"
+                        OverlayAnchorPosition.BOTTOM_RIGHT -> "Sağ Alt"
+                    }
                     FilterChip(
                         selected = overlay.anchorPosition == anchor,
                         onClick = { onOverlayChanged(overlay.copy(anchorPosition = anchor)) },
@@ -410,7 +420,7 @@ fun OverlayAppearanceSection(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Auto-Avoid Screen Edges", fontWeight = FontWeight.SemiBold)
+                        Text("Ekran Kenarlarından Otomatik Kaçın", fontWeight = FontWeight.SemiBold)
                         Switch(
                             checked = overlay.autoAvoidEdges,
                             onCheckedChange = { onOverlayChanged(overlay.copy(autoAvoidEdges = it)) }
@@ -419,7 +429,7 @@ fun OverlayAppearanceSection(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Text("X Offset: ${overlay.offsetX.toInt()} dp")
+                    Text("Yatay Kaydırma (X): ${overlay.offsetX.toInt()} dp")
                     Slider(
                         value = overlay.offsetX,
                         onValueChange = { onOverlayChanged(overlay.copy(offsetX = it)) },
@@ -428,7 +438,7 @@ fun OverlayAppearanceSection(
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    Text("Y Offset: ${overlay.offsetY.toInt()} dp")
+                    Text("Dikey Kaydırma (Y): ${overlay.offsetY.toInt()} dp")
                     Slider(
                         value = overlay.offsetY,
                         onValueChange = { onOverlayChanged(overlay.copy(offsetY = it)) },
@@ -440,7 +450,7 @@ fun OverlayAppearanceSection(
 
         // Fill Mode & Background
         item {
-            Text(text = "Background & Fill Mode", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(text = "Arka Plan & Dolgu Stili", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(8.dp))
 
             Row(
@@ -461,7 +471,7 @@ fun OverlayAppearanceSection(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Text("Theme Color Palette", style = MaterialTheme.typography.labelLarge)
+            Text("Tema Renk Paleti", style = MaterialTheme.typography.labelLarge)
             Spacer(modifier = Modifier.height(8.dp))
 
             val colorPresets = listOf(
@@ -515,14 +525,14 @@ fun OverlayAppearanceSection(
                 OutlinedTextField(
                     value = overlay.textColorHex,
                     onValueChange = { onOverlayChanged(overlay.copy(textColorHex = it)) },
-                    label = { Text("Text Color Hex") },
+                    label = { Text("Metin Rengi (Hex)") },
                     modifier = Modifier.weight(1f),
                     singleLine = true
                 )
                 OutlinedTextField(
                     value = overlay.borderColorHex,
                     onValueChange = { onOverlayChanged(overlay.copy(borderColorHex = it)) },
-                    label = { Text("Border Color Hex") },
+                    label = { Text("Çerçeve Rengi (Hex)") },
                     modifier = Modifier.weight(1f),
                     singleLine = true
                 )
@@ -532,7 +542,7 @@ fun OverlayAppearanceSection(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Text("Overlay Scale / Zoom: ${(overlay.scale * 100).toInt()}% (or pinch-to-zoom on screen)")
+            Text("Ölçek / Yakınlaştırma: %${(overlay.scale * 100).toInt()} (ekranda iki parmakla değiştirin)")
             Slider(
                 value = overlay.scale,
                 onValueChange = { onOverlayChanged(overlay.copy(scale = it)) },
@@ -546,10 +556,10 @@ fun OverlayAppearanceSection(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    Text(text = "Typography", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(text = "Yazı Tipi", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    Text("Font Size: ${overlay.fontSizeSp.toInt()} sp")
+                    Text("Yazı Boyutu: ${overlay.fontSizeSp.toInt()} sp")
                     Slider(
                         value = overlay.fontSizeSp,
                         onValueChange = { onOverlayChanged(overlay.copy(fontSizeSp = it)) },
@@ -567,17 +577,17 @@ fun OverlayAppearanceSection(
                         FilterChip(
                             selected = overlay.isBold,
                             onClick = { onOverlayChanged(overlay.copy(isBold = !overlay.isBold)) },
-                            label = { Text("Bold") }
+                            label = { Text("Kalın") }
                         )
                         FilterChip(
                             selected = overlay.isItalic,
                             onClick = { onOverlayChanged(overlay.copy(isItalic = !overlay.isItalic)) },
-                            label = { Text("Italic") }
+                            label = { Text("İtalik") }
                         )
                         FilterChip(
                             selected = overlay.textAlignCenter,
                             onClick = { onOverlayChanged(overlay.copy(textAlignCenter = !overlay.textAlignCenter)) },
-                            label = { Text("Center Align") }
+                            label = { Text("Ortala") }
                         )
                     }
                 }
@@ -586,7 +596,7 @@ fun OverlayAppearanceSection(
 
         // Border & Shapes
         item {
-            Text(text = "Border & Corner Radius", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(text = "Çerçeve & Köşe Yuvarlaklığı", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(8.dp))
 
             Row(
@@ -598,23 +608,23 @@ fun OverlayAppearanceSection(
                 FilterChip(
                     selected = overlay.showBorder,
                     onClick = { onOverlayChanged(overlay.copy(showBorder = !overlay.showBorder)) },
-                    label = { Text("Show Border") }
+                    label = { Text("Çerçeve Göster") }
                 )
                 FilterChip(
                     selected = overlay.borderStyle == BorderStyle.SOLID,
                     onClick = { onOverlayChanged(overlay.copy(borderStyle = BorderStyle.SOLID)) },
-                    label = { Text("Solid") }
+                    label = { Text("Düz") }
                 )
                 FilterChip(
                     selected = overlay.borderStyle == BorderStyle.DASHED,
                     onClick = { onOverlayChanged(overlay.copy(borderStyle = BorderStyle.DASHED)) },
-                    label = { Text("Dashed") }
+                    label = { Text("Kesikli") }
                 )
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Text("Corner Radius: ${overlay.cornerRadiusDp.toInt()} dp")
+            Text("Köşe Yuvarlaklığı: ${overlay.cornerRadiusDp.toInt()} dp")
             Slider(
                 value = overlay.cornerRadiusDp,
                 onValueChange = { onOverlayChanged(overlay.copy(cornerRadiusDp = it)) },
@@ -623,7 +633,7 @@ fun OverlayAppearanceSection(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            Text("Border Width: ${overlay.borderWidthDp.toInt()} dp")
+            Text("Çerçeve Kalınlığı: ${overlay.borderWidthDp.toInt()} dp")
             Slider(
                 value = overlay.borderWidthDp,
                 onValueChange = { onOverlayChanged(overlay.copy(borderWidthDp = it)) },
@@ -633,7 +643,7 @@ fun OverlayAppearanceSection(
 
         // Icon & Badges
         item {
-            Text(text = "Icon & Additional HUD Pills", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(text = "Simge ve Rozetler", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(8.dp))
 
             Row(
@@ -660,13 +670,13 @@ fun OverlayAppearanceSection(
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text(
-                        text = "Individual Pill Visibility",
+                        text = "Rozet Görünürlüğü",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Customize exactly which badges and variables appear in the AR overlay card.",
+                        text = "Kamera kartında hangi değişkenlerin ve rozetlerin görüneceğini seçin.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -678,7 +688,7 @@ fun OverlayAppearanceSection(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Formula Pill (= a + b)", style = MaterialTheme.typography.bodyMedium)
+                        Text("Formül Rozeti (= a + b)", style = MaterialTheme.typography.bodyMedium)
                         Switch(
                             checked = overlay.showCalculationFormulaHint,
                             onCheckedChange = { onOverlayChanged(overlay.copy(showCalculationFormulaHint = it)) }
@@ -692,7 +702,7 @@ fun OverlayAppearanceSection(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Raw QR Content Pill", style = MaterialTheme.typography.bodyMedium)
+                        Text("Ham Barkod İçeriği Rozeti", style = MaterialTheme.typography.bodyMedium)
                         Switch(
                             checked = overlay.showRawQrPill,
                             onCheckedChange = { onOverlayChanged(overlay.copy(showRawQrPill = it)) }
@@ -706,7 +716,7 @@ fun OverlayAppearanceSection(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Variable Pills (All)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        Text("Değişken Rozetleri (Tümü)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                         Switch(
                             checked = overlay.showVariableSummaryPill,
                             onCheckedChange = { onOverlayChanged(overlay.copy(showVariableSummaryPill = it)) }
@@ -716,7 +726,7 @@ fun OverlayAppearanceSection(
                     if (overlay.showVariableSummaryPill) {
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "Toggle Individual Variable Pills:",
+                            text = "Tekil Değişken Rozetleri:",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.SemiBold
@@ -747,7 +757,7 @@ fun OverlayAppearanceSection(
                                         }
                                         onOverlayChanged(overlay.copy(hiddenPillVariables = updatedHidden))
                                     },
-                                    label = { Text("Pill: $varName") }
+                                    label = { Text("Rozet: $varName") }
                                 )
                             }
                         }

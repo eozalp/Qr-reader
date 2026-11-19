@@ -273,21 +273,26 @@ class BluetoothHidPayloadTest {
 
     @Test
     fun testComputeKeyTimingPreventsAutoRepeatOnRepeatedDigits() {
-        // Legacy sub-frame 3ms / 12ms delays must clamp to >= 24ms hold & >= 22ms gap
-        val fastDifferent = BluetoothHidManager.computeKeyTiming(12L, isSameKeyCodeAsPrev = false)
-        assertTrue(fastDifferent.holdMs >= 24L)
-        assertTrue(fastDifferent.gapMs >= 22L)
+        // Turbo preset (7ms) maintains clean ACL separation while delivering high throughput
+        val turbo = BluetoothHidManager.computeKeyTiming(5L, isSameKeyCodeAsPrev = false)
+        assertTrue(turbo.holdMs >= 7L)
+        assertTrue(turbo.gapMs >= 5L)
 
-        // Consecutive identical characters (like '0'->'0' in "00326") get +15ms extra release separation
+        // Default fast preset (10ms) stays brisk (~55 chars/s)
+        val fastDifferent = BluetoothHidManager.computeKeyTiming(10L, isSameKeyCodeAsPrev = false)
+        assertEquals(10L, fastDifferent.holdMs)
+        assertEquals(8L, fastDifferent.gapMs)
+
+        // Consecutive identical characters (like '0'->'0' in "00326") get +10ms extra release separation
         val repeatedDigit = BluetoothHidManager.computeKeyTiming(26L, isSameKeyCodeAsPrev = true)
         assertEquals(26L, repeatedDigit.holdMs)
-        assertEquals(41L, repeatedDigit.gapMs)
+        assertEquals(30L, repeatedDigit.gapMs)
 
         // Slow safe preset stays within safe bounds (below OS typematic auto-repeat threshold)
         val safeSlow = BluetoothHidManager.computeKeyTiming(40L, isSameKeyCodeAsPrev = false)
         assertEquals(40L, safeSlow.holdMs)
         assertTrue(safeSlow.holdMs <= 50L)
-        assertTrue(safeSlow.gapMs in 22L..45L)
+        assertTrue(safeSlow.gapMs in 20L..45L)
     }
 
     @Test
@@ -365,5 +370,96 @@ class BluetoothHidPayloadTest {
             prevAccumY = 0f
         )
         assertTrue("Expected negative dy on upward pitch, got ${pitchUp.dy}", pitchUp.dy < 0)
+    }
+
+    @Test
+    fun testSyncVisibleBarcodesStaysLockedWhileVisibleAndUnlocksWhenAbsent() {
+        val hidManager = BluetoothHidManager()
+        val config = testConfig.copy(
+            isAutoSendEnabled = true,
+            sendCooldownMs = 500L,
+            requireDuplicateConfirmation = true
+        )
+
+        // 1. Scan & record CODE-LOCK, then dismiss a repeat attempt
+        assertEquals(com.example.bluetooth.AutoSendDecision.SendNow, hidManager.evaluateAutoSend("CODE-LOCK", config, nowMs = 1000L))
+        hidManager.recordSentBarcode("CODE-LOCK", "CODE-LOCK", nowMs = 1000L)
+
+        // Even after > 1200ms while CODE-LOCK stays in visibleRawBarcodes, it MUST remain locked in-frame
+        hidManager.syncVisibleBarcodes(setOf("CODE-LOCK"), nowMs = 3500L)
+        hidManager.syncVisibleBarcodes(setOf("CODE-LOCK"), nowMs = 6000L)
+        assertEquals(
+            com.example.bluetooth.AutoSendDecision.SkipAlreadyActive,
+            hidManager.evaluateAutoSend("CODE-LOCK", config, nowMs = 6100L)
+        )
+
+        // Once absent for < 1200ms it is still within grace period
+        hidManager.syncVisibleBarcodes(emptySet(), nowMs = 6500L)
+        assertEquals(
+            com.example.bluetooth.AutoSendDecision.SkipAlreadyActive,
+            hidManager.evaluateAutoSend("CODE-LOCK", config, nowMs = 6600L)
+        )
+
+        // Once absent for > 1200ms it unlocks and triggers duplicate confirmation on re-entry
+        hidManager.syncVisibleBarcodes(emptySet(), nowMs = 8000L)
+        val reEntry = hidManager.evaluateAutoSend("CODE-LOCK", config, nowMs = 8100L)
+        assertTrue(reEntry is com.example.bluetooth.AutoSendDecision.RequireConfirmation)
+    }
+
+    @Test
+    fun testTurkishQPunctuationAndSymbolsMapped() {
+        val requiredSymbols = listOf('#', '$', '{', '[', ']', '}', '\\', '|', '<', '>', '~', '`')
+        for (ch in requiredSymbols) {
+            val mapped = BluetoothHidManager.charToHidKey(ch, KeyboardLayoutType.TR_Q)
+            assertNotNull("Expected TR-Q HID mapping for '$ch'", mapped)
+        }
+
+        // Verify '<' and '>' map to ISO 102nd key (0x64) without / with Shift
+        val lt = BluetoothHidManager.charToHidKey('<', KeyboardLayoutType.TR_Q)!!
+        assertEquals(0x64.toByte(), lt.keyCode)
+        assertEquals(BluetoothHidManager.MODIFIER_NONE, lt.modifier)
+
+        val gt = BluetoothHidManager.charToHidKey('>', KeyboardLayoutType.TR_Q)!!
+        assertEquals(0x64.toByte(), gt.keyCode)
+        assertEquals(BluetoothHidManager.MODIFIER_SHIFT, gt.modifier)
+    }
+
+    @Test
+    fun testCoalesceMouseDeltaStepClampsAndPreservesRemainder() {
+        val step1 = BluetoothHidManager.coalesceMouseDeltaStep(remX = 300, remY = -260, remW = 150)
+        assertEquals(127, step1.stepX)
+        assertEquals(-127, step1.stepY)
+        assertEquals(127, step1.stepW)
+        assertEquals(173, step1.nextRemX)
+        assertEquals(-133, step1.nextRemY)
+        assertEquals(23, step1.nextRemW)
+
+        val step2 = BluetoothHidManager.coalesceMouseDeltaStep(step1.nextRemX, step1.nextRemY, step1.nextRemW)
+        assertEquals(127, step2.stepX)
+        assertEquals(-127, step2.stepY)
+        assertEquals(23, step2.stepW)
+        assertEquals(46, step2.nextRemX)
+        assertEquals(-6, step2.nextRemY)
+        assertEquals(0, step2.nextRemW)
+    }
+
+    @Test
+    fun testGyroBiasEstimatorCancelsDriftWhilePassingPanMotion() {
+        val estimator = com.example.bluetooth.GyroBiasEstimator()
+
+        // Simulate stationary phone with constant hardware gyro drift (+0.05, -0.04, +0.03 rad/s)
+        var compensated = Triple(0f, 0f, 0f)
+        repeat(60) {
+            compensated = estimator.updateAndCompensate(0.05f, -0.04f, 0.03f)
+        }
+        assertTrue("X drift should converge near zero: ${compensated.first}", kotlin.math.abs(compensated.first) < 0.005f)
+        assertTrue("Y drift should converge near zero: ${compensated.second}", kotlin.math.abs(compensated.second) < 0.005f)
+        assertTrue("Z drift should converge near zero: ${compensated.third}", kotlin.math.abs(compensated.third) < 0.005f)
+
+        // Intentional fast wrist pan (> 0.12 rad/s) should NOT corrupt stationary bias and should pass through
+        val biasZBeforePan = estimator.biasZ
+        val panCompensated = estimator.updateAndCompensate(0.05f, -0.04f, 1.50f)
+        assertEquals(biasZBeforePan, estimator.biasZ, 1e-6f)
+        assertTrue("Wrist pan should pass unattenuated", panCompensated.third > 1.44f)
     }
 }

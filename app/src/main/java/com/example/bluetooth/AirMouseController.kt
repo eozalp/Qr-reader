@@ -48,6 +48,7 @@ class AirMouseController(
     private var lastGyroTimestampNs: Long = 0L
     private var accumX: Float = 0f
     private var accumY: Float = 0f
+    private val biasEstimator = GyroBiasEstimator()
 
     fun start() {
         val sm = sensorManager ?: return
@@ -57,11 +58,16 @@ class AirMouseController(
         lastGyroTimestampNs = 0L
         accumX = 0f
         accumY = 0f
+        biasEstimator.reset()
         isRunning = true
 
-        gravitySensor?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
-        accelSensor?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
-        sm.registerListener(this, gyro, SensorManager.SENSOR_DELAY_GAME)
+        val samplingUs = 10_000
+        gravitySensor?.let { sm.registerListener(this, it, samplingUs) }
+        accelSensor?.let { sm.registerListener(this, it, samplingUs) }
+        val registered = sm.registerListener(this, gyro, samplingUs)
+        if (!registered) {
+            sm.registerListener(this, gyro, SensorManager.SENSOR_DELAY_GAME)
+        }
     }
 
     fun stop() {
@@ -92,6 +98,11 @@ class AirMouseController(
                 }
             }
             Sensor.TYPE_GYROSCOPE -> {
+                val (cleanWx, cleanWy, cleanWz) = biasEstimator.updateAndCompensate(
+                    event.values[0],
+                    event.values[1],
+                    event.values[2]
+                )
                 if (!isRunning || isClutchPaused) {
                     lastGyroTimestampNs = event.timestamp
                     accumX = 0f
@@ -104,9 +115,9 @@ class AirMouseController(
 
                 val dtSec = ((event.timestamp - prevTs) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
                 val step = AirMouseMath.accumulateStep(
-                    wx = event.values[0],
-                    wy = event.values[1],
-                    wz = event.values[2],
+                    wx = cleanWx,
+                    wy = cleanWy,
+                    wz = cleanWz,
                     gx = gx,
                     gy = gy,
                     gz = gz,
@@ -126,6 +137,45 @@ class AirMouseController(
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
         // No-op
+    }
+}
+
+/**
+ * Estimates and cancels hardware gyroscope DC bias whenever the device is held still,
+ * eliminating continuous cursor drift without attenuating intentional wrist panning.
+ */
+class GyroBiasEstimator {
+    var biasX: Float = 0f
+        private set
+    var biasY: Float = 0f
+        private set
+    var biasZ: Float = 0f
+        private set
+    var stationarySamples: Int = 0
+        private set
+
+    fun reset() {
+        biasX = 0f
+        biasY = 0f
+        biasZ = 0f
+        stationarySamples = 0
+    }
+
+    fun updateAndCompensate(wx: Float, wy: Float, wz: Float): Triple<Float, Float, Float> {
+        val rawMag = sqrt(wx * wx + wy * wy + wz * wz)
+        if (rawMag < STILL_THRESHOLD_RAD_S) {
+            stationarySamples++
+            val alpha = if (stationarySamples <= INITIAL_FAST_SAMPLES) 0.14f else 0.025f
+            biasX += alpha * (wx - biasX)
+            biasY += alpha * (wy - biasY)
+            biasZ += alpha * (wz - biasZ)
+        }
+        return Triple(wx - biasX, wy - biasY, wz - biasZ)
+    }
+
+    companion object {
+        private const val STILL_THRESHOLD_RAD_S = 0.12f
+        private const val INITIAL_FAST_SAMPLES = 25
     }
 }
 

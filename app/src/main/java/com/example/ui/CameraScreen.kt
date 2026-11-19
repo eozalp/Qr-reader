@@ -209,21 +209,15 @@ fun CameraScreen(
         }
     }
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
-    DisposableEffect(Unit) {
-        onDispose {
-            try {
-                val providerFuture = ProcessCameraProvider.getInstance(context)
-                if (providerFuture.isDone) {
-                    providerFuture.get().unbindAll()
-                }
-            } catch (_: Exception) {}
-            cameraExecutor.shutdown()
-        }
-    }
-
     val coroutineScope = rememberCoroutineScope()
-    var liveOverlayScale by remember(activeProfile.overlay.scale) {
+    var liveOverlayScale by remember(activeProfile.id) {
         mutableFloatStateOf(activeProfile.overlay.scale)
+    }
+    var isPinchingOverlay by remember { mutableStateOf(false) }
+    LaunchedEffect(activeProfile.overlay.scale) {
+        if (!isPinchingOverlay) {
+            liveOverlayScale = activeProfile.overlay.scale
+        }
     }
     var showScaleToast by remember { mutableStateOf(false) }
     var saveScaleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -261,6 +255,29 @@ fun CameraScreen(
                 )
                 trackedQrs = updated
             }
+        }
+    }
+
+    val autoSendQueue = remember {
+        kotlinx.coroutines.channels.Channel<suspend () -> Unit>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+    }
+    LaunchedEffect(Unit) {
+        for (task in autoSendQueue) {
+            runCatching { task() }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            autoSendQueue.close()
+            try {
+                val providerFuture = ProcessCameraProvider.getInstance(context)
+                if (providerFuture.isDone) {
+                    providerFuture.get().unbindAll()
+                }
+            } catch (_: Exception) {}
+            analyzer.close()
+            cameraExecutor.shutdown()
         }
     }
 
@@ -368,7 +385,7 @@ fun CameraScreen(
                         val convertTr = activeProfile.bluetoothKeyboard.convertTurkishChars
                         val layout = activeProfile.bluetoothKeyboard.keyboardLayout
                         val rawKey = item.rawContent
-                        coroutineScope.launch {
+                        autoSendQueue.trySend {
                             val ok = hidManager.sendToComputer(
                                 textToSend = payload,
                                 rawBarcodeKey = rawKey,
@@ -377,15 +394,21 @@ fun CameraScreen(
                                 convertTurkishChars = convertTr,
                                 keyboardLayout = layout
                             )
+                            val countNow = hidManager.batchSentMap.value[rawKey]?.count ?: 1
                             if (ok) {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                val countNow = hidManager.batchSentMap.value[rawKey]?.count ?: 1
-                                autoSendToastText = "✓ PC'ye İletildi (#$countNow): \"$payload\""
-                                hideAutoSendToastJob?.cancel()
-                                hideAutoSendToastJob = coroutineScope.launch {
-                                    delay(2400)
-                                    autoSendToastText = null
+                                autoSendToastText = if (hidManager.lastSendWasSimulated) {
+                                    "ℹ Sanal Test (#$countNow) — PC BT bağlı değil"
+                                } else {
+                                    "✓ PC'ye İletildi (#$countNow): \"$payload\""
                                 }
+                            } else {
+                                autoSendToastText = "⚠ BT gönderim başarısız"
+                            }
+                            hideAutoSendToastJob?.cancel()
+                            hideAutoSendToastJob = coroutineScope.launch {
+                                delay(2400)
+                                autoSendToastText = null
                             }
                         }
                     }
@@ -628,19 +651,22 @@ fun CameraScreen(
                     .pointerInput(activeProfile.id) {
                         detectTransformGestures { _, _, zoom, _ ->
                             if (zoom != 1.0f) {
+                                isPinchingOverlay = true
                                 val updated = (liveOverlayScale * zoom).coerceIn(0.5f, 3.0f)
                                 liveOverlayScale = updated
                                 showScaleToast = true
                                 saveScaleJob?.cancel()
                                 saveScaleJob = coroutineScope.launch {
-                                    // Keep last settings: persist the scale to profile repository
+                                    delay(350)
+                                    // Persist the debounced scale to profile repository
                                     profileRepository.saveProfile(
                                         activeProfile.copy(
                                             overlay = activeProfile.overlay.copy(scale = updated)
                                         )
                                     )
-                                    kotlinx.coroutines.delay(1200)
+                                    delay(900)
                                     showScaleToast = false
+                                    isPinchingOverlay = false
                                 }
                             }
                         }
@@ -653,6 +679,7 @@ fun CameraScreen(
                     screenHeightPx = screenHeightPx,
                     showRawQrData = isRawModeActive,
                     pinnedQr = pinnedQr,
+                    variableDefs = activeProfile.parsingRules.variables,
                     onPinClick = { tracked ->
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         pinnedQr = tracked
@@ -1041,6 +1068,7 @@ fun CameraScreen(
                     PinnedFullWidthOverlayCard(
                         tracked = pinned,
                         config = activeProfile.overlay,
+                        variableDefs = activeProfile.parsingRules.variables,
                         onUnpin = {
                             pinnedQr = null
                             isPaused = false
@@ -1070,11 +1098,12 @@ fun CameraScreen(
                                     keyboardLayout = activeProfile.bluetoothKeyboard.keyboardLayout
                                 )
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                Toast.makeText(
-                                    context,
-                                    if (ok) "Bilgisayara iletildi: \"$payload\"" else "Gönderim başarısız",
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                                val msg = when {
+                                    !ok -> "BT gönderim başarısız"
+                                    hidManager.lastSendWasSimulated -> "Sanal Test kaydı eklendi (PC BT bağlı değil)"
+                                    else -> "Bilgisayara iletildi: \"$payload\""
+                                }
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                             }
                         }
                     )
@@ -1385,15 +1414,21 @@ fun CameraScreen(
                                                 convertTurkishChars = kb.convertTurkishChars,
                                                 keyboardLayout = kb.keyboardLayout
                                             )
+                                            val countNow = hidManager.batchSentMap.value[trackedRef.rawContent]?.count ?: (prevEntry.count + 1)
                                             if (ok) {
                                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                val countNow = hidManager.batchSentMap.value[trackedRef.rawContent]?.count ?: (prevEntry.count + 1)
-                                                autoSendToastText = "✓ +1 Onaylı İletildi (#$countNow)"
-                                                hideAutoSendToastJob?.cancel()
-                                                hideAutoSendToastJob = coroutineScope.launch {
-                                                    delay(2200)
-                                                    autoSendToastText = null
+                                                autoSendToastText = if (hidManager.lastSendWasSimulated) {
+                                                    "ℹ +1 Sanal Test (#$countNow) — BT bağlı değil"
+                                                } else {
+                                                    "✓ +1 Onaylı İletildi (#$countNow)"
                                                 }
+                                            } else {
+                                                autoSendToastText = "⚠ BT gönderim başarısız"
+                                            }
+                                            hideAutoSendToastJob?.cancel()
+                                            hideAutoSendToastJob = coroutineScope.launch {
+                                                delay(2200)
+                                                autoSendToastText = null
                                             }
                                         }
                                     },

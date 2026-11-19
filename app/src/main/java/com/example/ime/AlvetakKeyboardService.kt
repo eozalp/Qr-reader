@@ -34,6 +34,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -54,6 +55,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -98,6 +100,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         get() = lifecycleRegistry
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val btHidQueue = Channel<suspend () -> Unit>(Channel.UNLIMITED)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val trLocale = Locale("tr", "TR")
 
@@ -207,6 +210,11 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 updateTouchpadStatusHint()
             }
         }
+        serviceScope.launch {
+            for (task in btHidQueue) {
+                runCatching { task() }
+            }
+        }
     }
 
     override fun onEvaluateFullscreenMode(): Boolean = false
@@ -230,13 +238,17 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         rootLayout = root
 
         // Reserve bottom space for Android IME navigation / keyboard-chooser bar (`⌨` & `v`)
-        ViewCompat.setOnApplyWindowInsetsListener(root) { view, windowInsets ->
-            val navInsets = windowInsets.getInsets(
-                WindowInsetsCompat.Type.navigationBars() or WindowInsetsCompat.Type.displayCutout()
-            )
-            (view as? InsetAwareKeyboardRootLayout)?.updateBottomInset(navInsets.bottom)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, windowInsets ->
+            syncImeBottomInset(windowInsets)
             windowInsets
         }
+        root.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+                attachDecorInsetsListener()
+                syncImeBottomInset(null)
+            }
+            override fun onViewDetachedFromWindow(v: View) = Unit
+        })
 
         // ============================================================
         // 1. BARCODE CAMERA PANEL
@@ -364,7 +376,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             setPadding(dp(11), dp(11), dp(11), dp(11))
             layoutParams = FrameLayout.LayoutParams(dp(44), dp(44), Gravity.BOTTOM or Gravity.START).apply {
                 marginStart = dp(14)
-                bottomMargin = dp(14)
+                bottomMargin = dp(18)
             }
             setOnClickListener {
                 useFrontCamera = !useFrontCamera
@@ -389,7 +401,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 dp(38),
                 Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
             ).apply {
-                bottomMargin = dp(16)
+                bottomMargin = dp(20)
             }
         }
 
@@ -431,7 +443,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             setPadding(dp(11), dp(11), dp(11), dp(11))
             layoutParams = FrameLayout.LayoutParams(dp(44), dp(44), Gravity.BOTTOM or Gravity.END).apply {
                 marginEnd = dp(14)
-                bottomMargin = dp(14)
+                bottomMargin = dp(18)
             }
             setOnClickListener {
                 if (!useFrontCamera) {
@@ -530,7 +542,9 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         // ============================================================
         // 4. TOP FLOATING HEADER ROW: [ Barkod | Klavye | Mouse ] & [ Yerel | BT ]
         // ============================================================
-        val topHeader = FrameLayout(this).apply {
+        val topHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -542,7 +556,19 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             }
         }
 
-        // Top-Left: [ Barkod | Klavye | Mouse ]
+        // Top-Left: [ Barkod | Klavye | Mouse ] wrapped in HorizontalScrollView to prevent collision on narrow screens
+        val modeScrollHost = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            ).apply {
+                marginEnd = dp(6)
+            }
+        }
+
         val modePillHost = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -554,8 +580,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             setPadding(dp(3), dp(3), dp(3), dp(3))
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
-                dp(36),
-                Gravity.START or Gravity.CENTER_VERTICAL
+                dp(36)
             )
         }
 
@@ -583,7 +608,8 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         modePillHost.addView(bTab)
         modePillHost.addView(kTab)
         modePillHost.addView(mTab)
-        topHeader.addView(modePillHost)
+        modeScrollHost.addView(modePillHost)
+        topHeader.addView(modeScrollHost)
 
         // Top-Right: [ Yerel | BT ]
         val targetPillHost = LinearLayout(this).apply {
@@ -595,10 +621,9 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 setStroke(dp(1), Color.parseColor("#33FFFFFF"))
             }
             setPadding(dp(3), dp(3), dp(3), dp(3))
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                dp(36),
-                Gravity.END or Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(36)
             )
         }
 
@@ -941,9 +966,11 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             btnRow.addView(dragBtn)
 
             val middleClickBtn = createMouseHardwareButton("Orta", 0.9f, "#131C2D", "#CBD5E1") { isDown ->
-                if (hidManager.isHidHostConnected()) {
-                    hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_MIDDLE, isDown)
+                if (!hidManager.isHidHostConnected()) {
+                    if (isDown) showStatusToast("PC Bluetooth bağlı değil")
+                    return@createMouseHardwareButton
                 }
+                hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_MIDDLE, isDown)
             }
             btnRow.addView(middleClickBtn)
 
@@ -1360,7 +1387,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                     return@createKeyBaseView
                 }
                 val btCfg = profileRepository.activeProfile.value.bluetoothKeyboard
-                serviceScope.launch {
+                enqueueBtTask {
                     hidManager.sendHidKeyCombo(hidKeyCode, extraMods, btCfg.typingDelayMs)
                 }
                 consumeStickyModifiersIfNeeded()
@@ -1384,7 +1411,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                     return@createKeyBaseView
                 }
                 val btCfg = profileRepository.activeProfile.value.bluetoothKeyboard
-                serviceScope.launch {
+                enqueueBtTask {
                     hidManager.sendHidKeyCombo(hidKeyCode, modifiers, btCfg.typingDelayMs)
                 }
             } else {
@@ -1826,8 +1853,11 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         @Suppress("DEPRECATION")
         window?.window?.let { win ->
             win.navigationBarColor = Color.parseColor("#0B111E")
+            WindowCompat.setDecorFitsSystemWindows(win, true)
         }
-        rootLayout?.let { ViewCompat.requestApplyInsets(it) }
+        attachDecorInsetsListener()
+        syncImeBottomInset(null)
+        rootLayout?.post { syncImeBottomInset(null) }
         hidManager.refreshState()
         refreshTargetStyles()
         updateTouchpadStatusHint()
@@ -1862,12 +1892,56 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         airMouseController.stop()
         hidManager.releaseAllMouseButtons()
         stopCamera()
+        btHidQueue.close()
         serviceScope.cancel()
         cameraExecutor.shutdown()
         if (lifecycleRegistry.currentState != Lifecycle.State.DESTROYED) {
             lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         }
         super.onDestroy()
+    }
+
+    private fun enqueueBtTask(block: suspend () -> Unit) {
+        btHidQueue.trySend(block)
+    }
+
+    private fun attachDecorInsetsListener() {
+        val decor = window?.window?.decorView ?: return
+        ViewCompat.setOnApplyWindowInsetsListener(decor) { _, insets ->
+            syncImeBottomInset(insets)
+            insets
+        }
+        ViewCompat.requestApplyInsets(decor)
+    }
+
+    private fun syncImeBottomInset(passedInsets: WindowInsetsCompat?) {
+        val root = rootLayout ?: return
+        val decor = window?.window?.decorView
+        val decorInsets = decor?.let { ViewCompat.getRootWindowInsets(it) }
+        val rootInsets = ViewCompat.getRootWindowInsets(root) ?: passedInsets
+
+        fun extractNavBottom(wi: WindowInsetsCompat?): Int {
+            wi ?: return 0
+            val visibleMask = WindowInsetsCompat.Type.navigationBars() or
+                WindowInsetsCompat.Type.displayCutout() or
+                WindowInsetsCompat.Type.tappableElement() or
+                WindowInsetsCompat.Type.mandatorySystemGestures()
+            return maxOf(
+                wi.getInsets(visibleMask).bottom,
+                wi.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.navigationBars()).bottom
+            )
+        }
+
+        val reportedBottom = maxOf(extractNavBottom(decorInsets), extractNavBottom(rootInsets))
+        var ancestorPadBottom = 0
+        var p = root.parent
+        while (p is View) {
+            ancestorPadBottom += p.paddingBottom
+            if (p === decor) break
+            p = p.parent
+        }
+        val extraNeeded = (reportedBottom - ancestorPadBottom).coerceAtLeast(0)
+        root.updateBottomInset(extraNeeded)
     }
 
     private fun startCameraIfPermitted() {
@@ -1892,6 +1966,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 val provider = providerFuture.get()
                 cameraProvider = provider
                 provider.unbindAll()
+                barcodeAnalyzer?.close()
 
                 val activeProfile = profileRepository.activeProfile.value
                 val newQrAnalyzer = QrCodeAnalyzer { detectedList ->
@@ -1925,10 +2000,23 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                         }
                     }
 
-                val selector = if (useFrontCamera) {
+                val preferredSelector = if (useFrontCamera) {
                     CameraSelector.DEFAULT_FRONT_CAMERA
                 } else {
                     CameraSelector.DEFAULT_BACK_CAMERA
+                }
+                val selector = when {
+                    provider.hasCamera(preferredSelector) -> preferredSelector
+                    provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
+                    provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
+                    else -> {
+                        val fallbackLens = provider.availableCameraInfos.firstOrNull()?.lensFacing
+                        if (fallbackLens != null) {
+                            CameraSelector.Builder().requireLensFacing(fallbackLens).build()
+                        } else {
+                            preferredSelector
+                        }
+                    }
                 }
 
                 boundCamera = provider.bindToLifecycle(
@@ -1952,6 +2040,8 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             updateTorchIconTint()
             cameraProvider?.unbindAll()
             boundCamera = null
+            barcodeAnalyzer?.close()
+            barcodeAnalyzer = null
         } catch (_: Exception) {}
     }
 
@@ -2020,7 +2110,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 return
             }
             val btCfg = profile.bluetoothKeyboard
-            serviceScope.launch {
+            enqueueBtTask {
                 val ok = hidManager.sendToComputer(
                     textToSend = payload,
                     rawBarcodeKey = raw,
@@ -2083,7 +2173,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             }
             val extraMods = currentStickyModifiersByte()
             val btCfg = profileRepository.activeProfile.value.bluetoothKeyboard
-            serviceScope.launch {
+            enqueueBtTask {
                 hidManager.sendSingleCharacter(
                     ch = ch,
                     layout = btCfg.keyboardLayout,
@@ -2106,7 +2196,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             }
             val extraMods = currentStickyModifiersByte()
             val btCfg = profileRepository.activeProfile.value.bluetoothKeyboard
-            serviceScope.launch {
+            enqueueBtTask {
                 hidManager.sendSingleHidKey(
                     keyCode = BluetoothHidManager.KEY_TAB,
                     modifier = extraMods,
@@ -2126,7 +2216,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                 return
             }
             val btCfg = profileRepository.activeProfile.value.bluetoothKeyboard
-            serviceScope.launch {
+            enqueueBtTask {
                 hidManager.sendSingleHidKey(
                     keyCode = BluetoothHidManager.KEY_BACKSPACE,
                     typingDelayMs = btCfg.typingDelayMs
@@ -2150,7 +2240,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
             }
             val extraMods = currentStickyModifiersByte()
             val btCfg = profileRepository.activeProfile.value.bluetoothKeyboard
-            serviceScope.launch {
+            enqueueBtTask {
                 hidManager.sendSingleHidKey(
                     keyCode = BluetoothHidManager.KEY_ENTER,
                     modifier = extraMods,

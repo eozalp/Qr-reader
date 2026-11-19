@@ -116,7 +116,7 @@ fun TableSettingsSection(
             ExcelTableCellItem(
                 id = UUID.randomUUID().toString(),
                 source = TableItemSource.FORMULA_RESULT,
-                label = "TOTAL",
+                label = "TOPLAM",
                 prefix = profile.formatting.prefix,
                 postfix = profile.formatting.postfix,
                 coordinate = "A$coordNum",
@@ -218,7 +218,8 @@ fun TableSettingsSection(
                             result = sampleResult,
                             config = overlay.copy(
                                 tableConfig = tableConfig.copy(items = effectiveItems)
-                            )
+                            ),
+                            variableDefs = profile.parsingRules.variables
                         )
                     }
                 }
@@ -529,7 +530,7 @@ fun TableCellRowCard(
                     ) {
                         Icon(
                             imageVector = Icons.Default.KeyboardArrowUp,
-                            contentDescription = "Move Up",
+                            contentDescription = "Yukarı Taşı",
                             tint = if (index > 0) MaterialTheme.colorScheme.primary else Color.Gray.copy(alpha = 0.4f)
                         )
                     }
@@ -541,7 +542,7 @@ fun TableCellRowCard(
                     ) {
                         Icon(
                             imageVector = Icons.Default.KeyboardArrowDown,
-                            contentDescription = "Move Down",
+                            contentDescription = "Aşağı Taşı",
                             tint = if (index < totalCount - 1) MaterialTheme.colorScheme.primary else Color.Gray.copy(alpha = 0.4f)
                         )
                     }
@@ -568,11 +569,11 @@ fun TableCellRowCard(
 
                     // Source badge
                     val sourceBadge = when (item.source) {
-                        TableItemSource.VARIABLE -> "Var: ${item.variableName}"
+                        TableItemSource.VARIABLE -> "Değ: ${item.variableName}"
                         TableItemSource.COMPUTED -> "Fx: ${item.variableName}"
-                        TableItemSource.FORMULA_RESULT -> "Result"
-                        TableItemSource.RAW_QR -> "QR Text"
-                        TableItemSource.CUSTOM_TEXT -> "Custom"
+                        TableItemSource.FORMULA_RESULT -> "Sonuç"
+                        TableItemSource.RAW_QR -> "Ham QR"
+                        TableItemSource.CUSTOM_TEXT -> "Özel"
                     }
                     Text(
                         text = sourceBadge,
@@ -590,7 +591,7 @@ fun TableCellRowCard(
                     ) {
                         Icon(
                             imageVector = if (item.isEmphasized) Icons.Default.Star else Icons.Default.StarBorder,
-                            contentDescription = "Toggle Emphasis",
+                            contentDescription = "Vurgulamayı Aç/Kapat",
                             tint = if (item.isEmphasized) Color(0xFFF59E0B) else Color.Gray
                         )
                     }
@@ -602,7 +603,7 @@ fun TableCellRowCard(
                     ) {
                         Icon(
                             imageVector = if (item.isVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                            contentDescription = "Toggle Visibility",
+                            contentDescription = "Görünürlüğü Aç/Kapat",
                             tint = if (item.isVisible) MaterialTheme.colorScheme.primary else Color.Gray
                         )
                     }
@@ -614,7 +615,7 @@ fun TableCellRowCard(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Delete,
-                            contentDescription = "Delete Cell",
+                            contentDescription = "Hücreyi Sil",
                             tint = Color(0xFFEF4444)
                         )
                     }
@@ -640,7 +641,7 @@ fun TableCellRowCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "EMPHASIZED SUMMARY CELL (HIGHLIGHTED)",
+                        text = "VURGULANAN ÖZET HÜCRESİ",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF34D399)
@@ -653,7 +654,7 @@ fun TableCellRowCard(
             OutlinedTextField(
                 value = item.label,
                 onValueChange = { onUpdateItem(item.copy(label = it)) },
-                label = { Text("Display Label / Header") },
+                label = { Text("Görünen Etiket / Başlık") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -668,7 +669,7 @@ fun TableCellRowCard(
                 OutlinedTextField(
                     value = item.prefix,
                     onValueChange = { onUpdateItem(item.copy(prefix = it)) },
-                    label = { Text("Prefix (e.g. $)") },
+                    label = { Text("Ön Ek (örn. ₺, $)") },
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
@@ -676,7 +677,7 @@ fun TableCellRowCard(
                 OutlinedTextField(
                     value = item.postfix,
                     onValueChange = { onUpdateItem(item.copy(postfix = it)) },
-                    label = { Text("Postfix (e.g. /g)") },
+                    label = { Text("Son Ek (örn. /gr, TL)") },
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
@@ -688,7 +689,7 @@ fun TableCellRowCard(
                 OutlinedTextField(
                     value = item.customValue,
                     onValueChange = { onUpdateItem(item.copy(customValue = it)) },
-                    label = { Text("Custom Text / Value") },
+                    label = { Text("Özel Metin / Değer") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -722,7 +723,7 @@ fun AddTableCellDialog(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.AddChart, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Add Table Cell", fontWeight = FontWeight.Bold)
+                Text("Tabloya Hücre Ekle", fontWeight = FontWeight.Bold)
             }
         },
         text = {
@@ -730,7 +731,7 @@ fun AddTableCellDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("Select Information Source:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Text("Veri Kaynağı Seçin:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
 
                 Row(
                     modifier = Modifier
@@ -745,20 +746,20 @@ fun AddTableCellDialog(
                                 selectedSource = src
                                 when (src) {
                                     TableItemSource.FORMULA_RESULT -> {
-                                        labelText = "TOTAL"
+                                        labelText = "TOPLAM"
                                         prefixText = profile.formatting.prefix
                                         postfixText = profile.formatting.postfix
                                         isEmphasized = true
                                     }
                                     TableItemSource.RAW_QR -> {
-                                        labelText = "RAW QR"
+                                        labelText = "HAM QR"
                                     }
                                     TableItemSource.CUSTOM_TEXT -> {
-                                        labelText = "NOTE"
+                                        labelText = "NOT"
                                     }
                                     else -> {
                                         val v = profile.parsingRules.variables.find { it.name == selectedVarName }
-                                        labelText = v?.alias?.ifBlank { v.name }?.replaceFirstChar { it.uppercase() } ?: "Item"
+                                        labelText = v?.alias?.ifBlank { v.name }?.replaceFirstChar { it.uppercase() } ?: "Öğe"
                                         prefixText = v?.prefix ?: ""
                                         postfixText = v?.postfix ?: ""
                                     }
@@ -767,11 +768,11 @@ fun AddTableCellDialog(
                             label = {
                                 Text(
                                     when (src) {
-                                        TableItemSource.VARIABLE -> "Token Variable"
-                                        TableItemSource.COMPUTED -> "Computed Fx"
-                                        TableItemSource.FORMULA_RESULT -> "Formula Result"
-                                        TableItemSource.RAW_QR -> "Raw QR"
-                                        TableItemSource.CUSTOM_TEXT -> "Custom Text"
+                                        TableItemSource.VARIABLE -> "Token Değişkeni"
+                                        TableItemSource.COMPUTED -> "Hesaplanan Fx"
+                                        TableItemSource.FORMULA_RESULT -> "Formül Sonucu"
+                                        TableItemSource.RAW_QR -> "Ham QR"
+                                        TableItemSource.CUSTOM_TEXT -> "Özel Metin"
                                     },
                                     fontSize = 11.sp
                                 )
@@ -789,7 +790,7 @@ fun AddTableCellDialog(
                     }
 
                     if (candidateVars.isNotEmpty()) {
-                        Text("Pick Variable:", style = MaterialTheme.typography.labelSmall)
+                        Text("Değişken Seçin:", style = MaterialTheme.typography.labelSmall)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -805,13 +806,13 @@ fun AddTableCellDialog(
                                         prefixText = v.prefix
                                         postfixText = v.postfix
                                     },
-                                    label = { Text(if (v.isManual) "${v.name} (manual)" else v.name) }
+                                    label = { Text(if (v.isManual) "${v.name} (sabit)" else v.name) }
                                 )
                             }
                         }
                     } else {
                         Text(
-                            text = "No ${selectedSource.name.lowercase()} variables defined. Configure them in Parsing settings first.",
+                            text = "Bu türde tanımlı değişken yok. Önce Değişkenler sekmesinden ekleyin.",
                             color = Color(0xFFF59E0B),
                             fontSize = 12.sp
                         )
@@ -821,7 +822,7 @@ fun AddTableCellDialog(
                 OutlinedTextField(
                     value = labelText,
                     onValueChange = { labelText = it },
-                    label = { Text("Display Label") },
+                    label = { Text("Görünen Etiket") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -833,14 +834,14 @@ fun AddTableCellDialog(
                     OutlinedTextField(
                         value = prefixText,
                         onValueChange = { prefixText = it },
-                        label = { Text("Prefix") },
+                        label = { Text("Ön Ek") },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
                     OutlinedTextField(
                         value = postfixText,
                         onValueChange = { postfixText = it },
-                        label = { Text("Postfix") },
+                        label = { Text("Son Ek") },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
@@ -850,7 +851,7 @@ fun AddTableCellDialog(
                     OutlinedTextField(
                         value = customVal,
                         onValueChange = { customVal = it },
-                        label = { Text("Custom Text Value") },
+                        label = { Text("Özel Metin Değeri") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -861,7 +862,7 @@ fun AddTableCellDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Emphasize / Highlight Cell", fontWeight = FontWeight.SemiBold)
+                    Text("Hücreyi Vurgula", fontWeight = FontWeight.SemiBold)
                     Switch(
                         checked = isEmphasized,
                         onCheckedChange = { isEmphasized = it }
@@ -887,12 +888,12 @@ fun AddTableCellDialog(
                     )
                 }
             ) {
-                Text("Add to Table")
+                Text("Tabloya Ekle")
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text("İptal")
             }
         }
     )

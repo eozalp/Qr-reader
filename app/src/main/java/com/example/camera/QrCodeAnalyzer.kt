@@ -49,6 +49,10 @@ class QrCodeAnalyzer(
     private var lastAnalyzedTimeMs = 0L
     private var cachedNv21: ByteArray? = null
 
+    fun close() {
+        runCatching { currentScanner.close() }
+    }
+
     fun updateBarcodeFormats(
         preset: BarcodeScanPreset,
         customFormats: List<Int>,
@@ -107,6 +111,7 @@ class QrCodeAnalyzer(
         val invertedFrequency = if (isBatterySaverEnabled) 9 else 3
         val shouldCheckInverted = enableInvertedDetection && (frameCounter % invertedFrequency == 0)
 
+        var handedOffToInverted = false
         currentScanner.process(image)
             .addOnSuccessListener { barcodes ->
                 if (barcodes.isNotEmpty()) {
@@ -128,8 +133,16 @@ class QrCodeAnalyzer(
                     }
                     onBarcodesDetected(detectedList)
                 } else if (shouldCheckInverted && !isProcessingInverted.get()) {
-                    // Try inverted luminance pass for 3D engraved, laser-etched, or inverted barcodes
-                    tryInvertedScan(imageProxy, uprightWidth, uprightHeight, rotationDegrees)
+                    // Hand off this specific ImageProxy exclusively to inverted pass
+                    handedOffToInverted = tryInvertedScan(
+                        imageProxy = imageProxy,
+                        uprightWidth = uprightWidth,
+                        uprightHeight = uprightHeight,
+                        rotationDegrees = rotationDegrees
+                    )
+                    if (!handedOffToInverted) {
+                        onBarcodesDetected(emptyList())
+                    }
                 } else {
                     onBarcodesDetected(emptyList())
                 }
@@ -138,24 +151,30 @@ class QrCodeAnalyzer(
                 // Ignore transient frame detection errors
             }
             .addOnCompleteListener {
-                if (!isProcessingInverted.get()) {
+                if (!handedOffToInverted) {
                     imageProxy.close()
                 }
             }
     }
 
+    /**
+     * Returns true if ownership of [imageProxy] was accepted by the async inverted pass
+     * (which is then solely responsible for closing [imageProxy]), or false if caller must close it.
+     */
     private fun tryInvertedScan(
         imageProxy: ImageProxy,
         uprightWidth: Float,
         uprightHeight: Float,
         rotationDegrees: Int
-    ) {
+    ): Boolean {
+        if (!isProcessingInverted.compareAndSet(false, true)) {
+            return false
+        }
         val mediaImage = imageProxy.image ?: run {
-            imageProxy.close()
-            return
+            isProcessingInverted.set(false)
+            return false
         }
 
-        isProcessingInverted.set(true)
         try {
             val yPlane = mediaImage.planes[0]
             val yBuffer = yPlane.buffer
@@ -215,9 +234,11 @@ class QrCodeAnalyzer(
                     isProcessingInverted.set(false)
                     imageProxy.close()
                 }
+            return true
         } catch (_: Exception) {
             isProcessingInverted.set(false)
             imageProxy.close()
+            return true
         }
     }
 

@@ -49,7 +49,7 @@ data class BluetoothKeyboardConfig(
     val customTemplate: String = "{a}\t{b}",
     val prefixText: String = "",
     val postfixText: String = "",
-    val typingDelayMs: Long = 26L, // Safe Bluetooth HID frame timing to prevent key auto-repeat
+    val typingDelayMs: Long = 10L, // Fast low-latency Bluetooth HID frame timing (~55 chars/s)
     val sendCooldownMs: Long = 2000L, // Minimum cooldown between distinct repeat confirmations
     val convertTurkishChars: Boolean = false, // Only needed if US_Q is selected on target PC
     val keyboardLayout: KeyboardLayoutType = KeyboardLayoutType.TR_Q,
@@ -102,7 +102,7 @@ data class BluetoothKeyboardConfig(
                 customTemplate = json.optString("customTemplate", "{a}\t{b}"),
                 prefixText = json.optString("prefixText", ""),
                 postfixText = json.optString("postfixText", ""),
-                typingDelayMs = json.optLong("typingDelayMs", 26L),
+                typingDelayMs = json.optLong("typingDelayMs", 10L),
                 sendCooldownMs = json.optLong("sendCooldownMs", 2000L),
                 convertTurkishChars = json.optBoolean("convertTurkishChars", false),
                 keyboardLayout = runCatching {

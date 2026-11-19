@@ -52,6 +52,7 @@ import com.example.model.BluetoothKeyboardConfig
 import com.example.model.KeyboardEndingKey
 import com.example.model.KeyboardLayoutType
 import com.example.ui.theme.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.hypot
@@ -129,11 +130,32 @@ fun RemoteControlScreen(
         }
     }
 
+    val hidKeyQueue = remember { Channel<suspend () -> Unit>(Channel.UNLIMITED) }
+    LaunchedEffect(Unit) {
+        for (task in hidKeyQueue) {
+            runCatching { task() }
+        }
+    }
+
     DisposableEffect(Unit) {
         hidManager.refreshState()
         onDispose {
+            hidKeyQueue.close()
             airMouseController.stop()
             hidManager.releaseAllMouseButtons()
+        }
+    }
+
+    var lastDisconnectToastMs by remember { mutableLongStateOf(0L) }
+    fun notifyDisconnected() {
+        val now = System.currentTimeMillis()
+        if (now - lastDisconnectToastMs > 1800L) {
+            lastDisconnectToastMs = now
+            android.widget.Toast.makeText(
+                context,
+                "Önce PC Bluetooth bağlantısı kurun",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -155,11 +177,14 @@ fun RemoteControlScreen(
     }
 
     fun sendCharKey(baseChar: Char) {
-        if (!hidManager.isHidHostConnected()) return
+        if (!hidManager.isHidHostConnected()) {
+            notifyDisconnected()
+            return
+        }
         val useUpper = isShiftOnce || isCapsLock
         val effectiveChar = if (useUpper) baseChar.toString().uppercase(Locale("tr", "TR")).firstOrNull() ?: baseChar else baseChar
         val extraMods = currentModifierMask()
-        coroutineScope.launch {
+        hidKeyQueue.trySend {
             hidManager.sendSingleCharacter(
                 ch = effectiveChar,
                 layout = keyboardConfig.keyboardLayout,
@@ -171,13 +196,16 @@ fun RemoteControlScreen(
     }
 
     fun sendSpecialKey(keyCode: Byte, forceMods: Byte? = null) {
-        if (!hidManager.isHidHostConnected()) return
+        if (!hidManager.isHidHostConnected()) {
+            notifyDisconnected()
+            return
+        }
         val mods = forceMods ?: run {
             var m = currentModifierMask().toInt()
             if (isShiftOnce || isCapsLock) m = m or BluetoothHidManager.MODIFIER_SHIFT.toInt()
             m.toByte()
         }
-        coroutineScope.launch {
+        hidKeyQueue.trySend {
             hidManager.sendHidKeyCombo(
                 keyCode = keyCode,
                 modifiers = mods,
@@ -381,6 +409,7 @@ fun RemoteControlScreen(
                     // Full Touchpad + Scroll Strip
                     PrecisionTouchpadWithScroll(
                         hidManager = hidManager,
+                        onDisconnectedTap = ::notifyDisconnected,
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
@@ -390,17 +419,33 @@ fun RemoteControlScreen(
                     MouseButtonBar(
                         isDragLocked = isDragLocked,
                         onLeftDownChange = { isDown ->
+                            if (!hidManager.isHidHostConnected()) {
+                                if (isDown) notifyDisconnected()
+                                return@MouseButtonBar
+                            }
                             if (isDown && isDragLocked) isDragLocked = false
                             hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDown)
                         },
                         onToggleDragLock = {
+                            if (!hidManager.isHidHostConnected()) {
+                                notifyDisconnected()
+                                return@MouseButtonBar
+                            }
                             isDragLocked = !isDragLocked
                             hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDragLocked)
                         },
                         onMiddleDownChange = { isDown ->
+                            if (!hidManager.isHidHostConnected()) {
+                                if (isDown) notifyDisconnected()
+                                return@MouseButtonBar
+                            }
                             hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_MIDDLE, isDown)
                         },
                         onRightDownChange = { isDown ->
+                            if (!hidManager.isHidHostConnected()) {
+                                if (isDown) notifyDisconnected()
+                                return@MouseButtonBar
+                            }
                             hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_RIGHT, isDown)
                         }
                     )
@@ -408,6 +453,10 @@ fun RemoteControlScreen(
                     // Media & Volume Bar (Consumer HID)
                     ConsumerMediaStrip(
                         onConsumer = { usage ->
+                            if (!hidManager.isHidHostConnected()) {
+                                notifyDisconnected()
+                                return@ConsumerMediaStrip
+                            }
                             coroutineScope.launch { hidManager.sendConsumerControl(usage) }
                         }
                     )
@@ -425,6 +474,9 @@ fun RemoteControlScreen(
                             onClick = {
                                 if (airMouseController.isGyroSupported) {
                                     isAirMouseContinuous = !isAirMouseContinuous
+                                    if (isAirMouseContinuous && !hidManager.isHidHostConnected()) {
+                                        notifyDisconnected()
+                                    }
                                 }
                             },
                             label = {
@@ -454,7 +506,9 @@ fun RemoteControlScreen(
                                     interactionSource = airHoldInteraction,
                                     indication = null,
                                     enabled = airMouseController.isGyroSupported,
-                                    onClick = {}
+                                    onClick = {
+                                        if (!hidManager.isHidHostConnected()) notifyDisconnected()
+                                    }
                                 )
                         ) {
                             Box(contentAlignment = Alignment.Center) {
@@ -473,6 +527,7 @@ fun RemoteControlScreen(
 
                     PrecisionTouchpadWithScroll(
                         hidManager = hidManager,
+                        onDisconnectedTap = ::notifyDisconnected,
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(0.95f)
@@ -481,17 +536,33 @@ fun RemoteControlScreen(
                     MouseButtonBar(
                         isDragLocked = isDragLocked,
                         onLeftDownChange = { isDown ->
+                            if (!hidManager.isHidHostConnected()) {
+                                if (isDown) notifyDisconnected()
+                                return@MouseButtonBar
+                            }
                             if (isDown && isDragLocked) isDragLocked = false
                             hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDown)
                         },
                         onToggleDragLock = {
+                            if (!hidManager.isHidHostConnected()) {
+                                notifyDisconnected()
+                                return@MouseButtonBar
+                            }
                             isDragLocked = !isDragLocked
                             hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDragLocked)
                         },
                         onMiddleDownChange = { isDown ->
+                            if (!hidManager.isHidHostConnected()) {
+                                if (isDown) notifyDisconnected()
+                                return@MouseButtonBar
+                            }
                             hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_MIDDLE, isDown)
                         },
                         onRightDownChange = { isDown ->
+                            if (!hidManager.isHidHostConnected()) {
+                                if (isDown) notifyDisconnected()
+                                return@MouseButtonBar
+                            }
                             hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_RIGHT, isDown)
                         }
                     )
@@ -551,17 +622,20 @@ fun RemoteControlScreen(
                         Button(
                             onClick = {
                                 val text = quickSendBuffer
-                                if (text.isNotEmpty() && hidManager.isHidHostConnected()) {
-                                    quickSendBuffer = ""
-                                    coroutineScope.launch {
-                                        hidManager.sendToComputer(
-                                            textToSend = text,
-                                            endingKey = KeyboardEndingKey.NONE,
-                                            typingDelayMs = keyboardConfig.typingDelayMs,
-                                            convertTurkishChars = keyboardConfig.convertTurkishChars,
-                                            keyboardLayout = keyboardConfig.keyboardLayout
-                                        )
-                                    }
+                                if (text.isEmpty()) return@Button
+                                if (!hidManager.isHidHostConnected()) {
+                                    notifyDisconnected()
+                                    return@Button
+                                }
+                                quickSendBuffer = ""
+                                hidKeyQueue.trySend {
+                                    hidManager.sendToComputer(
+                                        textToSend = text,
+                                        endingKey = KeyboardEndingKey.NONE,
+                                        typingDelayMs = keyboardConfig.typingDelayMs,
+                                        convertTurkishChars = keyboardConfig.convertTurkishChars,
+                                        keyboardLayout = keyboardConfig.keyboardLayout
+                                    )
                                 }
                             },
                             enabled = quickSendBuffer.isNotEmpty(),
@@ -779,6 +853,7 @@ private fun airSensitivityText(v: Float): Float = (v * 10f).toInt() / 10f
 @Composable
 private fun PrecisionTouchpadWithScroll(
     hidManager: BluetoothHidManager,
+    onDisconnectedTap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
@@ -829,7 +904,9 @@ private fun PrecisionTouchpadWithScroll(
                                 // Gesture lifted
                                 val dt = System.currentTimeMillis() - startTime
                                 if (!movedPastSlop && dt < 240L) {
-                                    if (maxPointers >= 2) {
+                                    if (!hidManager.isHidHostConnected()) {
+                                        onDisconnectedTap()
+                                    } else if (maxPointers >= 2) {
                                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                         hidManager.sendMouseClick(BluetoothHidManager.MOUSE_BTN_RIGHT)
                                     } else {
@@ -847,6 +924,9 @@ private fun PrecisionTouchpadWithScroll(
                             }
 
                             if (event.type == PointerEventType.Move) {
+                                if (!hidManager.isHidHostConnected()) {
+                                    onDisconnectedTap()
+                                }
                                 if (activeChanges.size >= 2) {
                                     // Two-finger vertical scroll
                                     val avgY = activeChanges.map { it.position.y }.average().toFloat()

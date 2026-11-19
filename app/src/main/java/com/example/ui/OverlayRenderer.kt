@@ -72,6 +72,7 @@ fun QrOverlaysCanvas(
     screenHeightPx: Float,
     showRawQrData: Boolean = false,
     pinnedQr: TrackedQr? = null,
+    variableDefs: List<VariableDefinition> = emptyList(),
     onPinClick: ((TrackedQr) -> Unit)? = null,
     onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -162,6 +163,7 @@ fun QrOverlaysCanvas(
                                 result = solved.tracked.result,
                                 config = overlayConfig,
                                 attachment = solved.tracked.attachment,
+                                variableDefs = variableDefs,
                                 onAttachmentClick = onAttachmentClick
                             )
                         }
@@ -182,6 +184,7 @@ fun PinnedFullWidthOverlayCard(
     tracked: TrackedQr,
     config: OverlayAppearance,
     onUnpin: () -> Unit,
+    variableDefs: List<VariableDefinition> = emptyList(),
     onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     onSendToComputer: ((textToSend: String?, varName: String?) -> Unit)? = null,
     onToggleCustomerMode: (() -> Unit)? = null,
@@ -367,6 +370,7 @@ fun PinnedFullWidthOverlayCard(
                             result = tracked.result,
                             config = config.copy(scale = 1.0f),
                             attachment = tracked.attachment,
+                            variableDefs = variableDefs,
                             onAttachmentClick = onAttachmentClick,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -396,6 +400,7 @@ fun PinnedFullWidthOverlayCard(
                                 result = tracked.result,
                                 config = config.copy(scale = 1.0f),
                                 attachment = tracked.attachment,
+                                variableDefs = variableDefs,
                                 onAttachmentClick = onAttachmentClick,
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -634,6 +639,7 @@ fun QrTrackingHudElement(
     overlayConfig: OverlayAppearance,
     screenWidthPx: Float,
     screenHeightPx: Float,
+    variableDefs: List<VariableDefinition> = emptyList(),
     onAttachmentClick: ((QrAttachment) -> Unit)? = null
 ) {
     val density = LocalDensity.current
@@ -735,6 +741,7 @@ fun QrTrackingHudElement(
             result = tracked.result,
             config = overlayConfig,
             attachment = tracked.attachment,
+            variableDefs = variableDefs,
             onAttachmentClick = onAttachmentClick
         )
     }
@@ -748,6 +755,7 @@ fun OverlayCardContent(
     result: ParsedQrResult,
     config: OverlayAppearance,
     attachment: QrAttachment? = null,
+    variableDefs: List<VariableDefinition> = emptyList(),
     onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -767,6 +775,7 @@ fun OverlayCardContent(
                 result = result,
                 config = config,
                 attachment = attachment,
+                variableDefs = variableDefs,
                 onAttachmentClick = onAttachmentClick,
                 modifier = modifier
             )
@@ -796,6 +805,7 @@ fun OverlayCardContent(
                     result = result,
                     config = config,
                     attachment = attachment,
+                    variableDefs = variableDefs,
                     onAttachmentClick = onAttachmentClick
                 )
             }
@@ -998,17 +1008,20 @@ fun resolveTableRows(
     val itemsToUse = if (tableConfig.items.isNotEmpty()) {
         tableConfig.items
     } else {
-        // Auto-generate from extracted variables + computed variables
+        // Auto-generate from extracted variables + computed variables + final formula summary row
         val autoList = mutableListOf<ExcelTableCellItem>()
         var coordIdx = 1
         result.extractedVariables.forEach { (name, _) ->
             if (!name.contains("_alias")) {
-                val isComp = variableDefs.find { it.name == name }?.isComputed ?: false
+                val varDef = variableDefs.find { it.name == name }
+                val isComp = varDef?.isComputed ?: false
+                val displayLabel = varDef?.alias?.takeIf { it.isNotBlank() }
+                    ?: name.replaceFirstChar { it.uppercase() }
                 autoList.add(
                     ExcelTableCellItem(
                         source = if (isComp) TableItemSource.COMPUTED else TableItemSource.VARIABLE,
                         variableName = name,
-                        label = name.replaceFirstChar { it.uppercase() },
+                        label = displayLabel,
                         coordinate = "A$coordIdx",
                         isVisible = true,
                         isEmphasized = isComp
@@ -1016,6 +1029,17 @@ fun resolveTableRows(
                 )
                 coordIdx++
             }
+        }
+        if (result.formulaExpression.isNotBlank() || result.status is CalculationStatus.Success) {
+            autoList.add(
+                ExcelTableCellItem(
+                    source = TableItemSource.FORMULA_RESULT,
+                    label = "TOPLAM",
+                    coordinate = "A$coordIdx",
+                    isVisible = true,
+                    isEmphasized = true
+                )
+            )
         }
         autoList
     }
@@ -1055,16 +1079,19 @@ fun resolveTableRows(
                 when (val status = result.status) {
                     is CalculationStatus.Success -> {
                         val baseText = status.formattedText
+                        val baseTrim = baseText.trim()
                         val pfx = item.prefix
                         val sfx = item.postfix
-                        val hasPrefix = pfx.isNotEmpty() && (
-                            baseText.startsWith(pfx) ||
-                                baseText.startsWith("-$pfx") ||
-                                baseText.startsWith("($pfx")
+                        val pfxTrim = pfx.trim()
+                        val sfxTrim = sfx.trim()
+                        val hasPrefix = pfxTrim.isNotEmpty() && (
+                            baseTrim.startsWith(pfxTrim) ||
+                                baseTrim.startsWith("-$pfxTrim") ||
+                                baseTrim.startsWith("($pfxTrim")
                             )
-                        val hasPostfix = sfx.isNotEmpty() && (
-                            baseText.endsWith(sfx) ||
-                                baseText.endsWith("$sfx)")
+                        val hasPostfix = sfxTrim.isNotEmpty() && (
+                            baseTrim.endsWith(sfxTrim) ||
+                                baseTrim.endsWith("$sfxTrim)")
                             )
                         val outPrefix = if (hasPrefix) "" else pfx
                         val outPostfix = if (hasPostfix) "" else sfx
@@ -1123,6 +1150,7 @@ fun ExcelTableOverlayContent(
     result: ParsedQrResult,
     config: OverlayAppearance,
     attachment: QrAttachment? = null,
+    variableDefs: List<VariableDefinition> = emptyList(),
     onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -1130,7 +1158,12 @@ fun ExcelTableOverlayContent(
     val themeColors = getExcelThemeColors(tableConfig.gridTheme)
     val shape = RoundedCornerShape(10.dp)
 
-    val rows = resolveTableRows(tableConfig, result, attachment = attachment)
+    val rows = resolveTableRows(
+        tableConfig = tableConfig,
+        result = result,
+        variableDefs = variableDefs,
+        attachment = attachment
+    )
 
     Box(
         modifier = modifier

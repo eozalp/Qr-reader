@@ -403,7 +403,7 @@ fun BluetoothKeyboardSection(
                                 if (testInputText.isNotBlank()) {
                                     isSendingTest = true
                                     coroutineScope.launch {
-                                        manager.sendToComputer(
+                                        val ok = manager.sendToComputer(
                                             textToSend = testInputText,
                                             rawBarcodeKey = testInputText,
                                             endingKey = config.endingKey,
@@ -412,6 +412,12 @@ fun BluetoothKeyboardSection(
                                             keyboardLayout = config.keyboardLayout
                                         )
                                         isSendingTest = false
+                                        val msg = when {
+                                            !ok -> "BT gönderim hatası — Bağlantıyı kontrol edin"
+                                            manager.lastSendWasSimulated -> "Sanal Test kaydı eklendi (PC BT bağlı değil)"
+                                            else -> "Bilgisayara gönderildi ✓"
+                                        }
+                                        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             },
@@ -749,7 +755,7 @@ fun BluetoothKeyboardSection(
                     // Typing Speed Presets
                     Column {
                         Text(
-                            text = "TUŞ YAZIM HIZI",
+                            text = "TUŞ YAZIM HIZI (TURBO / DÜŞÜK GECİKME)",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -762,9 +768,10 @@ fun BluetoothKeyboardSection(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             listOf(
-                                24L to "Hızlı (24ms)",
-                                26L to "Dengeli (26ms)",
-                                40L to "Güvenli Eski PC (40ms)"
+                                7L to "Turbo (7ms)",
+                                10L to "Hızlı (10ms)",
+                                20L to "Dengeli (20ms)",
+                                35L to "Eski PC (35ms)"
                             ).forEach { (ms, label) ->
                                 FilterChip(
                                     selected = config.typingDelayMs == ms,
@@ -773,6 +780,12 @@ fun BluetoothKeyboardSection(
                                 )
                             }
                         }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Hızlı (10ms) ~55 krk/sn, Turbo (7ms) ~80 krk/sn hızında yazar.",
+                            fontSize = 10.5.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
