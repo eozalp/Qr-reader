@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -1089,7 +1090,29 @@ private fun ConnectionStatusCard(
                 }
             }
 
-            // Show paired PC list & pairing helpers if disconnected or connecting
+            // Show paired PC list & pairing helpers (ALWAYS show all paired devices — never truncate with take(4)!)
+            var deviceSearchQuery by remember { mutableStateOf("") }
+            var showSwitcherWhileConnected by remember { mutableStateOf(false) }
+
+            if (status == HidConnectionStatus.CONNECTED && pairedDevices.size > 1) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { showSwitcherWhileConnected = !showSwitcherWhileConnected },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(34.dp)
+                        .testTag("sheet_switch_device_toggle")
+                ) {
+                    Text(
+                        text = if (showSwitcherWhileConnected) "Cihaz Listesini Gizle" else "Başka Cihaza Geç (${pairedDevices.size} eşleşmiş)",
+                        fontSize = 11.sp,
+                        color = NeonCyan,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
             if (status == HidConnectionStatus.DISCONNECTED || status == HidConnectionStatus.CONNECTING) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
@@ -1113,36 +1136,143 @@ private fun ConnectionStatusCard(
                         Text("Durumu Yenile", fontSize = 11.sp, color = Color.White)
                     }
                 }
-                if (pairedDevices.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = "Eşleşmiş Bilgisayarlar (Bağlanmak için dokunun):",
-                        fontSize = 11.sp,
-                        color = Color(0xFF94A3B8)
-                    )
+            }
+
+            val showDeviceList = (status == HidConnectionStatus.DISCONNECTED || status == HidConnectionStatus.CONNECTING || showSwitcherWhileConnected) && pairedDevices.isNotEmpty()
+            if (showDeviceList) {
+                val filteredDevices = remember(pairedDevices, deviceSearchQuery) {
+                    val q = deviceSearchQuery.trim().lowercase()
+                    if (q.isEmpty()) pairedDevices
+                    else pairedDevices.filter { it.name.lowercase().contains(q) || it.address.lowercase().contains(q) }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "Eşleşmiş Cihazlar (${pairedDevices.size}) — Bağlanmak için dokunun:",
+                    fontSize = 11.sp,
+                    color = Color(0xFF94A3B8)
+                )
+                if (pairedDevices.size > 5) {
                     Spacer(modifier = Modifier.height(6.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        pairedDevices.take(4).forEach { dev ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0xFF0B111E))
-                                    .clickable { onConnectDevice(dev.address) }
-                                    .padding(horizontal = 10.dp, vertical = 10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Computer, contentDescription = null, tint = NeonCyan, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(dev.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    OutlinedTextField(
+                        value = deviceSearchQuery,
+                        onValueChange = { deviceSearchQuery = it },
+                        singleLine = true,
+                        placeholder = { Text("Cihaz ara (örn. omarchy, PC)...", fontSize = 11.5.sp, color = Color(0xFF64748B)) },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = NeonCyan, modifier = Modifier.size(16.dp)) },
+                        trailingIcon = {
+                            if (deviceSearchQuery.isNotEmpty()) {
+                                IconButton(onClick = { deviceSearchQuery = "" }, modifier = Modifier.size(32.dp)) {
+                                    Icon(Icons.Default.Close, contentDescription = "Temizle", tint = Color(0xFF94A3B8), modifier = Modifier.size(14.dp))
                                 }
-                                Text("Bağlan", color = NeonCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
+                        },
+                        textStyle = LocalTextStyle.current.copy(fontSize = 12.sp, color = Color.White),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("sheet_bt_device_search")
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    filteredDevices.forEach { dev ->
+                        val highlight = dev.isAndroidConnected || dev.isConnected
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (highlight) Color(0xFF0F2430) else Color(0xFF0B111E))
+                                .border(
+                                    width = if (highlight) 1.dp else 0.5.dp,
+                                    color = if (dev.isConnected) NeonCyan else if (dev.isAndroidConnected) CyberLime.copy(alpha = 0.7f) else Color(0xFF1E293B),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .clickable {
+                                    showSwitcherWhileConnected = false
+                                    onConnectDevice(dev.address)
+                                }
+                                .padding(horizontal = 10.dp, vertical = 9.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = if (dev.isComputer) Icons.Default.Computer else Icons.Default.Bluetooth,
+                                    contentDescription = null,
+                                    tint = if (dev.isAndroidConnected) CyberLime else NeonCyan,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = dev.name,
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        )
+                                        if (dev.isConnected) {
+                                            Text(
+                                                text = "HID BAĞLI",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = Color(0xFF00382E),
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(NeonCyan)
+                                                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        } else if (dev.isAndroidConnected) {
+                                            Text(
+                                                text = "ANDROİD BAĞLI",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = Color(0xFF062E14),
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(CyberLime)
+                                                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = dev.address,
+                                        color = Color(0xFF64748B),
+                                        fontSize = 9.5.sp,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (dev.isConnected) "Bağlı" else "Bağlan",
+                                color = if (dev.isConnected) CyberLime else NeonCyan,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
+                    if (filteredDevices.isEmpty()) {
+                        Text(
+                            text = "Aramayla eşleşen cihaz bulunamadı.",
+                            fontSize = 11.sp,
+                            color = Color(0xFF94A3B8),
+                            modifier = Modifier.padding(vertical = 6.dp)
+                        )
+                    }
                 }
+            }
+
+            if (status == HidConnectionStatus.DISCONNECTED || status == HidConnectionStatus.CONNECTING) {
 
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(

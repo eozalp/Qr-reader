@@ -52,7 +52,9 @@ data class KeystrokeLogItem(
 data class PairedBluetoothDevice(
     val name: String,
     val address: String,
-    val isConnected: Boolean
+    val isConnected: Boolean,
+    val isAndroidConnected: Boolean = false,
+    val isComputer: Boolean = false
 )
 
 data class BatchSentEntry(
@@ -240,7 +242,8 @@ class BluetoothHidManager(private val context: Context? = null) {
                     val dev = extractBluetoothDevice(intent)
                     if (dev != null) {
                         aclConnectedAddresses.add(dev.address)
-                        AppDebugLogger.i("BT-HID", "ACTION_ACL_CONNECTED dev=${dev.address}")
+                        AppDebugLogger.i("BT-HID", "ACTION_ACL_CONNECTED dev=${dev.address} (${getDeviceDisplayName(dev)})")
+                        refreshPairedDevices()
                         scheduleHidSyncBurst("acl_connected_${dev.address}")
                     }
                 }
@@ -250,8 +253,11 @@ class BluetoothHidManager(private val context: Context? = null) {
                         aclConnectedAddresses.remove(dev.address)
                         AppDebugLogger.i("BT-HID", "ACTION_ACL_DISCONNECTED dev=${dev.address}")
                         if (connectedHostDevice?.address == dev.address) {
+                            clearConnectionState(stopService = true)
+                            _connectionStatus.value = HidConnectionStatus.DISCONNECTED
                             syncHidConnectionFromProxy("acl_disconnected")
                         }
+                        refreshPairedDevices()
                     }
                 }
                 BluetoothHidDevice.ACTION_CONNECTION_STATE_CHANGED -> {
@@ -317,6 +323,35 @@ class BluetoothHidManager(private val context: Context? = null) {
         }
     }
 
+    /**
+     * Queries Android's hidden `BluetoothDevice.isConnected()` (the same signal Android Settings uses
+     * to show "Bağlı" under a paired device). Returns:
+     * - `true`: active physical ACL/LE link right now
+     * - `false`: definitely NO physical Bluetooth link right now (prevents ghost "connected" states)
+     * - `null`: reflection blocked/unavailable on this OS build
+     */
+    private fun querySystemAclConnected(device: BluetoothDevice): Boolean? {
+        return runCatching {
+            val method = BluetoothDevice::class.java.getMethod("isConnected")
+            method.invoke(device) as? Boolean
+        }.getOrNull()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun isDeviceSystemConnected(device: BluetoothDevice): Boolean {
+        val sysAcl = querySystemAclConnected(device)
+        if (sysAcl != null) return sysAcl
+        if (device.address in aclConnectedAddresses) return true
+        if (hasBluetoothPermissions()) {
+            val gattConnected = runCatching {
+                bluetoothManager?.getConnectedDevices(BluetoothProfile.GATT)
+                    ?.any { it.address == device.address } == true
+            }.getOrDefault(false)
+            if (gattConnected) return true
+        }
+        return false
+    }
+
     @SuppressLint("MissingPermission")
     private fun syncHidConnectionFromProxy(reason: String): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !hasBluetoothPermissions()) return false
@@ -325,15 +360,26 @@ class BluetoothHidManager(private val context: Context? = null) {
             hid.getDevicesMatchingConnectionStates(intArrayOf(BluetoothProfile.STATE_CONNECTED))
         }.onFailure {
             AppDebugLogger.w("BT-HID", "getDevicesMatchingConnectionStates($reason) hatası", it)
-        }.getOrNull()
+        }.getOrNull().orEmpty()
 
-        val firstConnected = activeHosts?.firstOrNull()
-        if (firstConnected != null) {
-            if (connectedHostDevice?.address != firstConnected.address || _connectionStatus.value != HidConnectionStatus.CONNECTED) {
-                AppDebugLogger.i("BT-HID", "Proxy senkronu bağlı host yakaladı ($reason): ${firstConnected.address}")
-                onHostConnected(firstConnected)
+        for (candidate in activeHosts) {
+            val hidState = runCatching { hid.getConnectionState(candidate) }.getOrDefault(BluetoothProfile.STATE_DISCONNECTED)
+            val sysAcl = querySystemAclConnected(candidate)
+            if (hidState == BluetoothProfile.STATE_CONNECTED && sysAcl != false) {
+                if (connectedHostDevice?.address != candidate.address || _connectionStatus.value != HidConnectionStatus.CONNECTED) {
+                    AppDebugLogger.i(
+                        "BT-HID",
+                        "Proxy senkronu bağlı host yakaladı ($reason): ${getDeviceDisplayName(candidate)} (${candidate.address}) sysAcl=$sysAcl"
+                    )
+                    onHostConnected(candidate)
+                }
+                return true
+            } else {
+                AppDebugLogger.w(
+                    "BT-HID",
+                    "Hayalet HID host yok sayıldı ($reason): ${candidate.address} hidState=$hidState sysAcl=$sysAcl"
+                )
             }
-            return true
         }
 
         // Also explicitly check connectingTargetAddress via getConnectionState(device)
@@ -343,8 +389,9 @@ class BluetoothHidManager(private val context: Context? = null) {
             val dev = runCatching { adapter.getRemoteDevice(targetAddr) }.getOrNull()
             if (dev != null) {
                 val state = runCatching { hid.getConnectionState(dev) }.getOrDefault(BluetoothProfile.STATE_DISCONNECTED)
-                if (state == BluetoothProfile.STATE_CONNECTED) {
-                    AppDebugLogger.i("BT-HID", "getConnectionState($reason) STATE_CONNECTED yakaladı: ${dev.address}")
+                val sysAcl = querySystemAclConnected(dev)
+                if (state == BluetoothProfile.STATE_CONNECTED && sysAcl != false) {
+                    AppDebugLogger.i("BT-HID", "getConnectionState($reason) STATE_CONNECTED yakaladı: ${dev.address} sysAcl=$sysAcl")
                     onHostConnected(dev)
                     return true
                 }
@@ -438,17 +485,44 @@ class BluetoothHidManager(private val context: Context? = null) {
         if (!hasBluetoothPermissions() || bluetoothAdapter == null) return
         controlExecutor.execute {
             try {
-                val bonded = bluetoothAdapter.bondedDevices ?: emptySet()
-                val activeAddr = connectedHostDevice?.address
-                _pairedDevices.value = bonded
-                    .sortedByDescending { activeAddr == it.address }
-                    .map { dev ->
-                        PairedBluetoothDevice(
-                            name = dev.name ?: dev.address,
-                            address = dev.address,
-                            isConnected = activeAddr == dev.address
-                        )
+                val deviceMap = LinkedHashMap<String, BluetoothDevice>()
+                bluetoothAdapter.bondedDevices?.forEach { dev ->
+                    deviceMap[dev.address] = dev
+                }
+                // Also include any GATT-connected devices so Dual-mode hosts are never missed
+                runCatching {
+                    bluetoothManager?.getConnectedDevices(BluetoothProfile.GATT)?.forEach { dev ->
+                        deviceMap.putIfAbsent(dev.address, dev)
                     }
+                }
+
+                val activeAddr = connectedHostDevice?.address
+                val enriched = deviceMap.values.map { dev ->
+                    val displayName = getDeviceDisplayName(dev)
+                    val androidConnected = isDeviceSystemConnected(dev)
+                    val isComputer = runCatching {
+                        dev.bluetoothClass?.majorDeviceClass == BluetoothClass.Device.Major.COMPUTER
+                    }.getOrDefault(false)
+                    PairedBluetoothDevice(
+                        name = displayName,
+                        address = dev.address,
+                        isConnected = activeAddr == dev.address,
+                        isAndroidConnected = androidConnected || (activeAddr == dev.address),
+                        isComputer = isComputer
+                    )
+                }.sortedWith(
+                    compareByDescending<PairedBluetoothDevice> { it.isConnected }
+                        .thenByDescending { it.isAndroidConnected }
+                        .thenByDescending { it.isComputer }
+                        .thenBy { it.name.lowercase() }
+                )
+
+                _pairedDevices.value = enriched
+                val androidConnectedNames = enriched.filter { it.isAndroidConnected }.joinToString { "${it.name}(${it.address})" }
+                AppDebugLogger.d(
+                    "BT-HID",
+                    "Eşleşmiş cihazlar yenilendi: toplam=${enriched.size}, Android bağlı=[$androidConnectedNames]"
+                )
             } catch (e: Exception) {
                 AppDebugLogger.e("BT-HID", "Eşleşmiş cihaz listesi okunamadı", e)
             }
@@ -696,21 +770,47 @@ class BluetoothHidManager(private val context: Context? = null) {
                 )
                 if (registered) {
                     _connectionDiagnostic.value = null
-                    if (pluggedDevice != null) {
+                    // CRITICAL: In Android BluetoothHidDevice.Callback.onAppStatusChanged, `pluggedDevice`
+                    // is the LAST "virtually cabled" host remembered in NVRAM — NOT necessarily connected!
+                    // Always verify live STATE_CONNECTED + physical ACL link before marking connected.
+                    val pluggedHidState = if (pluggedDevice != null) {
+                        runCatching { hidDeviceProfile?.getConnectionState(pluggedDevice) }
+                            .getOrDefault(BluetoothProfile.STATE_DISCONNECTED)
+                    } else BluetoothProfile.STATE_DISCONNECTED
+                    val pluggedSysAcl = if (pluggedDevice != null) querySystemAclConnected(pluggedDevice) else null
+
+                    if (pluggedDevice != null && pluggedHidState == BluetoothProfile.STATE_CONNECTED && pluggedSysAcl != false) {
+                        AppDebugLogger.i(
+                            "BT-HID",
+                            "pluggedDevice aktif bağlı doğrulandı: ${getDeviceDisplayName(pluggedDevice)} (${pluggedDevice.address})"
+                        )
                         onHostConnected(pluggedDevice)
-                    } else if (!syncHidConnectionFromProxy("onAppStatusChanged")) {
-                        val queued = pendingConnectAddress
-                        if (queued != null) {
-                            pendingConnectAddress = null
-                            connectToDevice(queued)
-                        } else if (!autoReconnectAttempted && connectedHostDevice == null) {
-                            autoReconnectAttempted = true
-                            val lastAddr = prefs?.getString(KEY_LAST_HOST_ADDRESS, null)
-                            val isStillBonded = !lastAddr.isNullOrBlank() && runCatching {
-                                bluetoothAdapter?.bondedDevices?.any { it.address == lastAddr } == true
-                            }.getOrDefault(false)
-                            if (isStillBonded && lastAddr != null) {
-                                connectToDevice(lastAddr, isAutoReconnect = true)
+                    } else {
+                        if (pluggedDevice != null) {
+                            AppDebugLogger.i(
+                                "BT-HID",
+                                "pluggedDevice=${getDeviceDisplayName(pluggedDevice)} (${pluggedDevice.address}) sanal kablo kaydı var ancak şu an bağlı değil (hidState=$pluggedHidState, sysAcl=$pluggedSysAcl)"
+                            )
+                        }
+                        if (!syncHidConnectionFromProxy("onAppStatusChanged")) {
+                            val queued = pendingConnectAddress
+                            if (queued != null) {
+                                pendingConnectAddress = null
+                                connectToDevice(queued)
+                            } else if (!autoReconnectAttempted && connectedHostDevice == null) {
+                                autoReconnectAttempted = true
+                                val lastAddr = prefs?.getString(KEY_LAST_HOST_ADDRESS, null)
+                                val lastDev = if (!lastAddr.isNullOrBlank()) {
+                                    runCatching { bluetoothAdapter?.bondedDevices?.firstOrNull { it.address == lastAddr } }.getOrNull()
+                                } else null
+                                // Only auto-reconnect if that host is ACTUALLY reachable/ACL-connected right now!
+                                // Otherwise don't hijack the UI into CONNECTING for an absent PC.
+                                if (lastDev != null && isDeviceSystemConnected(lastDev)) {
+                                    AppDebugLogger.i("BT-HID", "Önceki host Android'de aktif bağlı; otomatik HID bağlanılıyor: ${lastDev.address}")
+                                    connectToDevice(lastDev.address, isAutoReconnect = true)
+                                } else {
+                                    refreshPairedDevices()
+                                }
                             }
                         }
                     }
@@ -917,13 +1017,14 @@ class BluetoothHidManager(private val context: Context? = null) {
                     hid.getDevicesMatchingConnectionStates(intArrayOf(BluetoothProfile.STATE_CONNECTED))
                 }.getOrNull().orEmpty()
 
+                val sysAclNow = isDeviceSystemConnected(device)
                 AppDebugLogger.i(
                     "BT-HID",
-                    "connectToDevice($address / $name) bond=$bondState preHidState=$preHidState activeHidHosts=${alreadyConnectedList.size} acl=${address in aclConnectedAddresses} auto=$isAutoReconnect"
+                    "connectToDevice($address / $name) bond=$bondState preHidState=$preHidState activeHidHosts=${alreadyConnectedList.size} sysAcl=$sysAclNow auto=$isAutoReconnect"
                 )
 
-                // Fast-path: if Android already has this host connected via HID, adopt immediately!
-                if (preHidState == BluetoothProfile.STATE_CONNECTED || alreadyConnectedList.any { it.address == address }) {
+                // Fast-path: if Android already has this host connected via HID AND physical link is alive
+                if ((preHidState == BluetoothProfile.STATE_CONNECTED || alreadyConnectedList.any { it.address == address }) && querySystemAclConnected(device) != false) {
                     AppDebugLogger.i("BT-HID", "Cihaz zaten HID bağlı ($address); anında CONNECTED durumuna geçiliyor")
                     onHostConnected(device)
                     return@execute
@@ -1010,10 +1111,10 @@ class BluetoothHidManager(private val context: Context? = null) {
 
                     // 3) Hard 10s timeout -> NEVER stay stuck on "Bağlanıyor..."!
                     if (elapsedMs >= 10000L) {
-                        val isAclConnected = address in aclConnectedAddresses
+                        val isAclConnected = isDeviceSystemConnected(device)
                         AppDebugLogger.e(
                             "BT-HID",
-                            "Bağlantı zaman aşımı (10s): dev=$address polledHidState=$polledState bond=$bondState aclConnected=$isAclConnected reg=$isAppRegistered"
+                            "Bağlantı zaman aşımı (10s): dev=$address ($name) polledHidState=$polledState bond=$bondState aclConnected=$isAclConnected reg=$isAppRegistered"
                         )
                         runCatching { currentProxy.disconnect(device) }
                         cancelConnectWatchdog()
@@ -1021,7 +1122,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                         _connectionDiagnostic.value = if (isAutoReconnect) {
                             null
                         } else if (isAclConnected) {
-                            "Android '$name' cihazına bağlı ancak bilgisayar HID (Klavye/Fare) kanalını açmadı. PC Bluetooth ayarlarından telefonu 'Kaldır' yapıp ALVETAK açıkken yeniden eşleştirin."
+                            "Android '$name' cihazına bağlı ancak bilgisayar HID (Klavye/Fare) kanalını açmadı. PC/Linux Bluetooth ayarlarından telefonu 'Kaldır' yapıp ALVETAK açıkken yeniden eşleştirin."
                         } else {
                             "'$name' cihazı 10 sn içinde HID bağlantısını kabul etmedi. PC Bluetooth açıkken tekrar deneyin veya 'HID Sıfırla'ya basın."
                         }
@@ -1039,6 +1140,8 @@ class BluetoothHidManager(private val context: Context? = null) {
     @SuppressLint("MissingPermission")
     fun disconnectDevice() {
         connectAttemptSeq.incrementAndGet()
+        autoReconnectAttempted = true
+        prefs?.edit()?.remove(KEY_LAST_HOST_ADDRESS)?.apply()
         cancelConnectWatchdog()
         pendingConnectAddress = null
         pendingMouseDx.set(0)
@@ -1047,16 +1150,23 @@ class BluetoothHidManager(private val context: Context? = null) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || hidDeviceProfile == null) {
             clearConnectionState(stopService = true)
             _connectionStatus.value = HidConnectionStatus.DISCONNECTED
+            refreshPairedDevices()
             return
         }
         if (!hasBluetoothPermissions()) return
 
         try {
-            connectedHostDevice?.let { dev ->
-                hidDeviceProfile?.let { hid ->
+            hidDeviceProfile?.let { hid ->
+                val toDisconnect = LinkedHashMap<String, BluetoothDevice>()
+                connectedHostDevice?.let { toDisconnect[it.address] = it }
+                runCatching {
+                    hid.getDevicesMatchingConnectionStates(intArrayOf(BluetoothProfile.STATE_CONNECTED, BluetoothProfile.STATE_CONNECTING))
+                        ?.forEach { toDisconnect[it.address] = it }
+                }
+                toDisconnect.values.forEach { dev ->
                     sendRawHidReportImmediate(hid, dev, activeReportId, newZeroReport())
                     sendRawHidReportImmediate(hid, dev, REPORT_ID_MOUSE, buildEffectiveMousePayload(0, 0, 0, 0))
-                    hid.disconnect(dev)
+                    runCatching { hid.disconnect(dev) }
                 }
             }
             clearConnectionState(stopService = true)
@@ -1112,7 +1222,10 @@ class BluetoothHidManager(private val context: Context? = null) {
     private fun getDeviceDisplayName(device: BluetoothDevice?): String {
         if (device == null) return "Bilinmeyen Cihaz"
         return try {
-            device.name ?: device.address
+            val alias = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                runCatching { device.alias }.getOrNull()?.takeIf { it.isNotBlank() }
+            } else null
+            alias ?: device.name?.takeIf { it.isNotBlank() } ?: device.address
         } catch (_: Exception) {
             device.address
         }
