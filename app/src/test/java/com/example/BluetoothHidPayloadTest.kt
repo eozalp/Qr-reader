@@ -273,15 +273,15 @@ class BluetoothHidPayloadTest {
 
     @Test
     fun testComputeKeyTimingPreventsAutoRepeatOnRepeatedDigits() {
-        // Turbo preset (7ms) maintains clean ACL separation while delivering high throughput
+        // Turbo preset (12ms) aligns with 11.25ms Bluetooth HID slots while maintaining crisp throughput
         val turbo = BluetoothHidManager.computeKeyTiming(5L, isSameKeyCodeAsPrev = false)
-        assertTrue(turbo.holdMs >= 7L)
-        assertTrue(turbo.gapMs >= 5L)
+        assertEquals(12L, turbo.holdMs)
+        assertEquals(10L, turbo.gapMs)
 
-        // Default fast preset (10ms) stays brisk (~55 chars/s)
-        val fastDifferent = BluetoothHidManager.computeKeyTiming(10L, isSameKeyCodeAsPrev = false)
-        assertEquals(10L, fastDifferent.holdMs)
-        assertEquals(8L, fastDifferent.gapMs)
+        // Default preset (14ms) keeps distinct Key-Down / Key-Up frames well below OS 250ms auto-repeat
+        val fastDifferent = BluetoothHidManager.computeKeyTiming(14L, isSameKeyCodeAsPrev = false)
+        assertEquals(14L, fastDifferent.holdMs)
+        assertEquals(11L, fastDifferent.gapMs)
 
         // Consecutive identical characters (like '0'->'0' in "00326") get +10ms extra release separation
         val repeatedDigit = BluetoothHidManager.computeKeyTiming(26L, isSameKeyCodeAsPrev = true)
@@ -308,6 +308,31 @@ class BluetoothHidPayloadTest {
         assertEquals(127.toByte(), report[1])
         assertEquals((-127).toByte(), report[2])
         assertEquals(127.toByte(), report[3])
+
+        val bootReport = BluetoothHidManager.buildBootMouseReport(
+            buttonsMask = BluetoothHidManager.MOUSE_BTN_MIDDLE or 0x08,
+            dx = 200,
+            dy = -200
+        )
+        assertEquals(3, bootReport.size)
+        assertEquals(0x04.toByte(), bootReport[0])
+        assertEquals(127.toByte(), bootReport[1])
+        assertEquals((-127).toByte(), bootReport[2])
+    }
+
+    @Test
+    fun testComboHidDescriptorBalancedAndExposesKeyboardMouseConsumerIds() {
+        val descriptor = BluetoothHidManager.HID_COMBO_REPORT_DESCRIPTOR
+        assertTrue("Descriptor Collection/EndCollection items must balance cleanly",
+            BluetoothHidManager.checkDescriptorCollectionBalance(descriptor))
+        assertEquals(
+            listOf(
+                BluetoothHidManager.REPORT_ID_KEYBOARD,
+                BluetoothHidManager.REPORT_ID_MOUSE,
+                BluetoothHidManager.REPORT_ID_CONSUMER
+            ),
+            BluetoothHidManager.extractReportIdsFromDescriptor(descriptor)
+        )
     }
 
     @Test

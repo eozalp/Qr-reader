@@ -82,15 +82,16 @@ fun RemoteControlScreen(
 
     val connectionStatus by hidManager.connectionStatus.collectAsState()
     val connectedDeviceName by hidManager.connectedDeviceName.collectAsState()
+    val hidTelemetry by hidManager.telemetry.collectAsState()
 
     var selectedTab by remember { mutableStateOf(RemoteControlTab.MOUSE_AIR) }
     var isAirMouseContinuous by remember { mutableStateOf(false) }
     var airSensitivity by remember { mutableFloatStateOf(1.25f) }
     var isDragLocked by remember { mutableStateOf(false) }
+    var showRepairHint by remember { mutableStateOf(false) }
 
-    // Hold-to-Aim / Clutch interaction source
-    val airHoldInteraction = remember { MutableInteractionSource() }
-    val isAirHoldPressed by airHoldInteraction.collectIsPressedAsState()
+    // Raw zero-latency hold-to-aim / clutch state
+    var isAirHoldPressed by remember { mutableStateOf(false) }
 
     // Full PC Keyboard States
     var isSymbolsPage by remember { mutableStateOf(false) }
@@ -113,6 +114,12 @@ fun RemoteControlScreen(
     // Keep sensitivity & running state synchronized with lifecycle
     LaunchedEffect(airSensitivity) {
         airMouseController.sensitivity = airSensitivity
+    }
+
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == RemoteControlTab.KEYBOARD) {
+            isAirHoldPressed = false
+        }
     }
 
     val shouldRunAirMouse = (selectedTab != RemoteControlTab.KEYBOARD) &&
@@ -388,6 +395,93 @@ fun RemoteControlScreen(
                         Text("Bağlan →", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AmberGold)
                     }
                 }
+            } else {
+                val hasFailure = !hidTelemetry.lastFailureReason.isNullOrBlank()
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (hasFailure) Color(0xFF2B1115) else Color(0xFF0E1728),
+                    border = BorderStroke(
+                        1.dp,
+                        if (hasFailure) Color(0xFFEF4444).copy(alpha = 0.7f) else Color(0xFF1F2D45)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "${if (hidTelemetry.isBootMode) "Boot" else "Report"} · Klavye ${hidTelemetry.keyboardReportsSent} · Mouse ${hidTelemetry.mouseReportsSent}",
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = if (hasFailure) Color(0xFFFCA5A5) else NeonCyan,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "HID Yenile",
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = NeonCyan,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable { hidManager.reregisterHidProfile() }
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        .testTag("remote_hid_reregister_btn")
+                                )
+                                Text(
+                                    text = if (showRepairHint) "Gizle" else "Yardım?",
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = AmberGold,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable { showRepairHint = !showRepairHint }
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+
+                        if (hasFailure || showRepairHint) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = hidTelemetry.lastFailureReason
+                                        ?: "Mouse yanıt vermiyorsa PC Bluetooth'tan cihazı 'Kaldır' deyip bir kez yeniden eşleştirin (Windows eski klavye SDP'sini önbellekte tutar).",
+                                    fontSize = 10.sp,
+                                    color = if (hasFailure) Color(0xFFFCA5A5) else Color(0xFFCBD5E1),
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "BT Ayarları",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = AmberGold,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable {
+                                            runCatching { context.startActivity(hidManager.openBluetoothSettingsIntent()) }
+                                        }
+                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             when (selectedTab) {
@@ -398,7 +492,12 @@ fun RemoteControlScreen(
                         isContinuous = isAirMouseContinuous,
                         isHoldPressed = isAirHoldPressed,
                         sensitivity = airSensitivity,
-                        holdInteractionSource = airHoldInteraction,
+                        onHoldPressChange = { isDown ->
+                            if (isDown && !hidManager.isHidHostConnected()) {
+                                notifyDisconnected()
+                            }
+                            isAirHoldPressed = isDown
+                        },
                         onToggleContinuous = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             isAirMouseContinuous = !isAirMouseContinuous
@@ -501,15 +600,26 @@ fun RemoteControlScreen(
                             border = BorderStroke(1.dp, if (isAirHoldPressed) AmberGold else Color(0xFF2A3955)),
                             modifier = Modifier
                                 .weight(1f)
-                                .height(40.dp)
-                                .clickable(
-                                    interactionSource = airHoldInteraction,
-                                    indication = null,
-                                    enabled = airMouseController.isGyroSupported,
-                                    onClick = {
-                                        if (!hidManager.isHidHostConnected()) notifyDisconnected()
+                                .height(44.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .pointerInput(airMouseController.isGyroSupported) {
+                                    if (!airMouseController.isGyroSupported) return@pointerInput
+                                    awaitEachGesture {
+                                        awaitFirstDown(requireUnconsumed = false)
+                                        if (!hidManager.isHidHostConnected()) {
+                                            notifyDisconnected()
+                                        }
+                                        isAirHoldPressed = true
+                                        try {
+                                            while (true) {
+                                                val event = awaitPointerEvent()
+                                                if (event.changes.none { it.pressed }) break
+                                            }
+                                        } finally {
+                                            isAirHoldPressed = false
+                                        }
                                     }
-                                )
+                                }
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Text(
@@ -709,10 +819,11 @@ private fun AirMouseCard(
     isContinuous: Boolean,
     isHoldPressed: Boolean,
     sensitivity: Float,
-    holdInteractionSource: MutableInteractionSource,
+    onHoldPressChange: (Boolean) -> Unit,
     onToggleContinuous: () -> Unit,
     onSensitivityChanged: (Float) -> Unit
 ) {
+    val latestOnHoldChange by rememberUpdatedState(onHoldPressChange)
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = Color(0xFF101829),
@@ -798,12 +909,22 @@ private fun AirMouseCard(
                         ),
                         modifier = Modifier
                             .weight(1f)
-                            .height(44.dp)
-                            .clickable(
-                                interactionSource = holdInteractionSource,
-                                indication = null,
-                                onClick = {}
-                            )
+                            .height(48.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .pointerInput(Unit) {
+                                awaitEachGesture {
+                                    awaitFirstDown(requireUnconsumed = false)
+                                    latestOnHoldChange(true)
+                                    try {
+                                        while (true) {
+                                            val event = awaitPointerEvent()
+                                            if (event.changes.none { it.pressed }) break
+                                        }
+                                    } finally {
+                                        latestOnHoldChange(false)
+                                    }
+                                }
+                            }
                             .testTag("air_mouse_hold_btn")
                     ) {
                         Box(contentAlignment = Alignment.Center) {
@@ -1117,14 +1238,15 @@ private fun HoldableActionSurface(
     onPressChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val interaction = remember { MutableInteractionSource() }
-    val isPressed by interaction.collectIsPressedAsState()
-    var wasPressed by remember { mutableStateOf(false) }
+    var isPressed by remember { mutableStateOf(false) }
+    val latestOnPressChange by rememberUpdatedState(onPressChange)
 
-    LaunchedEffect(isPressed) {
-        if (isPressed != wasPressed) {
-            wasPressed = isPressed
-            onPressChange(isPressed)
+    DisposableEffect(Unit) {
+        onDispose {
+            if (isPressed) {
+                isPressed = false
+                latestOnPressChange(false)
+            }
         }
     }
 
@@ -1134,7 +1256,24 @@ private fun HoldableActionSurface(
         border = BorderStroke(1.dp, if (isPressed) NeonCyan else Color(0xFF283754)),
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
-            .clickable(interactionSource = interaction, indication = null, onClick = {})
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    isPressed = true
+                    latestOnPressChange(true)
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.changes.none { it.pressed }) break
+                        }
+                    } finally {
+                        if (isPressed) {
+                            isPressed = false
+                            latestOnPressChange(false)
+                        }
+                    }
+                }
+            }
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(

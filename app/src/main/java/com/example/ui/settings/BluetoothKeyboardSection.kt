@@ -64,6 +64,7 @@ fun BluetoothKeyboardSection(
     val recentLogs by manager.recentLogs.collectAsState()
     val pairedDevices by manager.pairedDevices.collectAsState()
     val batchSentMap by manager.batchSentMap.collectAsState()
+    val telemetry by manager.telemetry.collectAsState()
 
     val isLocalImeEnabled = remember(context) {
         runCatching {
@@ -179,6 +180,66 @@ fun BluetoothKeyboardSection(
                             color = AmberGold,
                             fontWeight = FontWeight.Medium
                         )
+                    }
+
+                    if (connectionStatus == HidConnectionStatus.CONNECTED) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFF0A1622),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (telemetry.lastFailureReason != null) Color(0xFFEF4444).copy(alpha = 0.7f) else Color(0xFF1E3A3A)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "HID Modu: ${if (telemetry.isBootMode) "Boot Modu" else "Report Modu"} · ${telemetry.qosLabel}",
+                                        fontSize = 10.5.sp,
+                                        color = NeonCyan,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    OutlinedButton(
+                                        onClick = { manager.reregisterHidProfile() },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                        modifier = Modifier
+                                            .height(30.dp)
+                                            .testTag("settings_hid_reregister_btn")
+                                    ) {
+                                        Text("HID Yenile", fontSize = 10.sp, color = NeonCyan, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                Text(
+                                    text = "Klavye TX: ${telemetry.keyboardReportsSent} (Hata: ${telemetry.keyboardReportsFailed}) · Mouse TX: ${telemetry.mouseReportsSent} (Hata: ${telemetry.mouseReportsFailed})",
+                                    fontSize = 10.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                if (!telemetry.lastFailureReason.isNullOrBlank()) {
+                                    Text(
+                                        text = "⚠ ${telemetry.lastFailureReason}",
+                                        fontSize = 10.5.sp,
+                                        color = Color(0xFFFCA5A5),
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Text(
+                                    text = "Mouse/medya tuşları yanıt vermiyorsa PC Bluetooth'tan cihazı 'Kaldır' deyip bir kez yeniden eşleştirin.",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF94A3B8)
+                                )
+                            }
+                        }
                     }
 
                     if (connectionStatus == HidConnectionStatus.DISCONNECTED || connectionStatus == HidConnectionStatus.CONNECTING) {
@@ -768,9 +829,9 @@ fun BluetoothKeyboardSection(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             listOf(
-                                7L to "Turbo (7ms)",
-                                10L to "Hızlı (10ms)",
-                                20L to "Dengeli (20ms)",
+                                12L to "Turbo (12ms)",
+                                16L to "Hızlı (16ms)",
+                                22L to "Dengeli (22ms)",
                                 35L to "Eski PC (35ms)"
                             ).forEach { (ms, label) ->
                                 FilterChip(
@@ -782,7 +843,7 @@ fun BluetoothKeyboardSection(
                         }
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Hızlı (10ms) ~55 krk/sn, Turbo (7ms) ~80 krk/sn hızında yazar.",
+                            text = "Turbo (12ms) ~45 krk/sn, Hızlı (14–16ms) ~35–40 krk/sn hızında 11.25ms Bluetooth yuvasıyla uyumlu ve tekrarsız yazar.",
                             fontSize = 10.5.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

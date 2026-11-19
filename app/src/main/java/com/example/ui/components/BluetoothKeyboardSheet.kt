@@ -62,6 +62,7 @@ fun BluetoothKeyboardSheet(
     val recentLogs by hidManager.recentLogs.collectAsState()
     val pairedDevices by hidManager.pairedDevices.collectAsState()
     val batchSentMap by hidManager.batchSentMap.collectAsState()
+    val telemetry by hidManager.telemetry.collectAsState()
 
     val isLocalImeEnabled = remember(context) {
         runCatching {
@@ -83,6 +84,7 @@ fun BluetoothKeyboardSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp)
         ) {
@@ -144,9 +146,11 @@ fun BluetoothKeyboardSheet(
                         status = connectionStatus,
                         connectedName = connectedDeviceName,
                         diagnosticMessage = connectionDiagnostic,
+                        telemetry = telemetry,
                         pairedDevices = pairedDevices,
                         onConnectDevice = { hidManager.connectToDevice(it) },
                         onDisconnect = { hidManager.disconnectDevice() },
+                        onReregisterHid = { hidManager.reregisterHidProfile() },
                         onRequestPermission = onRequestPermission,
                         onMakeDiscoverable = {
                             runCatching { context.startActivity(hidManager.makeDiscoverableIntent()) }
@@ -712,9 +716,9 @@ fun BluetoothKeyboardSheet(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     listOf(
-                                        7L to "Turbo (7ms)",
-                                        10L to "Hızlı (10ms)",
-                                        20L to "Dengeli (20ms)",
+                                        12L to "Turbo (12ms)",
+                                        16L to "Hızlı (16ms)",
+                                        22L to "Dengeli (22ms)",
                                         35L to "Eski PC (35ms)"
                                     ).forEach { (ms, label) ->
                                         FilterChip(
@@ -730,7 +734,7 @@ fun BluetoothKeyboardSheet(
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "Hızlı (10ms) ~55 krk/sn, Turbo (7ms) ~80 krk/sn hızında yazar.",
+                                    text = "Turbo (12ms) ~45 krk/sn, Hızlı (14–16ms) ~35–40 krk/sn hızında 11.25ms Bluetooth yuvasıyla uyumlu ve tekrarsız yazar.",
                                     fontSize = 10.5.sp,
                                     color = Color(0xFF94A3B8)
                                 )
@@ -869,9 +873,11 @@ private fun ConnectionStatusCard(
     status: HidConnectionStatus,
     connectedName: String?,
     diagnosticMessage: String?,
+    telemetry: com.example.bluetooth.HidProtocolTelemetry,
     pairedDevices: List<com.example.bluetooth.PairedBluetoothDevice>,
     onConnectDevice: (String) -> Unit,
     onDisconnect: () -> Unit,
+    onReregisterHid: () -> Unit,
     onRequestPermission: () -> Unit,
     onMakeDiscoverable: () -> Unit,
     onOpenBtSettings: () -> Unit,
@@ -965,6 +971,66 @@ private fun ConnectionStatusCard(
                     fontSize = 11.sp,
                     color = AmberGold
                 )
+            }
+
+            if (status == HidConnectionStatus.CONNECTED) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF0A141E),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (telemetry.lastFailureReason != null) Color(0xFFEF4444).copy(alpha = 0.7f) else Color(0xFF1E3A3A)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "HID: ${if (telemetry.isBootMode) "Boot Modu" else "Report Modu"} · ${telemetry.qosLabel}",
+                                fontSize = 10.5.sp,
+                                color = NeonCyan,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedButton(
+                                onClick = onReregisterHid,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                modifier = Modifier
+                                    .height(30.dp)
+                                    .testTag("sheet_hid_reregister_btn")
+                            ) {
+                                Text("HID Yenile", fontSize = 10.sp, color = NeonCyan, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Text(
+                            text = "Klavye TX: ${telemetry.keyboardReportsSent} (${telemetry.keyboardReportsFailed} hata) · Mouse TX: ${telemetry.mouseReportsSent} (${telemetry.mouseReportsFailed} hata)",
+                            fontSize = 10.sp,
+                            color = Color(0xFF94A3B8),
+                            fontFamily = FontFamily.Monospace
+                        )
+                        if (!telemetry.lastFailureReason.isNullOrBlank()) {
+                            Text(
+                                text = "⚠ ${telemetry.lastFailureReason}",
+                                fontSize = 10.5.sp,
+                                color = Color(0xFFFCA5A5),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Text(
+                            text = "Mouse çalışmıyorsa PC Bluetooth ayarlarından cihazı 'Kaldır' deyip telefonla yeniden eşleştirin.",
+                            fontSize = 10.sp,
+                            color = Color(0xFF94A3B8)
+                        )
+                    }
+                }
             }
 
             // Show paired PC list & pairing helpers if disconnected or connecting

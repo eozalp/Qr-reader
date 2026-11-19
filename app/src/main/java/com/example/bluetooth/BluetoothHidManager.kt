@@ -64,18 +64,27 @@ sealed class AutoSendDecision {
     data class RequireConfirmation(val previousEntry: BatchSentEntry) : AutoSendDecision()
 }
 
+data class HidProtocolTelemetry(
+    val isBootMode: Boolean = false,
+    val qosLabel: String = "Henüz kayıtlı değil",
+    val keyboardReportsSent: Long = 0L,
+    val keyboardReportsFailed: Long = 0L,
+    val mouseReportsSent: Long = 0L,
+    val mouseReportsFailed: Long = 0L,
+    val lastFailureReason: String? = null
+)
+
 /**
- * Production-grade Bluetooth Classic HID Keyboard manager (`BluetoothHidDevice`).
+ * Production-grade Bluetooth Classic HID Combo Keyboard & Mouse manager (`BluetoothHidDevice`).
  *
- * Key architectural fixes for connection reliability & zero stuck/repeating keys on Windows/macOS:
- * 1. Passes `null, null` QoS settings in `registerApp()` to eliminate L2CAP token-bucket throttling
- *    and negotiation rejections across Windows/Samsung chipsets.
- * 2. Queues `pendingConnectAddress` so `connect()` always runs after `onAppStatusChanged(registered = true)`.
- * 3. Runs HID connection inside `BluetoothHidForegroundService` (`connectedDevice`) so Samsung/Android
- *    never unregisters the HID profile proxy in background or IME switches.
- * 4. Executes all `sendReport` down/up frames strictly sequentially on a single high-priority TX thread
- *    with `Thread.sleep` (24–50ms hold, 22–45ms gap, +15ms extra gap for consecutive identical keycodes)
- *    using fresh 8-byte arrays per report and guaranteed all-zero Key-Up flush on completion or drop.
+ * Key architectural fixes for zero stuck/repeating keys & reliable PC mouse/air-mouse:
+ * 1. Registers with low-latency HID QoS (`latency = 11250us`, 11.25ms) with automatic fallback tiers
+ *    to prevent Bluetooth Classic controllers from dropping into 500–750ms Sniff Mode stalls.
+ * 2. Preserves Report ID 1 (Keyboard) and Report ID 2 (Mouse: 4-byte Report / 3-byte Boot) across
+ *    `onSetProtocol`, preventing Boot Mode negotiation from muting mouse input or breaking Report IDs.
+ * 3. Wakes idle ACL links (>300ms) with a clean zero-report before Key-Down and paces Key-Down /
+ *    Key-Up across distinct HID slots (12–50ms hold, 10–45ms gap, +10ms on identical keys).
+ * 4. Bounds failed mouse TX retries and surfaces live keyboard/mouse protocol telemetry diagnostics.
  */
 class BluetoothHidManager(private val context: Context? = null) {
 
@@ -96,7 +105,13 @@ class BluetoothHidManager(private val context: Context? = null) {
     @Volatile
     private var isProxyRequested: Boolean = false
     @Volatile
+    private var isIntentionalUnregister: Boolean = false
+    @Volatile
+    private var qosTierIndex: Int = 0
+    @Volatile
     private var protocolNegotiatedForConnection: Boolean = false
+    @Volatile
+    private var isBootProtocolMode: Boolean = false
     @Volatile
     private var activeReportId: Int = REPORT_ID_KEYBOARD
     @Volatile
@@ -135,6 +150,9 @@ class BluetoothHidManager(private val context: Context? = null) {
 
     private val _isTransmitting = MutableStateFlow(false)
     val isTransmitting: StateFlow<Boolean> = _isTransmitting.asStateFlow()
+
+    private val _telemetry = MutableStateFlow(HidProtocolTelemetry())
+    val telemetry: StateFlow<HidProtocolTelemetry> = _telemetry.asStateFlow()
 
     private val callbackExecutor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "AlvetakHidCallback").apply { isDaemon = true }
@@ -353,18 +371,24 @@ class BluetoothHidManager(private val context: Context? = null) {
                     HID_COMBO_REPORT_DESCRIPTOR
                 )
 
-                // Passing null for inQos and outQos lets Android & Windows L2CAP negotiate
-                // default interrupt channel parameters without token-bucket throttling or QoS drops.
-                var started = hid.registerApp(sdp, null, null, callbackExecutor, hidCallback)
-                if (!started) {
-                    // Clear any leftover system HID registration from a prior session and retry once.
-                    runCatching { hid.unregisterApp() }
-                    try {
-                        Thread.sleep(180L)
-                    } catch (_: InterruptedException) {
-                        Thread.currentThread().interrupt()
+                var started = false
+                var tierUsed = qosTierIndex.coerceIn(0, 2)
+                for (tier in tierUsed..2) {
+                    val (inQos, outQos, tierLabel) = buildQosTier(tier)
+                    qosTierIndex = tier
+                    _telemetry.value = _telemetry.value.copy(qosLabel = tierLabel)
+                    var attemptOk = hid.registerApp(sdp, inQos, outQos, callbackExecutor, hidCallback)
+                    if (!attemptOk && tier == tierUsed) {
+                        isIntentionalUnregister = true
+                        runCatching { hid.unregisterApp() }
+                        sleepQuietly(160L)
+                        isIntentionalUnregister = false
+                        attemptOk = hid.registerApp(sdp, inQos, outQos, callbackExecutor, hidCallback)
                     }
-                    started = hid.registerApp(sdp, null, null, callbackExecutor, hidCallback)
+                    if (attemptOk) {
+                        started = true
+                        break
+                    }
                 }
 
                 if (!started) {
@@ -376,6 +400,51 @@ class BluetoothHidManager(private val context: Context? = null) {
                 isRegistering = false
                 _connectionDiagnostic.value = "HID kayıt hatası: ${e.message}"
             }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun reregisterHidProfile() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !hasBluetoothPermissions()) return
+        val hid = hidDeviceProfile ?: run {
+            initHidProfile()
+            return
+        }
+        callbackExecutor.execute {
+            isIntentionalUnregister = true
+            runCatching { hid.unregisterApp() }
+            sleepQuietly(200L)
+            isIntentionalUnregister = false
+            isAppRegistered = false
+            isRegistering = false
+            qosTierIndex = 0
+            registerHidApp(hid)
+        }
+    }
+
+    private fun buildQosTier(tier: Int): Triple<BluetoothHidDeviceAppQosSettings?, BluetoothHidDeviceAppQosSettings?, String> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return Triple(null, null, "Desteklenmiyor")
+        return when (tier) {
+            0 -> Triple(
+                BluetoothHidDeviceAppQosSettings(
+                    BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
+                    800, 9, 0, 11250, BluetoothHidDeviceAppQosSettings.MAX
+                ),
+                BluetoothHidDeviceAppQosSettings(
+                    BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
+                    3200, 16, 3200, 11250, BluetoothHidDeviceAppQosSettings.MAX
+                ),
+                "Düşük Gecikme (11.2ms QoS)"
+            )
+            1 -> Triple(
+                null,
+                BluetoothHidDeviceAppQosSettings(
+                    BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
+                    800, 9, 0, 11250, BluetoothHidDeviceAppQosSettings.MAX
+                ),
+                "Standart HID (11.2ms QoS)"
+            )
+            else -> Triple(null, null, "Uyumluluk Modu (Varsayılan QoS)")
         }
     }
 
@@ -408,6 +477,10 @@ class BluetoothHidManager(private val context: Context? = null) {
                 } else {
                     clearConnectionState(stopService = true)
                     _connectionStatus.value = HidConnectionStatus.DISCONNECTED
+                    if (!isIntentionalUnregister && qosTierIndex < 2 && hidDeviceProfile != null) {
+                        qosTierIndex += 1
+                        hidDeviceProfile?.let { registerHidApp(it) }
+                    }
                 }
             }
 
@@ -428,9 +501,12 @@ class BluetoothHidManager(private val context: Context? = null) {
                             // Ensure host keyboard & mouse buffers have zero held inputs before dropping
                             hidDeviceProfile?.let { hid ->
                                 sendRawHidReportImmediate(hid, device, activeReportId, newZeroReport())
-                                if (activeReportId == REPORT_ID_KEYBOARD) {
-                                    sendRawHidReportImmediate(hid, device, REPORT_ID_MOUSE, byteArrayOf(0, 0, 0, 0))
-                                }
+                                sendRawHidReportImmediate(
+                                    hid,
+                                    device,
+                                    REPORT_ID_MOUSE,
+                                    if (isBootProtocolMode) buildBootMouseReport(0, 0, 0) else buildMouseReport(0, 0, 0, 0)
+                                )
                             }
                         }
                         if (connectedHostDevice?.address == device?.address || connectedHostDevice == null) {
@@ -449,14 +525,15 @@ class BluetoothHidManager(private val context: Context? = null) {
             @SuppressLint("MissingPermission")
             override fun onGetReport(device: BluetoothDevice?, type: Byte, id: Byte, bufferSize: Int) {
                 if (device != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    val replySize = when {
+                    val baseSize = when {
                         type == BluetoothHidDevice.REPORT_TYPE_OUTPUT -> 1
-                        id == REPORT_ID_MOUSE.toByte() -> 4
+                        id == REPORT_ID_MOUSE.toByte() -> if (isBootProtocolMode) 3 else 4
                         id == REPORT_ID_CONSUMER.toByte() -> 2
                         else -> 8
                     }
+                    val safeSize = if (bufferSize > 0) minOf(baseSize, bufferSize) else baseSize
                     runCatching {
-                        hidDeviceProfile?.replyReport(device, type, id, ByteArray(replySize))
+                        hidDeviceProfile?.replyReport(device, type, id, ByteArray(safeSize))
                     }
                 }
             }
@@ -464,7 +541,10 @@ class BluetoothHidManager(private val context: Context? = null) {
             override fun onSetProtocol(device: BluetoothDevice?, protocol: Byte) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     protocolNegotiatedForConnection = true
-                    activeReportId = if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) 0 else REPORT_ID_KEYBOARD
+                    isBootProtocolMode = (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE)
+                    // Under Bluetooth HID SUBCLASS1_COMBO, Boot Keyboard uses Report ID 1 and Boot Mouse uses Report ID 2.
+                    activeReportId = REPORT_ID_KEYBOARD
+                    _telemetry.value = _telemetry.value.copy(isBootMode = isBootProtocolMode)
                 }
             }
 
@@ -488,12 +568,17 @@ class BluetoothHidManager(private val context: Context? = null) {
         connectedHostDevice = device
         connectedAtMs = System.currentTimeMillis()
         if (!protocolNegotiatedForConnection) {
+            isBootProtocolMode = false
             activeReportId = REPORT_ID_KEYBOARD
         }
         val name = getDeviceDisplayName(device)
         _connectedDeviceName.value = name
         _connectionStatus.value = HidConnectionStatus.CONNECTED
         _connectionDiagnostic.value = null
+        _telemetry.value = _telemetry.value.copy(
+            isBootMode = isBootProtocolMode,
+            lastFailureReason = null
+        )
         prefs?.edit()?.putString(KEY_LAST_HOST_ADDRESS, device.address)?.apply()
         context?.let { BluetoothHidForegroundService.startOrUpdate(it, name) }
         refreshPairedDevices()
@@ -503,12 +588,14 @@ class BluetoothHidManager(private val context: Context? = null) {
         connectedHostDevice = null
         connectedAtMs = 0L
         protocolNegotiatedForConnection = false
+        isBootProtocolMode = false
         activeReportId = REPORT_ID_KEYBOARD
         activeMouseButtons = 0
         pendingMouseDx.set(0)
         pendingMouseDy.set(0)
         pendingMouseWheel.set(0)
         _connectedDeviceName.value = null
+        _telemetry.value = _telemetry.value.copy(isBootMode = false)
         if (stopService) {
             context?.let { BluetoothHidForegroundService.stop(it) }
         }
@@ -587,9 +674,7 @@ class BluetoothHidManager(private val context: Context? = null) {
             connectedHostDevice?.let { dev ->
                 hidDeviceProfile?.let { hid ->
                     sendRawHidReportImmediate(hid, dev, activeReportId, newZeroReport())
-                    if (activeReportId == REPORT_ID_KEYBOARD) {
-                        sendRawHidReportImmediate(hid, dev, REPORT_ID_MOUSE, byteArrayOf(0, 0, 0, 0))
-                    }
+                    sendRawHidReportImmediate(hid, dev, REPORT_ID_MOUSE, buildEffectiveMousePayload(0, 0, 0, 0))
                     hid.disconnect(dev)
                 }
             }
@@ -614,9 +699,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                 runCatching {
                     connectedHostDevice?.let { dev ->
                         sendRawHidReportImmediate(hid, dev, activeReportId, newZeroReport())
-                        if (activeReportId == REPORT_ID_KEYBOARD) {
-                            sendRawHidReportImmediate(hid, dev, REPORT_ID_MOUSE, byteArrayOf(0, 0, 0, 0))
-                        }
+                        sendRawHidReportImmediate(hid, dev, REPORT_ID_MOUSE, buildEffectiveMousePayload(0, 0, 0, 0))
                     }
                     hid.unregisterApp()
                     bluetoothAdapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, hid)
@@ -1006,13 +1089,13 @@ class BluetoothHidManager(private val context: Context? = null) {
     suspend fun sendConsumerControl(usageCode: Int): Boolean = sendMutex.withLock {
         withContext(hidTxDispatcher) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return@withContext false
-            if (activeReportId != REPORT_ID_KEYBOARD) return@withContext false
+            if (isBootProtocolMode) return@withContext false
             val hid = hidDeviceProfile ?: return@withContext false
             val dev = connectedHostDevice ?: return@withContext false
             val press = buildConsumerReport(usageCode)
             val release = buildConsumerReport(0)
             val sent = sendRawHidReport(hid, dev, REPORT_ID_CONSUMER, press)
-            sleepQuietly(12L)
+            sleepQuietly(16L)
             sendRawHidReport(hid, dev, REPORT_ID_CONSUMER, release)
             if (sent) lastReportSentAtMs = System.currentTimeMillis()
             sent
@@ -1023,7 +1106,6 @@ class BluetoothHidManager(private val context: Context? = null) {
     fun sendMouseMove(dx: Int, dy: Int, wheel: Int = 0) {
         if (dx == 0 && dy == 0 && wheel == 0) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isHidHostConnected()) return
-        if (activeReportId != REPORT_ID_KEYBOARD) return
 
         // Coalesce high-frequency sensor/touch deltas atomically so L2CAP never queues stale lag
         pendingMouseDx.updateAndGet { cur -> (cur + dx).coerceIn(-1600, 1600) }
@@ -1038,15 +1120,24 @@ class BluetoothHidManager(private val context: Context? = null) {
         }
     }
 
+    private fun buildEffectiveMousePayload(buttonsMask: Int, dx: Int, dy: Int, wheel: Int): ByteArray {
+        return if (isBootProtocolMode) {
+            buildBootMouseReport(buttonsMask, dx, dy)
+        } else {
+            buildMouseReport(buttonsMask, dx, dy, wheel)
+        }
+    }
+
     @SuppressLint("MissingPermission")
     private fun drainPendingMouseDeltas() {
+        var consecutiveFailures = 0
         try {
-            while (isHidHostConnected() && activeReportId == REPORT_ID_KEYBOARD) {
+            while (isHidHostConnected()) {
                 val now = System.currentTimeMillis()
                 val sinceLastMouse = now - lastMouseReportAtMs
-                if (sinceLastMouse in 0L until 7L) {
-                    // Pace to ~140Hz BT ACL poll cadence so high-rate touch/gyro deltas coalesce cleanly
-                    sleepQuietly(7L - sinceLastMouse)
+                if (sinceLastMouse in 0L until 8L) {
+                    // Pace to ~125Hz BT ACL poll cadence so high-rate touch/gyro deltas coalesce cleanly
+                    sleepQuietly(8L - sinceLastMouse)
                 }
 
                 val curX = pendingMouseDx.getAndSet(0)
@@ -1058,25 +1149,39 @@ class BluetoothHidManager(private val context: Context? = null) {
                 val dev = connectedHostDevice ?: break
                 val step = coalesceMouseDeltaStep(curX, curY, curW)
 
-                val report = buildMouseReport(activeMouseButtons, step.stepX, step.stepY, step.stepW)
+                val report = buildEffectiveMousePayload(activeMouseButtons, step.stepX, step.stepY, step.stepW)
                 if (sendRawHidReport(hid, dev, REPORT_ID_MOUSE, report)) {
+                    consecutiveFailures = 0
                     if (step.nextRemX != 0) pendingMouseDx.addAndGet(step.nextRemX)
                     if (step.nextRemY != 0) pendingMouseDy.addAndGet(step.nextRemY)
                     if (step.nextRemW != 0) pendingMouseWheel.addAndGet(step.nextRemW)
                     lastMouseReportAtMs = System.currentTimeMillis()
                     lastReportSentAtMs = lastMouseReportAtMs
+                    val prev = _telemetry.value
+                    _telemetry.value = prev.copy(
+                        mouseReportsSent = prev.mouseReportsSent + 1L,
+                        lastFailureReason = if (prev.lastFailureReason?.contains("Mouse") == true) null else prev.lastFailureReason
+                    )
                 } else {
-                    // Preserve unsent delta if L2CAP buffer is momentarily busy and back off 1 ACL slot
+                    consecutiveFailures++
+                    val prev = _telemetry.value
+                    _telemetry.value = prev.copy(
+                        mouseReportsFailed = prev.mouseReportsFailed + 1L,
+                        lastFailureReason = "Mouse raporu reddedildi — PC Bluetooth'tan cihazı kaldırıp yeniden eşleştirin"
+                    )
+                    if (consecutiveFailures >= 3) {
+                        // Drop stale backlog rather than spinning endlessly on a rejected Report ID 2
+                        break
+                    }
                     pendingMouseDx.addAndGet(curX)
                     pendingMouseDy.addAndGet(curY)
                     pendingMouseWheel.addAndGet(curW)
-                    sleepQuietly(8L)
-                    if (!isHidHostConnected()) break
+                    sleepQuietly(12L)
                 }
             }
         } finally {
             mousePumpScheduled.set(false)
-            if (isHidHostConnected() &&
+            if (consecutiveFailures == 0 && isHidHostConnected() &&
                 (pendingMouseDx.get() != 0 || pendingMouseDy.get() != 0 || pendingMouseWheel.get() != 0)
             ) {
                 scheduleMousePumpIfNeeded()
@@ -1087,7 +1192,6 @@ class BluetoothHidManager(private val context: Context? = null) {
     @SuppressLint("MissingPermission")
     fun setMouseButton(buttonMask: Int, isDown: Boolean) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isHidHostConnected()) return
-        if (activeReportId != REPORT_ID_KEYBOARD) return
         mouseTxExecutor.execute {
             activeMouseButtons = if (isDown) {
                 activeMouseButtons or buttonMask
@@ -1096,47 +1200,60 @@ class BluetoothHidManager(private val context: Context? = null) {
             }
             val hid = hidDeviceProfile ?: return@execute
             val dev = connectedHostDevice ?: return@execute
-            val report = buildMouseReport(activeMouseButtons, 0, 0, 0)
-            sendRawHidReport(hid, dev, REPORT_ID_MOUSE, report)
-            lastMouseReportAtMs = System.currentTimeMillis()
-            lastReportSentAtMs = lastMouseReportAtMs
+            val report = buildEffectiveMousePayload(activeMouseButtons, 0, 0, 0)
+            val ok = sendRawHidReport(hid, dev, REPORT_ID_MOUSE, report)
+            recordMouseButtonResult(ok)
         }
     }
 
     @SuppressLint("MissingPermission")
     fun sendMouseClick(buttonMask: Int = MOUSE_BTN_LEFT) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isHidHostConnected()) return
-        if (activeReportId != REPORT_ID_KEYBOARD) return
         mouseTxExecutor.execute {
             val hid = hidDeviceProfile ?: return@execute
             val dev = connectedHostDevice ?: return@execute
             val downMask = activeMouseButtons or buttonMask
-            sendRawHidReport(hid, dev, REPORT_ID_MOUSE, buildMouseReport(downMask, 0, 0, 0))
-            sleepQuietly(10L)
+            val downOk = sendRawHidReport(hid, dev, REPORT_ID_MOUSE, buildEffectiveMousePayload(downMask, 0, 0, 0))
+            sleepQuietly(16L)
             activeMouseButtons = activeMouseButtons and buttonMask.inv()
-            sendRawHidReport(hid, dev, REPORT_ID_MOUSE, buildMouseReport(activeMouseButtons, 0, 0, 0))
-            lastMouseReportAtMs = System.currentTimeMillis()
-            lastReportSentAtMs = lastMouseReportAtMs
+            val upOk = sendRawHidReport(hid, dev, REPORT_ID_MOUSE, buildEffectiveMousePayload(activeMouseButtons, 0, 0, 0))
+            recordMouseButtonResult(downOk && upOk)
         }
     }
 
     @SuppressLint("MissingPermission")
     fun sendMouseDoubleClick() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isHidHostConnected()) return
-        if (activeReportId != REPORT_ID_KEYBOARD) return
         mouseTxExecutor.execute {
             val hid = hidDeviceProfile ?: return@execute
             val dev = connectedHostDevice ?: return@execute
+            var allOk = true
             repeat(2) { idx ->
                 val downMask = activeMouseButtons or MOUSE_BTN_LEFT
-                sendRawHidReport(hid, dev, REPORT_ID_MOUSE, buildMouseReport(downMask, 0, 0, 0))
-                sleepQuietly(10L)
+                allOk = sendRawHidReport(hid, dev, REPORT_ID_MOUSE, buildEffectiveMousePayload(downMask, 0, 0, 0)) && allOk
+                sleepQuietly(16L)
                 activeMouseButtons = activeMouseButtons and MOUSE_BTN_LEFT.inv()
-                sendRawHidReport(hid, dev, REPORT_ID_MOUSE, buildMouseReport(activeMouseButtons, 0, 0, 0))
-                if (idx == 0) sleepQuietly(35L)
+                allOk = sendRawHidReport(hid, dev, REPORT_ID_MOUSE, buildEffectiveMousePayload(activeMouseButtons, 0, 0, 0)) && allOk
+                if (idx == 0) sleepQuietly(38L)
             }
+            recordMouseButtonResult(allOk)
+        }
+    }
+
+    private fun recordMouseButtonResult(ok: Boolean) {
+        val prev = _telemetry.value
+        if (ok) {
             lastMouseReportAtMs = System.currentTimeMillis()
             lastReportSentAtMs = lastMouseReportAtMs
+            _telemetry.value = prev.copy(
+                mouseReportsSent = prev.mouseReportsSent + 1L,
+                lastFailureReason = if (prev.lastFailureReason?.contains("Mouse") == true) null else prev.lastFailureReason
+            )
+        } else {
+            _telemetry.value = prev.copy(
+                mouseReportsFailed = prev.mouseReportsFailed + 1L,
+                lastFailureReason = "Mouse tıklama reddedildi — PC'den cihazı kaldırıp yeniden eşleştirin"
+            )
         }
     }
 
@@ -1147,11 +1264,10 @@ class BluetoothHidManager(private val context: Context? = null) {
         pendingMouseDy.set(0)
         pendingMouseWheel.set(0)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isHidHostConnected()) return
-        if (activeReportId != REPORT_ID_KEYBOARD) return
         mouseTxExecutor.execute {
             val hid = hidDeviceProfile ?: return@execute
             val dev = connectedHostDevice ?: return@execute
-            sendRawHidReport(hid, dev, REPORT_ID_MOUSE, buildMouseReport(0, 0, 0, 0))
+            sendRawHidReport(hid, dev, REPORT_ID_MOUSE, buildEffectiveMousePayload(0, 0, 0, 0))
         }
     }
 
@@ -1159,15 +1275,16 @@ class BluetoothHidManager(private val context: Context? = null) {
     private fun ensureHostReadyForReports(hid: BluetoothHidDevice, dev: BluetoothDevice) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
         val now = System.currentTimeMillis()
-        // Wait briefly only right after initial pairing/connection enumeration
+        // Wait briefly right after initial connection enumeration so Windows binds kbdhid/mouhid
         val sinceConnect = now - connectedAtMs
-        if (connectedAtMs > 0L && sinceConnect in 0L..199L) {
-            sleepQuietly(200L - sinceConnect)
+        if (connectedAtMs > 0L && sinceConnect in 0L..299L) {
+            sleepQuietly(300L - sinceConnect)
         }
-        // Only wake the link if truly deep-idle (> 2.5s Bluetooth Sniff threshold); avoid stalling active typing
-        if ((System.currentTimeMillis() - lastReportSentAtMs) > 2500L) {
-            sendZeroReportWithRetry(hid, dev, maxAttempts = 3)
-            sleepQuietly(12L)
+        // Wake Bluetooth Classic ACL out of Sniff Mode BEFORE sending Key-Down so Key-Up is never
+        // stranded across a 500ms+ sniff anchor causing OS auto-repeat!
+        if ((System.currentTimeMillis() - lastReportSentAtMs) > 300L) {
+            sendZeroReportWithRetry(hid, dev, maxAttempts = 4)
+            sleepQuietly(16L)
         }
     }
 
@@ -1207,17 +1324,17 @@ class BluetoothHidManager(private val context: Context? = null) {
 
             when (endingKey) {
                 KeyboardEndingKey.ENTER -> {
-                    if (!sendKeyStrokeBlocking(hid, dev, KEY_ENTER, MODIFIER_NONE, baseTiming.holdMs, gapMs = 2L)) return false
+                    if (!sendKeyStrokeBlocking(hid, dev, KEY_ENTER, MODIFIER_NONE, baseTiming.holdMs, gapMs = 8L)) return false
                 }
                 KeyboardEndingKey.TAB -> {
-                    if (!sendKeyStrokeBlocking(hid, dev, KEY_TAB, MODIFIER_NONE, baseTiming.holdMs, gapMs = 2L)) return false
+                    if (!sendKeyStrokeBlocking(hid, dev, KEY_TAB, MODIFIER_NONE, baseTiming.holdMs, gapMs = 8L)) return false
                 }
                 KeyboardEndingKey.TAB_THEN_ENTER -> {
                     if (!sendKeyStrokeBlocking(hid, dev, KEY_TAB, MODIFIER_NONE, baseTiming.holdMs, baseTiming.gapMs)) return false
-                    if (!sendKeyStrokeBlocking(hid, dev, KEY_ENTER, MODIFIER_NONE, baseTiming.holdMs, gapMs = 2L)) return false
+                    if (!sendKeyStrokeBlocking(hid, dev, KEY_ENTER, MODIFIER_NONE, baseTiming.holdMs, gapMs = 8L)) return false
                 }
                 KeyboardEndingKey.SPACE -> {
-                    if (!sendKeyStrokeBlocking(hid, dev, KEY_SPACE, MODIFIER_NONE, baseTiming.holdMs, gapMs = 2L)) return false
+                    if (!sendKeyStrokeBlocking(hid, dev, KEY_SPACE, MODIFIER_NONE, baseTiming.holdMs, gapMs = 8L)) return false
                 }
                 KeyboardEndingKey.NONE -> {
                     // Last stroke already released Key-Up cleanly
@@ -1233,7 +1350,7 @@ class BluetoothHidManager(private val context: Context? = null) {
             if (needsEmergencyZeroFlush) {
                 val released = runCatching { sendZeroReportWithRetry(hid, dev, maxAttempts = 12) }.getOrDefault(false)
                 if (!released) {
-                    sleepQuietly(12L)
+                    sleepQuietly(16L)
                     sendRawHidReport(hid, dev, activeReportId, newZeroReport())
                 }
             }
@@ -1254,10 +1371,20 @@ class BluetoothHidManager(private val context: Context? = null) {
             if (connectedHostDevice?.address != device.address) return false
             if (sendRawHidReport(hid, device, reportId, report)) {
                 lastReportSentAtMs = System.currentTimeMillis()
+                val prev = _telemetry.value
+                _telemetry.value = prev.copy(
+                    keyboardReportsSent = prev.keyboardReportsSent + 1L,
+                    lastFailureReason = if (prev.lastFailureReason?.contains("Klavye") == true) null else prev.lastFailureReason
+                )
                 return true
             }
             sleepQuietly(backoffMs * (attempt + 1))
         }
+        val prev = _telemetry.value
+        _telemetry.value = prev.copy(
+            keyboardReportsFailed = prev.keyboardReportsFailed + 1L,
+            lastFailureReason = "Klavye HID raporu iletilemedi (L2CAP meşgul/kopuk)"
+        )
         return false
     }
 
@@ -1293,7 +1420,7 @@ class BluetoothHidManager(private val context: Context? = null) {
         }
         sleepQuietly(holdMs)
         if (!sendZeroReportWithRetry(hid, device, maxAttempts = 12)) {
-            sleepQuietly(12L)
+            sleepQuietly(16L)
             sendRawHidReport(hid, device, activeReportId, newZeroReport())
             return false
         }
@@ -1426,6 +1553,14 @@ class BluetoothHidManager(private val context: Context? = null) {
             )
         }
 
+        fun buildBootMouseReport(buttonsMask: Int, dx: Int, dy: Int): ByteArray {
+            return byteArrayOf(
+                (buttonsMask and 0x07).toByte(),
+                dx.coerceIn(-127, 127).toByte(),
+                dy.coerceIn(-127, 127).toByte()
+            )
+        }
+
         fun buildConsumerReport(usageCode: Int): ByteArray {
             return byteArrayOf(
                 (usageCode and 0xFF).toByte(),
@@ -1460,15 +1595,61 @@ class BluetoothHidManager(private val context: Context? = null) {
         data class KeyTiming(val holdMs: Long, val gapMs: Long)
 
         /**
-         * High-speed Bluetooth Classic HID polling intervals (7–50ms hold, 5–45ms gap)
-         * so Down and Up reports separate cleanly on ACL slots without auto-repeat sluggishness.
-         * Consecutive identical keycodes (e.g. '0'->'0' in "00326") receive +10ms extra separation.
+         * Bluetooth Classic HID slot-aligned timing (12–50ms hold, 10–45ms gap)
+         * so Key-Down and Key-Up span distinct 11.25ms HID slots without coalescing or stalling
+         * long enough to trigger host OS auto-repeat (>=250ms). Consecutive identical keycodes
+         * (e.g. '0'->'0' in "00326") receive +10ms extra separation.
          */
         fun computeKeyTiming(requestedDelayMs: Long, isSameKeyCodeAsPrev: Boolean): KeyTiming {
-            val holdMs = requestedDelayMs.coerceIn(7L, 50L)
-            val baseGap = ((requestedDelayMs * 8L) / 10L).coerceIn(5L, 45L)
+            val holdMs = requestedDelayMs.coerceIn(12L, 50L)
+            val baseGap = ((requestedDelayMs * 8L) / 10L).coerceIn(10L, 45L)
             val gapMs = if (isSameKeyCodeAsPrev) baseGap + 10L else baseGap
             return KeyTiming(holdMs = holdMs, gapMs = gapMs)
+        }
+
+        fun extractReportIdsFromDescriptor(descriptor: ByteArray): List<Int> {
+            val ids = mutableListOf<Int>()
+            var i = 0
+            while (i < descriptor.size) {
+                val b = descriptor[i].toInt() and 0xFF
+                if (b == 0xFE) {
+                    if (i + 1 >= descriptor.size) break
+                    val dataLen = descriptor[i + 1].toInt() and 0xFF
+                    i += 3 + dataLen
+                    continue
+                }
+                val sizeCode = b and 0x03
+                val payloadLen = if (sizeCode == 3) 4 else sizeCode
+                if (b == 0x85 && i + 1 < descriptor.size) {
+                    ids.add(descriptor[i + 1].toInt() and 0xFF)
+                }
+                i += 1 + payloadLen
+            }
+            return ids
+        }
+
+        fun checkDescriptorCollectionBalance(descriptor: ByteArray): Boolean {
+            var depth = 0
+            var i = 0
+            while (i < descriptor.size) {
+                val b = descriptor[i].toInt() and 0xFF
+                if (b == 0xFE) {
+                    if (i + 1 >= descriptor.size) return false
+                    val dataLen = descriptor[i + 1].toInt() and 0xFF
+                    i += 3 + dataLen
+                    continue
+                }
+                val sizeCode = b and 0x03
+                val payloadLen = if (sizeCode == 3) 4 else sizeCode
+                val itemTag = b and 0xFC
+                if (itemTag == 0xA0) depth++
+                else if (itemTag == 0xC0) {
+                    depth--
+                    if (depth < 0) return false
+                }
+                i += 1 + payloadLen
+            }
+            return depth == 0 && i == descriptor.size
         }
 
         data class HidKey(val keyCode: Byte, val modifier: Byte = MODIFIER_NONE)
@@ -1641,9 +1822,9 @@ class BluetoothHidManager(private val context: Context? = null) {
             0x05.toByte(), 0x01.toByte(), // Usage Page (Generic Desktop)
             0x09.toByte(), 0x02.toByte(), // Usage (Mouse)
             0xA1.toByte(), 0x01.toByte(), // Collection (Application)
-            0x85.toByte(), 0x02.toByte(), //   Report ID (2)
             0x09.toByte(), 0x01.toByte(), //   Usage (Pointer)
             0xA1.toByte(), 0x00.toByte(), //   Collection (Physical)
+            0x85.toByte(), 0x02.toByte(), //     Report ID (2)
             0x05.toByte(), 0x09.toByte(), //     Usage Page (Button)
             0x19.toByte(), 0x01.toByte(), //     Usage Minimum (Button 1 - Left)
             0x29.toByte(), 0x03.toByte(), //     Usage Maximum (Button 3 - Middle)
@@ -1658,11 +1839,16 @@ class BluetoothHidManager(private val context: Context? = null) {
             0x05.toByte(), 0x01.toByte(), //     Usage Page (Generic Desktop)
             0x09.toByte(), 0x30.toByte(), //     Usage (X)
             0x09.toByte(), 0x31.toByte(), //     Usage (Y)
+            0x15.toByte(), 0x81.toByte(), //     Logical Minimum (-127)
+            0x25.toByte(), 0x7F.toByte(), //     Logical Maximum (127)
+            0x75.toByte(), 0x08.toByte(), //     Report Size (8)
+            0x95.toByte(), 0x02.toByte(), //     Report Count (2)
+            0x81.toByte(), 0x06.toByte(), //     Input (Data, Variable, Relative)
             0x09.toByte(), 0x38.toByte(), //     Usage (Wheel)
             0x15.toByte(), 0x81.toByte(), //     Logical Minimum (-127)
             0x25.toByte(), 0x7F.toByte(), //     Logical Maximum (127)
             0x75.toByte(), 0x08.toByte(), //     Report Size (8)
-            0x95.toByte(), 0x03.toByte(), //     Report Count (3)
+            0x95.toByte(), 0x01.toByte(), //     Report Count (1)
             0x81.toByte(), 0x06.toByte(), //     Input (Data, Variable, Relative)
             0xC0.toByte(),                //   End Collection (Physical)
             0xC0.toByte(),                // End Collection (Application)
