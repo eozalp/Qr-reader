@@ -36,11 +36,11 @@ enum class SettingsTab(
     val isAdvanced: Boolean = false
 ) {
     PROFILES("Profiller", Icons.Default.FolderSpecial, isAdvanced = false),
-    VARIABLES("Değişkenler & Formül", Icons.Default.QrCodeScanner, isAdvanced = false),
+    VARIABLES("Değişkenler", Icons.Default.Tune, isAdvanced = false),
+    OVERLAY("Stil Tasarımcısı", Icons.Default.Palette, isAdvanced = false),
     KEYBOARD("Klavye & PC", Icons.Default.Keyboard, isAdvanced = false),
     TABLE("Veri Tablosu", Icons.Default.TableChart, isAdvanced = true),
-    OVERLAY("Stil & Görünüm", Icons.Default.Layers, isAdvanced = true),
-    TRACKING("Kamera & Barkod", Icons.Default.Tune, isAdvanced = true),
+    TRACKING("Kamera & Barkod", Icons.Default.CenterFocusWeak, isAdvanced = true),
     DEBUG("Debug Konsolu", Icons.Default.BugReport, isAdvanced = true)
 }
 
@@ -61,6 +61,7 @@ fun SettingsScreen(
 
     val context = LocalContext.current
     val activeProfile by profileRepository.activeProfile.collectAsState()
+    val globalVariables by profileRepository.globalVariables.collectAsState()
     val debugLogs by AppDebugLogger.logs.collectAsState()
     val lastCrashReport by AppDebugLogger.lastCrashReport.collectAsState()
     val debugErrorCount = remember(debugLogs, lastCrashReport) {
@@ -268,10 +269,6 @@ fun SettingsScreen(
                         onRulesChanged = { updatedRules ->
                             profileRepository.saveProfile(activeProfile.copy(parsingRules = updatedRules))
                         },
-                        formula = activeProfile.formula,
-                        onFormulaChanged = { updatedFormula ->
-                            profileRepository.saveProfile(activeProfile.copy(formula = updatedFormula))
-                        },
                         formatting = activeProfile.formatting,
                         onFormattingChanged = { updatedFormat ->
                             profileRepository.saveProfile(activeProfile.copy(formatting = updatedFormat))
@@ -279,6 +276,10 @@ fun SettingsScreen(
                         triggerSignal = activeProfile.triggerSignal,
                         onTriggerSignalChanged = { updatedSignal ->
                             profileRepository.saveProfile(activeProfile.copy(triggerSignal = updatedSignal))
+                        },
+                        globalVariables = globalVariables,
+                        onGlobalVariablesChanged = { updatedGlobals ->
+                            profileRepository.saveGlobalVariables(updatedGlobals)
                         }
                     )
                 }

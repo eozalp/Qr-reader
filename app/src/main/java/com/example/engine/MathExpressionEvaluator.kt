@@ -3,9 +3,21 @@ package com.example.engine
 import java.time.LocalDate
 import kotlin.math.*
 
+import java.time.format.DateTimeFormatter
+
 sealed class MathResult {
     data class Success(val value: Double) : MathResult()
     data class Error(val message: String) : MathResult()
+}
+
+/**
+ * Multi-type evaluation result allowing formulas to return either a Number (Double/Date/Boolean)
+ * or a Text (String) value cleanly (e.g. status badges like "KRİTİK STOK", "GECİKMİŞ", "DİZEL").
+ */
+sealed class MathValueResult {
+    data class SuccessNum(val value: Double) : MathValueResult()
+    data class SuccessText(val text: String) : MathValueResult()
+    data class Error(val message: String) : MathValueResult()
 }
 
 /**
@@ -31,9 +43,32 @@ class MathExpressionEvaluator {
         variables: Map<String, Double>,
         stringVariables: Map<String, String> = emptyMap()
     ): MathResult {
+        return when (val valueResult = evaluateValue(expression, variables, stringVariables)) {
+            is MathValueResult.SuccessNum -> MathResult.Success(valueResult.value)
+            is MathValueResult.SuccessText -> {
+                val parsed = valueResult.text.replace(',', '.').trim().toDoubleOrNull()
+                if (parsed != null && !parsed.isNaN() && !parsed.isInfinite()) {
+                    MathResult.Success(parsed)
+                } else {
+                    MathResult.Error("Formül sonucu metin ('${valueResult.text}'), sayısal çıktı bekleniyor. Sayıya çevirmek için num(...) kullanın.")
+                }
+            }
+            is MathValueResult.Error -> MathResult.Error(valueResult.message)
+        }
+    }
+
+    /**
+     * Evaluates any expression into either a numeric or string result.
+     * Supports local variables, @global shared constants, dates, booleans, and text outputs.
+     */
+    fun evaluateValue(
+        expression: String,
+        variables: Map<String, Double>,
+        stringVariables: Map<String, String> = emptyMap()
+    ): MathValueResult {
         val trimmed = expression.trim()
         if (trimmed.isEmpty()) {
-            return MathResult.Error("Formül boş")
+            return MathValueResult.Error("Formül boş")
         }
 
         val today = LocalDate.now()
@@ -64,30 +99,29 @@ class MathExpressionEvaluator {
             val parser = AstParser(tokens)
             val ast = parser.parseExpression()
             if (parser.hasNext()) {
-                return MathResult.Error("Beklenmeyen sembol: '${parser.peek()}'")
+                return MathValueResult.Error("Beklenmeyen sembol: '${parser.peek()}'")
             }
             val ctx = EvalContext(
                 numVars = enrichedNums,
                 strVars = stringVariables,
                 todayEpochDay = todayEpoch
             )
-            val evaluated = eval(ast, ctx)
-            val result = when (evaluated) {
-                is EvalVal.Num -> evaluated.v
-                is EvalVal.Str -> evaluated.s.toDoubleOrNull()
-                    ?: return MathResult.Error("Formül sonucu metin ('${evaluated.s}'), sayısal çıktı bekleniyor. Sayıya çevirmek için num(...) kullanın.")
-            }
-            if (result.isNaN() || result.isInfinite()) {
-                MathResult.Error("Hesaplama tanımsız veya sonsuz değer üretti")
-            } else {
-                MathResult.Success(result)
+            when (val evaluated = eval(ast, ctx)) {
+                is EvalVal.Num -> {
+                    if (evaluated.v.isNaN() || evaluated.v.isInfinite()) {
+                        MathValueResult.Error("Hesaplama tanımsız veya sonsuz değer üretti")
+                    } else {
+                        MathValueResult.SuccessNum(evaluated.v)
+                    }
+                }
+                is EvalVal.Str -> MathValueResult.SuccessText(evaluated.s)
             }
         } catch (e: ArithmeticException) {
-            MathResult.Error(e.message ?: "Aritmetik hata")
+            MathValueResult.Error(e.message ?: "Aritmetik hata")
         } catch (e: IllegalArgumentException) {
-            MathResult.Error(e.message ?: "Geçersiz formül ifadesi")
+            MathValueResult.Error(e.message ?: "Geçersiz formül ifadesi")
         } catch (e: Exception) {
-            MathResult.Error("Formül değerlendirme hatası: ${e.message}")
+            MathValueResult.Error("Formül değerlendirme hatası: ${e.message}")
         }
     }
 
@@ -178,7 +212,7 @@ class MathExpressionEvaluator {
                         ?: throw IllegalArgumentException("Geçersiz sayı: '$numStr'")
                     tokens.add(Token.Number(numVal))
                 }
-                c.isLetter() || c == '_' -> {
+                c.isLetter() || c == '_' || c == '@' -> {
                     val start = i
                     i++
                     while (i < len && (expr[i].isLetterOrDigit() || expr[i] == '_')) {
@@ -450,11 +484,17 @@ class MathExpressionEvaluator {
             is Expr.NumLit -> EvalVal.Num(expr.value)
             is Expr.StrLit -> EvalVal.Str(expr.value)
             is Expr.VarRef -> {
-                val num = ctx.numVars[expr.raw] ?: ctx.numVars[expr.lower]
+                val bareRaw = expr.raw.removePrefix("@")
+                val bareLower = expr.lower.removePrefix("@")
+                val num = ctx.numVars[expr.raw]
+                    ?: ctx.numVars[expr.lower]
+                    ?: if (expr.raw.startsWith("@")) (ctx.numVars[bareRaw] ?: ctx.numVars[bareLower]) else null
                 if (num != null) {
                     EvalVal.Num(num)
                 } else {
-                    val str = ctx.strVars[expr.raw] ?: ctx.strVars[expr.lower]
+                    val str = ctx.strVars[expr.raw]
+                        ?: ctx.strVars[expr.lower]
+                        ?: if (expr.raw.startsWith("@")) (ctx.strVars[bareRaw] ?: ctx.strVars[bareLower]) else null
                     if (str != null) {
                         EvalVal.Str(str)
                     } else {
@@ -566,6 +606,24 @@ class MathExpressionEvaluator {
             if (args.size != 3) throw IllegalArgumentException("$name(koşul, doğruysa, yanlışsa) 3 argüman bekler")
             val cond = asBool(eval(args[0], ctx))
             return if (cond) eval(args[1], ctx) else eval(args[2], ctx)
+        }
+
+        // Short-circuit multi-branch lookup: switch(hedef, k1, v1, k2, v2, ..., [varsayilan])
+        if (name == "switch" || name == "sec") {
+            if (args.size < 3) throw IllegalArgumentException("$name(deger, k1, v1, ..., [varsayilan]) en az 3 argüman bekler")
+            val target = eval(args[0], ctx)
+            var idx = 1
+            while (idx + 1 < args.size) {
+                val candidate = eval(args[idx], ctx)
+                val matched = when {
+                    target is EvalVal.Str && candidate is EvalVal.Str -> target.s.equals(candidate.s, ignoreCase = true)
+                    target is EvalVal.Num && candidate is EvalVal.Num -> abs(target.v - candidate.v) < 1e-9
+                    else -> asStr(target).equals(asStr(candidate), ignoreCase = true)
+                }
+                if (matched) return eval(args[idx + 1], ctx)
+                idx += 2
+            }
+            return if (idx < args.size) eval(args[idx], ctx) else EvalVal.Num(0.0)
         }
 
         val evaluated = args.map { eval(it, ctx) }
@@ -753,6 +811,45 @@ class MathExpressionEvaluator {
             "upper", "buyuk" -> {
                 requireCount(name, args, 1)
                 EvalVal.Str(strArg(0).uppercase())
+            }
+            "between", "aralik" -> {
+                requireCount(name, args, 3)
+                val v = numArg(0)
+                val lo = numArg(1)
+                val hi = numArg(2)
+                EvalVal.Num(if (v >= min(lo, hi) && v <= max(lo, hi)) 1.0 else 0.0)
+            }
+            "add_days", "gun_ekle" -> {
+                requireCount(name, args, 2)
+                val baseDate = LocalDate.ofEpochDay(numArg(0).toLong())
+                val shifted = baseDate.plusDays(numArg(1).toLong())
+                EvalVal.Num(shifted.toEpochDay().toDouble())
+            }
+            "format_date", "tarih_metin" -> {
+                requireCount(name, args, 1)
+                val date = LocalDate.ofEpochDay(numArg(0).toLong())
+                EvalVal.Str(date.format(DateTimeFormatter.ofPattern("dd.MM.yyyy")))
+            }
+            "replace", "degistir" -> {
+                requireCount(name, args, 3)
+                EvalVal.Str(strArg(0).replace(strArg(1), strArg(2)))
+            }
+            "concat", "birlestir" -> {
+                if (args.isEmpty()) throw IllegalArgumentException("$name() en az 1 argüman bekler")
+                EvalVal.Str(evaluated.joinToString("") { asStr(it) })
+            }
+            "default", "bos_ise" -> {
+                requireCount(name, args, 2)
+                val first = evaluated[0]
+                val isEmpty = when (first) {
+                    is EvalVal.Str -> first.s.isBlank()
+                    is EvalVal.Num -> first.v.isNaN()
+                }
+                if (isEmpty) evaluated[1] else first
+            }
+            "index_of", "konum" -> {
+                requireCount(name, args, 2)
+                EvalVal.Num(strArg(0).indexOf(strArg(1), ignoreCase = true).toDouble())
             }
             "trim", "kirp" -> {
                 requireCount(name, args, 1)

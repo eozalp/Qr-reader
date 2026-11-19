@@ -25,12 +25,16 @@ class ProfileRepository(private val context: Context) {
 
     private val KEY_PROFILES = stringPreferencesKey("saved_profiles_json")
     private val KEY_ACTIVE_ID = stringPreferencesKey("active_profile_id")
+    private val KEY_GLOBAL_VARS = stringPreferencesKey("global_variables_json")
 
     private val _profiles = MutableStateFlow<List<QrProfile>>(emptyList())
     val profiles: StateFlow<List<QrProfile>> = _profiles.asStateFlow()
 
     private val _activeProfile = MutableStateFlow(createDefaultPresets().first())
     val activeProfile: StateFlow<QrProfile> = _activeProfile.asStateFlow()
+
+    private val _globalVariables = MutableStateFlow(createDefaultGlobalVariables())
+    val globalVariables: StateFlow<List<GlobalVariable>> = _globalVariables.asStateFlow()
 
     init {
         scope.launch {
@@ -43,6 +47,7 @@ class ProfileRepository(private val context: Context) {
             val prefs = context.dataStore.data.first()
             val jsonStr = prefs[KEY_PROFILES]
             val activeId = prefs[KEY_ACTIVE_ID]
+            val globalsJson = prefs[KEY_GLOBAL_VARS]
 
             val loaded = if (!jsonStr.isNullOrBlank()) {
                 parseProfilesJson(jsonStr)
@@ -55,6 +60,10 @@ class ProfileRepository(private val context: Context) {
 
             val active = listToUse.find { it.id == activeId } ?: listToUse.first()
             _activeProfile.value = active
+
+            if (!globalsJson.isNullOrBlank()) {
+                _globalVariables.value = parseGlobalsJson(globalsJson)
+            }
         }.onFailure { err ->
             AppDebugLogger.e("DATA-PROFILE", "Profiller diskten yüklenemedi", err)
             if (_profiles.value.isEmpty()) {
@@ -63,6 +72,34 @@ class ProfileRepository(private val context: Context) {
                 _activeProfile.value = defaults.first()
             }
         }
+    }
+
+    fun saveGlobalVariables(list: List<GlobalVariable>) {
+        _globalVariables.value = list
+        scope.launch {
+            runCatching {
+                context.dataStore.edit { prefs ->
+                    val array = JSONArray()
+                    list.forEach { array.put(it.toJson()) }
+                    prefs[KEY_GLOBAL_VARS] = array.toString()
+                }
+            }.onFailure { err ->
+                AppDebugLogger.e("DATA-PROFILE", "Global değişkenler kaydedilemedi", err)
+            }
+        }
+    }
+
+    private fun parseGlobalsJson(jsonStr: String): List<GlobalVariable> {
+        val result = mutableListOf<GlobalVariable>()
+        runCatching {
+            val array = JSONArray(jsonStr)
+            for (i in 0 until array.length()) {
+                array.optJSONObject(i)?.let { result.add(GlobalVariable.fromJson(it)) }
+            }
+        }.onFailure { err ->
+            AppDebugLogger.e("DATA-PROFILE", "Global değişken JSON hatası", err)
+        }
+        return result
     }
 
     fun selectProfile(id: String) {
@@ -99,10 +136,22 @@ class ProfileRepository(private val context: Context) {
             id = UUID.randomUUID().toString(),
             name = name.ifBlank { "Yeni Profil" },
             description = description,
-            parsingRules = QrParsingRules(),
-            formula = ArithmeticFormula("a + b", "a ve b toplamı"),
-            formatting = ResultFormatting(prefix = "₺", postfix = " TL", decimalSeparator = ",", thousandsSeparator = "."),
-            overlay = OverlayAppearance(),
+            parsingRules = QrParsingRules(
+                delimiter = "-",
+                variables = listOf(
+                    VariableDefinition(position = 0, name = "alan1", alias = "Alan 1", dataType = FieldDataType.STRING),
+                    VariableDefinition(position = 1, name = "alan2", alias = "Alan 2", dataType = FieldDataType.DOUBLE)
+                )
+            ),
+            formula = ArithmeticFormula("", ""),
+            formatting = ResultFormatting(prefix = "", postfix = "", decimalSeparator = ",", thousandsSeparator = "."),
+            overlay = OverlayAppearance(
+                displayMode = OverlayDisplayMode.EXCEL_TABLE,
+                tableConfig = ExcelTableConfig(
+                    headerTitle = name.ifBlank { "YENİ PROFİL" }.uppercase(),
+                    items = emptyList() // Auto-synced directly from user's visible variables!
+                )
+            ),
             tracking = TrackingSettings()
         )
         val updated = _profiles.value + newProfile
@@ -251,9 +300,168 @@ class ProfileRepository(private val context: Context) {
     }
 
     companion object {
+        fun createDefaultGlobalVariables(): List<GlobalVariable> = listOf(
+            GlobalVariable(id = "global_kdv", name = "kdv", value = "20", dataType = FieldDataType.DOUBLE, description = "Genel KDV Oranı (%)"),
+            GlobalVariable(id = "global_benzin", name = "benzin_lt", value = "44.50", dataType = FieldDataType.DOUBLE, description = "Benzin Litre Fiyatı (₺)"),
+            GlobalVariable(id = "global_motorin", name = "motorin_lt", value = "43.20", dataType = FieldDataType.DOUBLE, description = "Motorin Litre Fiyatı (₺)"),
+            GlobalVariable(id = "global_lpg", name = "lpg_lt", value = "25.80", dataType = FieldDataType.DOUBLE, description = "LPG Litre Fiyatı (₺)"),
+            GlobalVariable(id = "global_dolar", name = "dolar", value = "38.50", dataType = FieldDataType.DOUBLE, description = "Güncel USD Kuru (₺)")
+        )
+
         fun createDefaultPresets(): List<QrProfile> {
             return listOf(
-                // 1. Varsayılan Birincil Profil: İndirim & Net Fiyat (₺ TL)
+                // 1. Depo & Stok Sayım (Depocu / Lojistik — Metin Karar Çıktılı!)
+                QrProfile(
+                    id = "preset_warehouse_stock",
+                    name = "Depo & Stok Sayım",
+                    description = "Format: 'SKU-RAF-ADET' (örn: KOLI01-A12-4), kritik stok uyarısını otomatik üretir",
+                    parsingRules = QrParsingRules(
+                        delimiter = "-",
+                        variables = listOf(
+                            VariableDefinition(position = 0, name = "sku", alias = "Ürün Kodu", dataType = FieldDataType.STRING, defaultValue = "KOLI01"),
+                            VariableDefinition(position = 1, name = "raf", alias = "Raf", dataType = FieldDataType.STRING, defaultValue = "A12"),
+                            VariableDefinition(position = 2, name = "adet", alias = "Stok Adedi", dataType = FieldDataType.INTEGER, postfix = " ad", defaultValue = "4"),
+                            VariableDefinition(position = -1, name = "min_stok", alias = "Kritik Eşik", dataType = FieldDataType.INTEGER, isManual = true, defaultValue = "5", showPill = false),
+                            VariableDefinition(
+                                name = "durum",
+                                alias = "Stok Durumu",
+                                dataType = FieldDataType.STRING,
+                                isComputed = true,
+                                isPrimaryOutput = true,
+                                computationFormula = "if(adet < min_stok, \"KRİTİK STOK\", \"YETERLİ\")"
+                            )
+                        )
+                    ),
+                    formula = ArithmeticFormula("", ""),
+                    formatting = ResultFormatting(decimalPrecision = 0, decimalSeparator = ",", thousandsSeparator = "."),
+                    overlay = OverlayAppearance(
+                        textColorHex = "#00F5D4",
+                        borderColorHex = "#00F5D4",
+                        backgroundColorHex = "#071324",
+                        gradientColorEndHex = "#0B2942",
+                        fillMode = OverlayFillMode.FILLED_GRADIENT,
+                        iconName = "qr",
+                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
+                        tableConfig = ExcelTableConfig(
+                            headerTitle = "DEPO STOK KARTI",
+                            headerSubtitle = "LOJİSTİK & SAYIM",
+                            gridTheme = ExcelGridTheme.NEON_CYAN,
+                            items = listOf(
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "sku", label = "Ürün Kodu", coordinate = "A1"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "raf", label = "Raf", coordinate = "A2"),
+                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "adet", label = "Stok Adedi", postfix = " ad", coordinate = "A3"),
+                                ExcelTableCellItem(source = TableItemSource.COMPUTED, variableName = "durum", label = "Durum", coordinate = "A4", isEmphasized = true)
+                            )
+                        )
+                    )
+                ),
+                // 2. Akaryakıt & Pompa Hesabı (Benzinci — Anahtar=Değer & @Global Fiyatlar & switch!)
+                QrProfile(
+                    id = "preset_fuel_station",
+                    name = "Akaryakıt & Pompa",
+                    description = "Format: 'PLAKA=34ABC12&YAKIT=MOTORIN&LT=45.5', güncel @global pompa fiyatıyla tutarı hesaplar",
+                    parsingRules = QrParsingRules(
+                        parsingMode = QrParsingMode.KEY_VALUE,
+                        delimiter = "&",
+                        keyValueSeparator = "=",
+                        variables = listOf(
+                            VariableDefinition(position = 0, name = "plaka", alias = "Araç Plaka", extractionKey = "PLAKA", dataType = FieldDataType.STRING, defaultValue = "34ABC12"),
+                            VariableDefinition(position = 1, name = "yakit", alias = "Yakıt Tipi", extractionKey = "YAKIT", dataType = FieldDataType.STRING, defaultValue = "MOTORIN"),
+                            VariableDefinition(position = 2, name = "lt", alias = "Miktar", extractionKey = "LT", dataType = FieldDataType.DOUBLE, postfix = " Lt", defaultValue = "45.5"),
+                            VariableDefinition(
+                                name = "birim_fiyat",
+                                alias = "Litre Fiyatı",
+                                dataType = FieldDataType.DOUBLE,
+                                isComputed = true,
+                                prefix = "₺",
+                                computationFormula = "switch(yakit, \"BENZIN\", @benzin_lt, \"MOTORIN\", @motorin_lt, \"LPG\", @lpg_lt, @motorin_lt)"
+                            ),
+                            VariableDefinition(
+                                name = "tutar",
+                                alias = "Ödenecek Tutar",
+                                dataType = FieldDataType.DOUBLE,
+                                isComputed = true,
+                                isPrimaryOutput = true,
+                                prefix = "₺",
+                                postfix = " TL",
+                                computationFormula = "lt * birim_fiyat"
+                            )
+                        )
+                    ),
+                    formula = ArithmeticFormula("", ""),
+                    formatting = ResultFormatting(decimalPrecision = 2, prefix = "₺", postfix = " TL", decimalSeparator = ",", thousandsSeparator = "."),
+                    overlay = OverlayAppearance(
+                        textColorHex = "#F59E0B",
+                        borderColorHex = "#F59E0B",
+                        backgroundColorHex = "#351502",
+                        gradientColorEndHex = "#1E1B4B",
+                        fillMode = OverlayFillMode.FILLED_GRADIENT,
+                        iconName = "sparkle",
+                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
+                        tableConfig = ExcelTableConfig(
+                            headerTitle = "AKARYAKIT FİŞİ",
+                            headerSubtitle = "POMPA HESABI",
+                            gridTheme = ExcelGridTheme.AMBER_GOLD,
+                            items = emptyList()
+                        )
+                    )
+                ),
+                // 3. Kütüphane & İade Takip (Kütüphaneci — Tarih + Gün Ekleme + Gecikme Durumu!)
+                QrProfile(
+                    id = "preset_library_loan",
+                    name = "Kütüphane & İade Takip",
+                    description = "Format: 'ISBN-RAF-ODUNC_TARIHI' (örn: 978975-B04-20261101), iade tarihini ve gecikmeyi hesaplar",
+                    parsingRules = QrParsingRules(
+                        delimiter = "-",
+                        variables = listOf(
+                            VariableDefinition(position = 0, name = "isbn", alias = "ISBN", dataType = FieldDataType.STRING, defaultValue = "978975"),
+                            VariableDefinition(position = 1, name = "raf", alias = "Raf Konumu", dataType = FieldDataType.STRING, defaultValue = "B04"),
+                            VariableDefinition(position = 2, name = "odunc", alias = "Ödünç Tarihi", dataType = FieldDataType.DATE, defaultValue = "20261101"),
+                            VariableDefinition(position = -1, name = "sure", alias = "Ödünç Süresi", dataType = FieldDataType.INTEGER, isManual = true, defaultValue = "14", postfix = " gün", showPill = false),
+                            VariableDefinition(
+                                name = "iade_tarihi",
+                                alias = "Son İade",
+                                dataType = FieldDataType.DATE,
+                                isComputed = true,
+                                computationFormula = "gun_ekle(odunc, sure)"
+                            ),
+                            VariableDefinition(
+                                name = "gecikme",
+                                alias = "Gecikme",
+                                dataType = FieldDataType.INTEGER,
+                                isComputed = true,
+                                showPill = false,
+                                computationFormula = "max(0, gun_farki(bugun, iade_tarihi))"
+                            ),
+                            VariableDefinition(
+                                name = "durum",
+                                alias = "İade Durumu",
+                                dataType = FieldDataType.STRING,
+                                isComputed = true,
+                                isPrimaryOutput = true,
+                                computationFormula = "if(gecikme > 0, \"GECİKMİŞ (\" + round(gecikme, 0) + \" gün)\", \"ZAMANINDA\")"
+                            )
+                        )
+                    ),
+                    formula = ArithmeticFormula("", ""),
+                    formatting = ResultFormatting(decimalPrecision = 0, decimalSeparator = ",", thousandsSeparator = "."),
+                    overlay = OverlayAppearance(
+                        textColorHex = "#38BDF8",
+                        borderColorHex = "#38BDF8",
+                        backgroundColorHex = "#0C4A6E",
+                        gradientColorEndHex = "#082F49",
+                        fillMode = OverlayFillMode.FILLED_GRADIENT,
+                        iconName = "tag",
+                        displayMode = OverlayDisplayMode.EXCEL_TABLE,
+                        tableConfig = ExcelTableConfig(
+                            headerTitle = "KÜTÜPHANE KAYDI",
+                            headerSubtitle = "ÖDÜNÇ & İADE",
+                            gridTheme = ExcelGridTheme.MODERN_SLATE,
+                            items = emptyList()
+                        )
+                    )
+                ),
+                // 4. İndirim & Net Fiyat (₺ TL) — Tamamen Kullanıcı Değişkeniyle
                 QrProfile(
                     id = "preset_turkish_discount",
                     name = "İndirim & Net Fiyat (₺ TL)",
@@ -261,14 +469,20 @@ class ProfileRepository(private val context: Context) {
                     parsingRules = QrParsingRules(
                         delimiter = "-",
                         variables = listOf(
-                            VariableDefinition(position = 0, name = "fiyat", alias = "a", prefix = "₺"),
-                            VariableDefinition(position = 1, name = "indirim", alias = "b", postfix = "%")
+                            VariableDefinition(position = 0, name = "fiyat", alias = "Liste Fiyatı", prefix = "₺"),
+                            VariableDefinition(position = 1, name = "indirim", alias = "İndirim Oranı", postfix = "%"),
+                            VariableDefinition(
+                                name = "net_tutar",
+                                alias = "Net Tutar",
+                                isComputed = true,
+                                isPrimaryOutput = true,
+                                prefix = "₺",
+                                postfix = " TL",
+                                computationFormula = "fiyat * (1 - indirim / 100)"
+                            )
                         )
                     ),
-                    formula = ArithmeticFormula(
-                        expression = "fiyat * (1 - indirim / 100)",
-                        description = "İndirimli net ödenecek tutar"
-                    ),
+                    formula = ArithmeticFormula("", ""),
                     formatting = ResultFormatting(
                         decimalPrecision = 2,
                         prefix = "₺",
@@ -289,11 +503,7 @@ class ProfileRepository(private val context: Context) {
                             headerTitle = "İNDİRİM TABLOSU",
                             headerSubtitle = "₺ FİYATLANDIRMA",
                             gridTheme = ExcelGridTheme.AMBER_GOLD,
-                            items = listOf(
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "fiyat", label = "Liste Fiyatı", prefix = "₺", coordinate = "A1"),
-                                ExcelTableCellItem(source = TableItemSource.VARIABLE, variableName = "indirim", label = "İndirim Oranı", postfix = "%", coordinate = "A2"),
-                                ExcelTableCellItem(source = TableItemSource.FORMULA_RESULT, label = "NET TUTAR", prefix = "₺", postfix = " TL", coordinate = "A3", isEmphasized = true)
-                            )
+                            items = emptyList()
                         )
                     )
                 ),

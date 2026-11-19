@@ -1,7 +1,6 @@
 package com.example.ui.settings
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -9,6 +8,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,55 +18,186 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.engine.MathExpressionEvaluator
-import com.example.engine.MathResult
+import com.example.engine.MathValueResult
 import com.example.engine.ResultFormatter
 import com.example.model.FieldDataType
+import com.example.model.GlobalVariable
 import com.example.model.ResultFormatting
 import com.example.model.VariableDefinition
+import com.example.ui.theme.AppMonoFontFamily
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 private enum class BuilderToolCategory(val label: String) {
     VARIABLES("Değişkenler"),
+    RECIPES("Kalıplar"),
     OPERATORS("Operatörler"),
     MATH("Matematik"),
     DATE_TEXT("Tarih & Metin")
 }
 
+private class FormulaSyntaxVisualTransformation(
+    private val variableNames: Set<String>,
+    private val varColor: Color,
+    private val globalColor: Color,
+    private val funcColor: Color,
+    private val stringColor: Color,
+    private val numberColor: Color,
+    private val operatorColor: Color
+) : VisualTransformation {
+
+    private val tokenRegex = Regex(
+        "(\"(?:\\\\.|[^\"])*\"|'(?:\\\\.|[^'])*')|" + // 1: string literal
+            "(@[A-Za-z_][A-Za-z0-9_]*)|" +              // 2: @global variable
+            "([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()|" +    // 3: function call
+            "([A-Za-z_][A-Za-z0-9_]*)|" +               // 4: identifier/variable
+            "(\\d+(?:\\.\\d+)?)|" +                     // 5: number
+            "(==|!=|<=|>=|&&|\\|\\||[+\\-*/%^<>!?=:])"  // 6: operator
+    )
+
+    override fun filter(text: AnnotatedString): TransformedText {
+        val raw = text.text
+        val highlighted = buildAnnotatedString {
+            append(raw)
+            tokenRegex.findAll(raw).forEach { match ->
+                val start = match.range.first
+                val end = match.range.last + 1
+                val style = when {
+                    match.groups[1] != null -> SpanStyle(color = stringColor, fontWeight = FontWeight.Medium)
+                    match.groups[2] != null -> SpanStyle(color = globalColor, fontWeight = FontWeight.ExtraBold)
+                    match.groups[3] != null -> SpanStyle(color = funcColor, fontWeight = FontWeight.Bold)
+                    match.groups[4] != null -> {
+                        val word = match.value.lowercase()
+                        if (word in variableNames || word in setOf("bugun", "today", "bu_yil", "bu_ay", "bu_gun")) {
+                            SpanStyle(color = varColor, fontWeight = FontWeight.Bold)
+                        } else if (word in setOf("ve", "veya", "degil", "and", "or", "not", "true", "false", "dogru", "yanlis")) {
+                            SpanStyle(color = operatorColor, fontWeight = FontWeight.Bold)
+                        } else {
+                            null
+                        }
+                    }
+                    match.groups[5] != null -> SpanStyle(color = numberColor, fontWeight = FontWeight.SemiBold)
+                    match.groups[6] != null -> SpanStyle(color = operatorColor, fontWeight = FontWeight.ExtraBold)
+                    else -> null
+                }
+                if (style != null) {
+                    addStyle(style, start, end)
+                }
+            }
+        }
+        return TransformedText(highlighted, OffsetMapping.Identity)
+    }
+}
+
 /**
- * Reusable interactive Calculation Builder allowing users to compose arbitrary expressions
- * from typed variables, arithmetic/comparison/logical/ternary operators, math tools,
- * calendar/date primitives, and string tools.
+ * Generalist interactive Calculation Builder allowing users to compose numeric, text, date,
+ * or boolean formulas from profile variables, @global shared constants, operators, recipes,
+ * math tools, calendar primitives, and string tools — with syntax highlighting, undo/redo,
+ * cursor-safe insertion, and live multi-type preview.
  */
 @Composable
 fun FormulaBuilderPanel(
     expression: String,
     onExpressionChanged: (String) -> Unit,
     variables: List<VariableDefinition>,
+    globalVariables: List<GlobalVariable> = emptyList(),
     liveNumericVars: Map<String, Double> = emptyMap(),
     liveStringVars: Map<String, String> = emptyMap(),
     formatting: ResultFormatting? = null,
     previewVariable: VariableDefinition? = null,
     label: String = "Hesaplama İfadesi",
-    placeholder: String = "örn: maliyet * (1 + oran / 100)",
+    placeholder: String = "örn: if(adet < min_stok, \"KRİTİK\", \"OK\") veya lt * @motorin_lt",
     testTagPrefix: String = "main_formula",
     onRequestAddVariable: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    var activeCategory by remember { mutableStateOf(BuilderToolCategory.OPERATORS) }
-    var textFieldValue by remember(expression) {
+    var activeCategory by remember { mutableStateOf(BuilderToolCategory.VARIABLES) }
+
+    // Cursor-safe TextFieldValue: never reset cursor to end when parent echoes our own edit!
+    var textFieldValue by remember {
         mutableStateOf(TextFieldValue(expression, TextRange(expression.length)))
     }
-    val evaluator = remember { MathExpressionEvaluator() }
+    LaunchedEffect(expression) {
+        if (expression != textFieldValue.text) {
+            textFieldValue = TextFieldValue(expression, TextRange(expression.length))
+        }
+    }
 
+    // Undo / Redo stacks
+    val undoStack = remember { mutableStateListOf<String>() }
+    val redoStack = remember { mutableStateListOf<String>() }
+
+    fun pushExpression(updated: String, newCursor: Int) {
+        if (updated != textFieldValue.text) {
+            undoStack.add(textFieldValue.text)
+            if (undoStack.size > 40) undoStack.removeAt(0)
+            redoStack.clear()
+        }
+        textFieldValue = TextFieldValue(updated, TextRange(newCursor.coerceIn(0, updated.length)))
+        onExpressionChanged(updated)
+    }
+
+    fun undo() {
+        if (undoStack.isNotEmpty()) {
+            val prev = undoStack.removeAt(undoStack.lastIndex)
+            redoStack.add(textFieldValue.text)
+            textFieldValue = TextFieldValue(prev, TextRange(prev.length))
+            onExpressionChanged(prev)
+        }
+    }
+
+    fun redo() {
+        if (redoStack.isNotEmpty()) {
+            val next = redoStack.removeAt(redoStack.lastIndex)
+            undoStack.add(textFieldValue.text)
+            textFieldValue = TextFieldValue(next, TextRange(next.length))
+            onExpressionChanged(next)
+        }
+    }
+
+    val evaluator = remember { MathExpressionEvaluator() }
     val liveEvalResult = remember(expression, liveNumericVars, liveStringVars) {
         if (expression.isBlank()) null
-        else evaluator.evaluate(expression, liveNumericVars, liveStringVars)
+        else evaluator.evaluateValue(expression, liveNumericVars, liveStringVars)
+    }
+
+    val knownVarNames = remember(variables) {
+        buildSet {
+            variables.forEach { v ->
+                add(v.name.lowercase())
+                if (v.alias.isNotBlank()) add(v.alias.lowercase())
+                if (v.dataType == FieldDataType.DATE) {
+                    add("${v.name.lowercase()}_gun")
+                    add("${v.name.lowercase()}_ay")
+                    add("${v.name.lowercase()}_yil")
+                }
+            }
+        }
+    }
+
+    val isDark = MaterialTheme.colorScheme.surface.red < 0.5f
+    val syntaxVisual = remember(knownVarNames, isDark) {
+        FormulaSyntaxVisualTransformation(
+            variableNames = knownVarNames,
+            varColor = if (isDark) Color(0xFF22D3EE) else Color(0xFF0E7490),
+            globalColor = if (isDark) Color(0xFFFBBF24) else Color(0xFFB45309),
+            funcColor = if (isDark) Color(0xFFA78BFA) else Color(0xFF6D28D9),
+            stringColor = if (isDark) Color(0xFF34D399) else Color(0xFF047857),
+            numberColor = if (isDark) Color(0xFF60A5FA) else Color(0xFF1D4ED8),
+            operatorColor = if (isDark) Color(0xFFFB7185) else Color(0xFFBE123C)
+        )
     }
 
     fun insertAtCursor(rawInsert: String, smartSpaces: Boolean = true, cursorBackOffset: Int = 0) {
@@ -86,8 +218,7 @@ fun FormulaBuilderPanel(
 
         val updated = text.replaceRange(selStart, selEnd, insertion)
         val newCursor = (selStart + insertion.length - cursorBackOffset).coerceIn(0, updated.length)
-        textFieldValue = TextFieldValue(updated, TextRange(newCursor))
-        onExpressionChanged(updated)
+        pushExpression(updated, newCursor)
     }
 
     fun backspaceAtCursor() {
@@ -96,71 +227,93 @@ fun FormulaBuilderPanel(
         val selEnd = textFieldValue.selection.end.coerceIn(0, text.length)
         if (selStart != selEnd) {
             val updated = text.removeRange(selStart, selEnd)
-            textFieldValue = TextFieldValue(updated, TextRange(selStart))
-            onExpressionChanged(updated)
+            pushExpression(updated, selStart)
         } else if (selStart > 0) {
             val updated = text.removeRange(selStart - 1, selStart)
-            textFieldValue = TextFieldValue(updated, TextRange(selStart - 1))
-            onExpressionChanged(updated)
+            pushExpression(updated, selStart - 1)
         }
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        // 1. Expression Text Editor
+        // 1. Syntax-Highlighted Expression Editor
         OutlinedTextField(
             value = textFieldValue,
-            onValueChange = {
-                textFieldValue = it
-                onExpressionChanged(it.text)
+            onValueChange = { next ->
+                if (next.text != textFieldValue.text) {
+                    undoStack.add(textFieldValue.text)
+                    if (undoStack.size > 40) undoStack.removeAt(0)
+                    redoStack.clear()
+                }
+                textFieldValue = next
+                onExpressionChanged(next.text)
             },
             label = { Text(label) },
             placeholder = { Text(placeholder, fontSize = 12.sp) },
+            visualTransformation = syntaxVisual,
             textStyle = LocalTextStyle.current.copy(
-                fontFamily = FontFamily.Monospace,
+                fontFamily = AppMonoFontFamily,
                 fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.Medium
             ),
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("${testTagPrefix}_input"),
-            maxLines = 3,
-            trailingIcon = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = { backspaceAtCursor() },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Backspace,
-                            contentDescription = "Geri Sil",
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    if (textFieldValue.text.isNotEmpty()) {
-                        IconButton(
-                            onClick = {
-                                textFieldValue = TextFieldValue("", TextRange(0))
-                                onExpressionChanged("")
-                            },
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Clear,
-                                contentDescription = "Temizle",
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-                }
-            }
+            maxLines = 4
         )
 
-        // 2. Live Result / Syntax Feedback Pill
+        // 1B. Compact Editor Action Toolbar (Undo / Redo / Backspace / Clear)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = { undo() },
+                enabled = undoStack.isNotEmpty(),
+                modifier = Modifier.size(36.dp).testTag("${testTagPrefix}_undo")
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Geri Al", modifier = Modifier.size(18.dp))
+            }
+            IconButton(
+                onClick = { redo() },
+                enabled = redoStack.isNotEmpty(),
+                modifier = Modifier.size(36.dp).testTag("${testTagPrefix}_redo")
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Yinele", modifier = Modifier.size(18.dp))
+            }
+            IconButton(
+                onClick = { backspaceAtCursor() },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Backspace, contentDescription = "Geri Sil", modifier = Modifier.size(18.dp))
+            }
+            if (textFieldValue.text.isNotEmpty()) {
+                IconButton(
+                    onClick = { pushExpression("", 0) },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(Icons.Default.Clear, contentDescription = "Temizle", modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+
+        // 2. Live Multi-Type Result / Syntax Feedback Pill
         if (liveEvalResult != null) {
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
             when (liveEvalResult) {
-                is MathResult.Success -> {
+                is MathValueResult.SuccessNum -> {
                     val formatted = when {
+                        previewVariable?.dataType == FieldDataType.DATE -> {
+                            runCatching {
+                                val d = LocalDate.ofEpochDay(liveEvalResult.value.toLong())
+                                "${previewVariable.prefix}${d.format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))}${previewVariable.postfix}"
+                            }.getOrElse { liveEvalResult.value.toString() }
+                        }
+                        previewVariable?.dataType == FieldDataType.BOOLEAN -> {
+                            if (kotlin.math.abs(liveEvalResult.value) > 1e-12) "Doğru" else "Yanlış"
+                        }
                         previewVariable != null -> ResultFormatter.formatVariable(
                             value = liveEvalResult.value,
                             varDef = previewVariable,
@@ -170,63 +323,15 @@ fun FormulaBuilderPanel(
                         formatting != null -> ResultFormatter.format(liveEvalResult.value, formatting)
                         else -> liveEvalResult.value.toString()
                     }
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Default.CheckCircle,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Önizleme Sonucu:",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
-                            Text(
-                                text = formatted,
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
+                    LiveFormulaResultPill(label = "Canlı Sonuç:", value = formatted, isError = false)
                 }
-                is MathResult.Error -> {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.ErrorOutline,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = liveEvalResult.message,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                        }
-                    }
+                is MathValueResult.SuccessText -> {
+                    val pfx = previewVariable?.prefix ?: ""
+                    val sfx = previewVariable?.postfix ?: ""
+                    LiveFormulaResultPill(label = "Canlı Metin:", value = "$pfx${liveEvalResult.text}$sfx", isError = false)
+                }
+                is MathValueResult.Error -> {
+                    LiveFormulaResultPill(label = "", value = liveEvalResult.message, isError = true)
                 }
             }
         }
@@ -257,7 +362,7 @@ fun FormulaBuilderPanel(
                         color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         softWrap = false,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
                     )
                 }
             }
@@ -284,7 +389,7 @@ fun FormulaBuilderPanel(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Tanımlı Değişkenler & Veri Tipleri",
+                                text = "Profil Değişkenleri",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
@@ -304,7 +409,7 @@ fun FormulaBuilderPanel(
 
                         if (variables.isEmpty()) {
                             Text(
-                                text = "Henüz değişken tanımlanmadı.",
+                                text = "Henüz başka değişken tanımlanmadı.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -368,6 +473,31 @@ fun FormulaBuilderPanel(
                             }
                         }
 
+                        if (globalVariables.isNotEmpty()) {
+                            Text(
+                                text = "Ortak @Global Sabitler (Tüm Profillerde):",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                globalVariables.forEach { gv ->
+                                    val token = "@${gv.name.removePrefix("@")}"
+                                    BuilderInsertChip(
+                                        title = token,
+                                        subtitle = gv.value,
+                                        accent = true,
+                                        onClick = { insertAtCursor(token) }
+                                    )
+                                }
+                            }
+                        }
+
                         Text(
                             text = "Sistem Sabitleri:",
                             style = MaterialTheme.typography.labelSmall,
@@ -381,18 +511,52 @@ fun FormulaBuilderPanel(
                         ) {
                             listOf(
                                 "bugun" to "Bugün (tarih)",
-                                "bu_yil" to "Bu yıl (sayı)",
+                                "bu_yil" to "Bu yıl",
                                 "bu_ay" to "Bu ay (1-12)",
                                 "bu_gun" to "Bu gün (1-31)",
                                 "true" to "Doğru (1)",
                                 "false" to "Yanlış (0)",
-                                "pi" to "π",
-                                "e" to "e"
+                                "pi" to "π"
                             ).forEach { (sym, hint) ->
                                 BuilderInsertChip(
                                     title = sym,
                                     subtitle = hint,
                                     onClick = { insertAtCursor(sym) }
+                                )
+                            }
+                        }
+                    }
+
+                    BuilderToolCategory.RECIPES -> {
+                        val v1 = variables.firstOrNull { !it.isComputed }?.name ?: "a"
+                        val v2 = variables.filter { !it.isComputed }.getOrNull(1)?.name ?: "b"
+                        Text(
+                            text = "Evrensel Hazır Kalıplar (Tek Tıkla Ekle)",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                Triple("if($v1 < 5, \"KRİTİK\", \"YETERLİ\")", "Eğer-İse Durum", "Stok / eşik etiketi"),
+                                Triple("switch($v1, \"A\", 10, \"B\", 20, 0)", "Çoklu Eşleme", "Tip/kod → fiyat/değer"),
+                                Triple("$v1 * (1 + $v2 / 100)", "+% Ekle", "KDV veya kâr ekle"),
+                                Triple("$v1 * (1 - $v2 / 100)", "-% İndirim", "Yüzde iskonto"),
+                                Triple("gun_ekle($v1, 14)", "Tarih + Gün", "İade / son kullanma"),
+                                Triple("max(0, gun_farki(bugun, $v1))", "Gecikme / Yaş", "Bugünden gün farkı"),
+                                Triple("birlestir($v1, \" / \", $v2)", "Metin Birleştir", "Raf + kod etiketi"),
+                                Triple("round($v1 / $v2, 2)", "Birim Oran", "Litre / gram / adet başı")
+                            ).forEach { (snippet, title, sub) ->
+                                BuilderInsertChip(
+                                    title = title,
+                                    subtitle = sub,
+                                    accent = true,
+                                    onClick = { insertAtCursor(snippet) }
                                 )
                             }
                         }
@@ -434,6 +598,23 @@ fun FormulaBuilderPanel(
                                 .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
+                            BuilderInsertChip(
+                                title = "if( , , )",
+                                subtitle = "Eğer koşul",
+                                accent = true,
+                                onClick = { insertAtCursor("if(, , )", cursorBackOffset = 5) }
+                            )
+                            BuilderInsertChip(
+                                title = "switch(...)",
+                                subtitle = "Çoklu eşleme",
+                                accent = true,
+                                onClick = { insertAtCursor("switch(, \"\", , 0)", cursorBackOffset = 10) }
+                            )
+                            BuilderInsertChip(
+                                title = "aralik()",
+                                subtitle = "Min..Max arası",
+                                onClick = { insertAtCursor("aralik(, 0, 100)", cursorBackOffset = 9) }
+                            )
                             listOf(
                                 "==" to "Eşit",
                                 "!=" to "Eşit değil",
@@ -451,17 +632,6 @@ fun FormulaBuilderPanel(
                                     onClick = { insertAtCursor(op) }
                                 )
                             }
-                            BuilderInsertChip(
-                                title = "if( , , )",
-                                subtitle = "Koşullu",
-                                accent = true,
-                                onClick = { insertAtCursor("if(, , )", cursorBackOffset = 5) }
-                            )
-                            BuilderInsertChip(
-                                title = "? :",
-                                subtitle = "Üçlü koşul",
-                                onClick = { insertAtCursor("? : ", cursorBackOffset = 3) }
-                            )
                             BuilderInsertChip(
                                 title = "\"\"",
                                 subtitle = "Metin tırnağı",
@@ -491,7 +661,7 @@ fun FormulaBuilderPanel(
 
                     BuilderToolCategory.MATH -> {
                         Text(
-                            text = "Matematik & Yuvarlama Araçları",
+                            text = "Matematik & Yuvarlama Araçları (Oto Parantez)",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -503,27 +673,25 @@ fun FormulaBuilderPanel(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             listOf(
-                                Triple("round(", "round(x, 2)", "Yuvarla"),
-                                Triple("ceil(", "ceil(x)", "Yukarı yuvarla"),
-                                Triple("floor(", "floor(x)", "Aşağı yuvarla"),
-                                Triple("trunc(", "trunc(x)", "Tam kısım"),
-                                Triple("abs(", "abs(x)", "Mutlak değer"),
-                                Triple("min(", "min(a, b)", "En küçük"),
-                                Triple("max(", "max(a, b)", "En büyük"),
-                                Triple("avg(", "avg(a, b)", "Ortalama"),
-                                Triple("sum(", "sum(a, b)", "Toplam"),
-                                Triple("pow(", "pow(a, b)", "Üs a^b"),
-                                Triple("sqrt(", "sqrt(x)", "Karekök"),
-                                Triple("clamp(", "clamp(x, min, max)", "Sınırla"),
-                                Triple("ln(", "ln(x)", "Doğal log"),
-                                Triple("log10(", "log10(x)", "Log 10"),
-                                Triple("exp(", "exp(x)", "e^x"),
-                                Triple("sign(", "sign(x)", "İşaret (-1/0/1)")
-                            ).forEach { (insert, title, sub) ->
+                                Quad("round(, 2)", 4, "round(x, 2)", "Yuvarla"),
+                                Quad("ceil()", 1, "ceil(x)", "Yukarı yuvarla"),
+                                Quad("floor()", 1, "floor(x)", "Aşağı yuvarla"),
+                                Quad("trunc()", 1, "trunc(x)", "Tam kısım"),
+                                Quad("abs()", 1, "abs(x)", "Mutlak değer"),
+                                Quad("min(, )", 3, "min(a, b)", "En küçük"),
+                                Quad("max(, )", 3, "max(a, b)", "En büyük"),
+                                Quad("avg(, )", 3, "avg(a, b)", "Ortalama"),
+                                Quad("sum(, )", 3, "sum(a, b)", "Toplam"),
+                                Quad("clamp(, 0, 100)", 9, "clamp(x, lo, hi)", "Sınırla"),
+                                Quad("pow(, 2)", 4, "pow(a, b)", "Üs a^b"),
+                                Quad("sqrt()", 1, "sqrt(x)", "Karekök"),
+                                Quad("ln()", 1, "ln(x)", "Doğal log"),
+                                Quad("log10()", 1, "log10(x)", "Log 10")
+                            ).forEach { (insert, backOffset, title, sub) ->
                                 BuilderInsertChip(
                                     title = title,
                                     subtitle = sub,
-                                    onClick = { insertAtCursor(insert) }
+                                    onClick = { insertAtCursor(insert, cursorBackOffset = backOffset) }
                                 )
                             }
                         }
@@ -543,25 +711,26 @@ fun FormulaBuilderPanel(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             listOf(
-                                Triple("gun_farki(bugun, ", "gun_farki(t2, t1)", "Gün farkı"),
-                                Triple("ay_farki(bugun, ", "ay_farki(t2, t1)", "Ay farkı"),
-                                Triple("yil_farki(bugun, ", "yil_farki(t2, t1)", "Yıl farkı"),
-                                Triple("date(", "date(yil, ay, gun)", "Tarih üret"),
-                                Triple("year(", "year(tarih)", "Yılı al"),
-                                Triple("month(", "month(tarih)", "Ayı al"),
-                                Triple("day(", "day(tarih)", "Günü al"),
-                                Triple("weekday(", "weekday(tarih)", "Haftanın günü (1-7)")
-                            ).forEach { (insert, title, sub) ->
+                                Quad("gun_ekle(, 14)", 5, "gun_ekle(t, n)", "Gün ekle / çıkar"),
+                                Quad("gun_farki(bugun, )", 1, "gun_farki(t2, t1)", "Gün farkı"),
+                                Quad("ay_farki(bugun, )", 1, "ay_farki(t2, t1)", "Ay farkı"),
+                                Quad("yil_farki(bugun, )", 1, "yil_farki(t2, t1)", "Yıl farkı"),
+                                Quad("tarih_metin()", 1, "tarih_metin(t)", "gg.aa.yyyy metin"),
+                                Quad("date(2026, 1, 1)", 1, "date(y, a, g)", "Tarih üret"),
+                                Quad("year()", 1, "year(tarih)", "Yılı al"),
+                                Quad("month()", 1, "month(tarih)", "Ayı al"),
+                                Quad("day()", 1, "day(tarih)", "Günü al")
+                            ).forEach { (insert, backOffset, title, sub) ->
                                 BuilderInsertChip(
                                     title = title,
                                     subtitle = sub,
-                                    onClick = { insertAtCursor(insert) }
+                                    onClick = { insertAtCursor(insert, cursorBackOffset = backOffset) }
                                 )
                             }
                         }
 
                         Text(
-                            text = "Metin & Tip Dönüşüm Araçları",
+                            text = "Metin & Dönüşüm Araçları",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -573,26 +742,84 @@ fun FormulaBuilderPanel(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             listOf(
-                                Triple("num(", "num(metin)", "Sayıya çevir"),
-                                Triple("len(", "len(metin)", "Karakter sayısı"),
-                                Triple("substr(", "substr(s, bas, uz)", "Alt parça kes"),
-                                Triple("contains(", "contains(s, aranan)", "İçeriyor mu"),
-                                Triple("starts_with(", "starts_with(s, onEk)", "Başlıyor mu"),
-                                Triple("ends_with(", "ends_with(s, sonEk)", "Bitiyor mu"),
-                                Triple("equals(", "equals(s1, s2)", "Birebir eşit"),
-                                Triple("lower(", "lower(s)", "Küçük harf"),
-                                Triple("upper(", "upper(s)", "Büyük harf"),
-                                Triple("trim(", "trim(s)", "Boşluk sil")
-                            ).forEach { (insert, title, sub) ->
+                                Quad("birlestir(, \" \", )", 7, "birlestir(a, b)", "Metin birleştir"),
+                                Quad("degistir(, \"\", \"\")", 9, "degistir(s, e, y)", "Metin değiştir"),
+                                Quad("bos_ise(, \"-\")", 6, "bos_ise(s, yedek)", "Boşsa yedek"),
+                                Quad("num()", 1, "num(metin)", "Sayıya çevir"),
+                                Quad("substr(, 0, 4)", 7, "substr(s, bas, uz)", "Alt parça kes"),
+                                Quad("contains(, \"\")", 5, "contains(s, ara)", "İçeriyor mu"),
+                                Quad("starts_with(, \"\")", 5, "starts_with(s, ek)", "Başlıyor mu"),
+                                Quad("len()", 1, "len(metin)", "Karakter sayısı"),
+                                Quad("upper()", 1, "upper(s)", "Büyük harf"),
+                                Quad("lower()", 1, "lower(s)", "Küçük harf"),
+                                Quad("trim()", 1, "trim(s)", "Boşluk sil")
+                            ).forEach { (insert, backOffset, title, sub) ->
                                 BuilderInsertChip(
                                     title = title,
                                     subtitle = sub,
-                                    onClick = { insertAtCursor(insert) }
+                                    onClick = { insertAtCursor(insert, cursorBackOffset = backOffset) }
                                 )
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+private data class Quad(val insert: String, val backOffset: Int, val title: String, val sub: String)
+
+@Composable
+private fun LiveFormulaResultPill(
+    label: String,
+    value: String,
+    isError: Boolean
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = if (isError) {
+            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f)
+        } else {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                Icon(
+                    imageVector = if (isError) Icons.Default.ErrorOutline else Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                if (isError) {
+                    Text(
+                        text = value,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                } else {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+            if (!isError) {
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontFamily = AppMonoFontFamily,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
         }
     }
@@ -607,8 +834,8 @@ private fun OperatorKeyButton(
         shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.secondaryContainer,
         modifier = Modifier
-            .height(36.dp)
-            .widthIn(min = 36.dp)
+            .height(38.dp)
+            .widthIn(min = 38.dp)
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
     ) {
@@ -619,7 +846,7 @@ private fun OperatorKeyButton(
             Text(
                 text = label,
                 fontSize = 14.sp,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = AppMonoFontFamily,
                 fontWeight = FontWeight.ExtraBold,
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
                 maxLines = 1,
@@ -653,7 +880,7 @@ private fun BuilderInsertChip(
             Text(
                 text = title,
                 fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = AppMonoFontFamily,
                 fontWeight = FontWeight.Bold,
                 color = if (accent) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,

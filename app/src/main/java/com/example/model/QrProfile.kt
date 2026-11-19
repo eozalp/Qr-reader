@@ -18,23 +18,72 @@ enum class FieldDataType(val label: String) {
 }
 
 /**
- * Definition of a single variable extracted from QR content.
+ * How raw barcode/QR text is parsed into variables.
+ */
+enum class QrParsingMode(val label: String, val hint: String) {
+    DELIMITER("Ayırıcı ile Böl", "örn. 150-25-3 veya SKU,ADET,RAF"),
+    KEY_VALUE("Anahtar=Değer", "örn. PLAKA=34ABC&LT=45.5&YAKIT=MOTORIN"),
+    FIXED_WIDTH("Sabit Dilim", "örn. EAN-13 barkoddan 7..12. karakterler"),
+    REGEX_GROUPS("Regex Grupları", "İleri düzey yakalama grupları (1..N)")
+}
+
+/**
+ * Shared global constant usable across ALL profiles via @name (e.g. @dolar, @benzin_lt, @kdv).
+ */
+data class GlobalVariable(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String = "oran",
+    val value: String = "0",
+    val dataType: FieldDataType = FieldDataType.DOUBLE,
+    val description: String = ""
+) {
+    fun toJson(): JSONObject {
+        return JSONObject().apply {
+            put("id", id)
+            put("name", name)
+            put("value", value)
+            put("dataType", dataType.name)
+            put("description", description)
+        }
+    }
+
+    companion object {
+        fun fromJson(json: JSONObject): GlobalVariable {
+            return GlobalVariable(
+                id = json.optString("id", UUID.randomUUID().toString()),
+                name = json.optString("name", "oran"),
+                value = json.optString("value", "0"),
+                dataType = runCatching {
+                    FieldDataType.valueOf(json.optString("dataType", FieldDataType.DOUBLE.name))
+                }.getOrDefault(FieldDataType.DOUBLE),
+                description = json.optString("description", "")
+            )
+        }
+    }
+}
+
+/**
+ * Definition of a single user-owned variable (scanned, constant, or computed).
  */
 data class VariableDefinition(
     val id: String = UUID.randomUUID().toString(),
-    val position: Int = 0, // 0-indexed position after splitting by delimiter
-    val name: String = "a", // e.g., "a", "price", "qty"
+    val position: Int = 0, // 0-indexed position after splitting by delimiter (or 0-indexed regex capture group)
+    val name: String = "a", // e.g., "a", "price", "qty", "raf", "plaka"
     val alias: String = "",
     val dataType: FieldDataType = FieldDataType.DOUBLE,
     val isOptional: Boolean = false,
     val defaultValue: String = "0",
     val overrideBarcode: Boolean = false, // If true, default value overrides scanned barcode token
-    val showPill: Boolean = true, // Whether to show an individual pill for this variable in overlay
-    val prefix: String = "", // Prefix specific to this variable pill (e.g. $, ₺)
-    val postfix: String = "", // Postfix specific to this variable pill (e.g. g, kg, TL)
+    val showPill: Boolean = true, // User controls visibility on camera card/table
+    val isPrimaryOutput: Boolean = false, // User can pin ANY variable as the primary card headline
+    val extractionKey: String = "", // For KEY_VALUE mode (defaults to variable name if blank)
+    val sliceStart: Int = 0, // For FIXED_WIDTH mode (0-indexed start char)
+    val sliceLength: Int = 0, // For FIXED_WIDTH mode (number of chars; 0 = to end)
+    val prefix: String = "", // Prefix specific to this variable (e.g. $, ₺)
+    val postfix: String = "", // Postfix specific to this variable (e.g. g, kg, TL, Lt)
     val isComputed: Boolean = false, // True if computed from other variables (e.g. price / grams)
-    val computationFormula: String = "", // e.g. "price / grams" or "a / b"
-    val isManual: Boolean = false, // True if manually added variable not extracted from barcode tokens
+    val computationFormula: String = "", // e.g. "price / grams" or "if(adet < min, \"KRİTİK\", \"OK\")"
+    val isManual: Boolean = false, // True if manually added constant not extracted from barcode tokens
     val minValue: Double? = null,
     val maxValue: Double? = null,
     val decimalPlaces: Int? = null, // null = Auto/Inherit from profile, 0 = Integer, 1..6
@@ -55,6 +104,10 @@ data class VariableDefinition(
             put("defaultValue", defaultValue)
             put("overrideBarcode", overrideBarcode)
             put("showPill", showPill)
+            put("isPrimaryOutput", isPrimaryOutput)
+            put("extractionKey", extractionKey)
+            put("sliceStart", sliceStart)
+            put("sliceLength", sliceLength)
             put("prefix", prefix)
             put("postfix", postfix)
             put("isComputed", isComputed)
@@ -85,6 +138,10 @@ data class VariableDefinition(
                 defaultValue = json.optString("defaultValue", "0"),
                 overrideBarcode = json.optBoolean("overrideBarcode", false),
                 showPill = json.optBoolean("showPill", true),
+                isPrimaryOutput = json.optBoolean("isPrimaryOutput", false),
+                extractionKey = json.optString("extractionKey", ""),
+                sliceStart = json.optInt("sliceStart", 0),
+                sliceLength = json.optInt("sliceLength", 0),
                 prefix = json.optString("prefix", ""),
                 postfix = json.optString("postfix", ""),
                 isComputed = json.optBoolean("isComputed", false),
@@ -106,11 +163,14 @@ data class VariableDefinition(
 }
 
 /**
- * Rules for splitting and parsing QR content.
+ * Rules for splitting and parsing QR/barcode content.
  */
 data class QrParsingRules(
+    val parsingMode: QrParsingMode = QrParsingMode.DELIMITER,
     val delimiter: String = "-", // e.g. "-", ",", ";", "|", "/", " "
     val customDelimiter: String = "",
+    val keyValueSeparator: String = "=", // For KEY_VALUE mode (e.g. "=" or ":")
+    val regexPattern: String = "", // For REGEX_GROUPS mode
     val decimalSeparator: String = ".", // "." or ","
     val trimWhitespace: Boolean = true,
     val allowNegative: Boolean = true,
@@ -126,8 +186,11 @@ data class QrParsingRules(
 
     fun toJson(): JSONObject {
         return JSONObject().apply {
+            put("parsingMode", parsingMode.name)
             put("delimiter", delimiter)
             put("customDelimiter", customDelimiter)
+            put("keyValueSeparator", keyValueSeparator)
+            put("regexPattern", regexPattern)
             put("decimalSeparator", decimalSeparator)
             put("trimWhitespace", trimWhitespace)
             put("allowNegative", allowNegative)
@@ -160,8 +223,13 @@ data class QrParsingRules(
             }
 
             return QrParsingRules(
+                parsingMode = runCatching {
+                    QrParsingMode.valueOf(json.optString("parsingMode", QrParsingMode.DELIMITER.name))
+                }.getOrDefault(QrParsingMode.DELIMITER),
                 delimiter = json.optString("delimiter", "-"),
                 customDelimiter = json.optString("customDelimiter", ""),
+                keyValueSeparator = json.optString("keyValueSeparator", "="),
+                regexPattern = json.optString("regexPattern", ""),
                 decimalSeparator = json.optString("decimalSeparator", "."),
                 trimWhitespace = json.optBoolean("trimWhitespace", true),
                 allowNegative = json.optBoolean("allowNegative", true),
@@ -282,11 +350,34 @@ enum class OverlayFillMode {
 }
 
 /**
- * Border style: Solid, Dashed
+ * Border style: Solid, Dashed, Dotted, Double
  */
 enum class BorderStyle {
     SOLID,
-    DASHED
+    DASHED,
+    DOTTED,
+    DOUBLE
+}
+
+/**
+ * Corner geometry style for AR overlay containers.
+ */
+enum class OverlayCornerStyle {
+    ROUNDED,
+    CUT_CORNER
+}
+
+/**
+ * Bundled selectable font families for AR overlay cards and tables.
+ */
+enum class OverlayFontFamily(val displayName: String, val subtitle: String) {
+    MODERN("Plus Jakarta", "Modern & Temiz"),
+    MONO("JetBrains Mono", "Teknik & Rakam"),
+    GEOMETRIC("Space Grotesk", "Fütüristik HUD"),
+    CONDENSED("Oswald", "Dar Etiket"),
+    SERIF("Playfair", "Klasik & Lüks"),
+    ROUNDED("Outfit", "Yumuşak & Mağaza"),
+    SYSTEM("Sistem Sans", "Standart Android")
 }
 
 /**
@@ -486,7 +577,21 @@ data class OverlayAppearance(
     val showBarcodeDashedOutline: Boolean = true,
     val leaderLineWidthDp: Float = 1.5f,
     val leaderLineColorHex: String = "", // empty = use borderColorHex
-    val customerPriceOnly: Boolean = false // If true, hides costs/inputs and shows ONLY final price to customer
+    val customerPriceOnly: Boolean = false, // If true, hides costs/inputs and shows ONLY final price to customer
+
+    // Full Style Builder Extensions (applies to BOTH Table & Card)
+    val fontFamily: OverlayFontFamily = OverlayFontFamily.MODERN,
+    val fontWeightLevel: Int = 700, // 400..800
+    val useMonoForValues: Boolean = true,
+    val accentColorHex: String = "", // empty = derived from border/theme
+    val labelColorHex: String = "", // empty = auto contrast
+    val headerBgColorHex: String = "", // empty = derived from background/theme
+    val useCustomTableColors: Boolean = false, // true = override ExcelGridTheme with custom Style Builder palette
+    val gradientAngleDeg: Float = 135f, // 0, 45, 90, 135
+    val cornerStyle: OverlayCornerStyle = OverlayCornerStyle.ROUNDED,
+    val shadowElevationDp: Float = 12f, // 0..24 dp
+    val rowPaddingDp: Float = 5f, // 2..14 dp vertical density in table rows
+    val rowStripeOpacity: Float = 0.12f // 0.0..0.35 zebra striping in table
 ) {
     fun toJson(): JSONObject {
         return JSONObject().apply {
@@ -535,6 +640,18 @@ data class OverlayAppearance(
             put("leaderLineWidthDp", leaderLineWidthDp.toDouble())
             put("leaderLineColorHex", leaderLineColorHex)
             put("customerPriceOnly", customerPriceOnly)
+            put("fontFamily", fontFamily.name)
+            put("fontWeightLevel", fontWeightLevel)
+            put("useMonoForValues", useMonoForValues)
+            put("accentColorHex", accentColorHex)
+            put("labelColorHex", labelColorHex)
+            put("headerBgColorHex", headerBgColorHex)
+            put("useCustomTableColors", useCustomTableColors)
+            put("gradientAngleDeg", gradientAngleDeg.toDouble())
+            put("cornerStyle", cornerStyle.name)
+            put("shadowElevationDp", shadowElevationDp.toDouble())
+            put("rowPaddingDp", rowPaddingDp.toDouble())
+            put("rowStripeOpacity", rowStripeOpacity.toDouble())
         }
     }
 
@@ -606,7 +723,23 @@ data class OverlayAppearance(
                 showBarcodeDashedOutline = json.optBoolean("showBarcodeDashedOutline", true),
                 leaderLineWidthDp = json.optDouble("leaderLineWidthDp", 1.5).toFloat(),
                 leaderLineColorHex = json.optString("leaderLineColorHex", ""),
-                customerPriceOnly = json.optBoolean("customerPriceOnly", false)
+                customerPriceOnly = json.optBoolean("customerPriceOnly", false),
+                fontFamily = runCatching {
+                    OverlayFontFamily.valueOf(json.optString("fontFamily", OverlayFontFamily.MODERN.name))
+                }.getOrDefault(OverlayFontFamily.MODERN),
+                fontWeightLevel = json.optInt("fontWeightLevel", if (json.optBoolean("isBold", true)) 700 else 400),
+                useMonoForValues = json.optBoolean("useMonoForValues", true),
+                accentColorHex = json.optString("accentColorHex", ""),
+                labelColorHex = json.optString("labelColorHex", ""),
+                headerBgColorHex = json.optString("headerBgColorHex", ""),
+                useCustomTableColors = json.optBoolean("useCustomTableColors", false),
+                gradientAngleDeg = json.optDouble("gradientAngleDeg", 135.0).toFloat(),
+                cornerStyle = runCatching {
+                    OverlayCornerStyle.valueOf(json.optString("cornerStyle", OverlayCornerStyle.ROUNDED.name))
+                }.getOrDefault(OverlayCornerStyle.ROUNDED),
+                shadowElevationDp = json.optDouble("shadowElevationDp", 12.0).toFloat(),
+                rowPaddingDp = json.optDouble("rowPaddingDp", 5.0).toFloat(),
+                rowStripeOpacity = json.optDouble("rowStripeOpacity", 0.12).toFloat()
             )
         }
     }

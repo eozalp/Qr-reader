@@ -7,6 +7,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.model.OverlayFontFamily
 
 val AppDisplayFontFamily = FontFamily(
     Font(R.font.plus_jakarta_sans, FontWeight.Normal),
@@ -21,6 +22,60 @@ val AppMonoFontFamily = FontFamily(
     Font(R.font.jetbrains_mono, FontWeight.Medium),
     Font(R.font.jetbrains_mono, FontWeight.Bold)
 )
+
+val SpaceGroteskFontFamily = FontFamily(
+    Font(R.font.space_grotesk, FontWeight.Normal),
+    Font(R.font.space_grotesk, FontWeight.Medium),
+    Font(R.font.space_grotesk, FontWeight.SemiBold),
+    Font(R.font.space_grotesk, FontWeight.Bold),
+    Font(R.font.space_grotesk, FontWeight.ExtraBold)
+)
+
+val OswaldFontFamily = FontFamily(
+    Font(R.font.oswald, FontWeight.Normal),
+    Font(R.font.oswald, FontWeight.Medium),
+    Font(R.font.oswald, FontWeight.SemiBold),
+    Font(R.font.oswald, FontWeight.Bold),
+    Font(R.font.oswald, FontWeight.ExtraBold)
+)
+
+val PlayfairFontFamily = FontFamily(
+    Font(R.font.playfair_display, FontWeight.Normal),
+    Font(R.font.playfair_display, FontWeight.Medium),
+    Font(R.font.playfair_display, FontWeight.SemiBold),
+    Font(R.font.playfair_display, FontWeight.Bold),
+    Font(R.font.playfair_display, FontWeight.ExtraBold)
+)
+
+val OutfitFontFamily = FontFamily(
+    Font(R.font.outfit, FontWeight.Normal),
+    Font(R.font.outfit, FontWeight.Medium),
+    Font(R.font.outfit, FontWeight.SemiBold),
+    Font(R.font.outfit, FontWeight.Bold),
+    Font(R.font.outfit, FontWeight.ExtraBold)
+)
+
+fun resolveOverlayFontFamily(font: OverlayFontFamily): FontFamily = when (font) {
+    OverlayFontFamily.MODERN -> AppDisplayFontFamily
+    OverlayFontFamily.MONO -> AppMonoFontFamily
+    OverlayFontFamily.GEOMETRIC -> SpaceGroteskFontFamily
+    OverlayFontFamily.CONDENSED -> OswaldFontFamily
+    OverlayFontFamily.SERIF -> PlayfairFontFamily
+    OverlayFontFamily.ROUNDED -> OutfitFontFamily
+    OverlayFontFamily.SYSTEM -> FontFamily.SansSerif
+}
+
+fun resolveOverlayFontWeight(weightLevel: Int, fallbackBold: Boolean): FontWeight {
+    return when {
+        weightLevel >= 800 -> FontWeight.ExtraBold
+        weightLevel >= 700 -> FontWeight.Bold
+        weightLevel >= 600 -> FontWeight.SemiBold
+        weightLevel >= 500 -> FontWeight.Medium
+        weightLevel > 0 -> FontWeight.Normal
+        fallbackBold -> FontWeight.Bold
+        else -> FontWeight.Normal
+    }
+}
 
 // Material 3 Expressive Typography Hierarchy powered by Plus Jakarta Sans
 val Typography = Typography(

@@ -32,28 +32,21 @@ fun QuickProfileWizardDialog(
     var step by remember { mutableIntStateOf(1) }
     var sampleTag by remember { mutableStateOf(initialSampleTag) }
     var delimiter by remember { mutableStateOf(SmartTagWizardAnalyzer.detectDelimiter(initialSampleTag)) }
-    var profileName by remember { mutableStateOf("Hızlı Etiket Profili") }
+    var profileName by remember { mutableStateOf("Yeni Etiket Profili") }
     var triggerSignal by remember { mutableStateOf("") }
-    var selectedPreset by remember { mutableStateOf(WizardFormulaPreset.MULTIPLY_FIRST_TWO) }
-    var selectedCurrency by remember { mutableStateOf("₺") }
+    var selectedPreset by remember { mutableStateOf(WizardFormulaPreset.NONE) }
+    var selectedCurrency by remember { mutableStateOf("Yok") }
 
     val tokens = remember(sampleTag, delimiter) {
         SmartTagWizardAnalyzer.splitSampleTokens(sampleTag, delimiter)
     }
     var tokenLabels by remember(tokens.size) {
         mutableStateOf(
-            List(tokens.size) { idx ->
-                when (idx) {
-                    0 -> "Fiyat"
-                    1 -> "Adet"
-                    2 -> "Ek"
-                    else -> "Alan ${idx + 1}"
-                }
-            }
+            List(tokens.size) { idx -> "Alan ${idx + 1}" }
         )
     }
 
-    val quickFieldSuggestions = listOf("Fiyat", "Maliyet", "Gram", "Adet", "Tarih", "Kod")
+    val quickFieldSuggestions = listOf("Kod", "Raf", "Adet", "Plaka", "Litre", "ISBN", "Tarih", "Fiyat", "Gram")
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -123,7 +116,7 @@ fun QuickProfileWizardDialog(
                                 .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            listOf("120-2.5-15", "TESBIH/450/3", "250;1.8;2026").forEach { ex ->
+                            listOf("KOLI01-A12-4", "978975-B04-20261101", "34ABC-45.5-43.2", "250-20").forEach { ex ->
                                 AssistChip(
                                     onClick = {
                                         sampleTag = ex

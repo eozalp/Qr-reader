@@ -5,20 +5,21 @@ import java.util.Locale
 import java.util.UUID
 
 enum class WizardFormulaPreset(val title: String, val subtitle: String) {
-    SUM("Toplam (Hepsini Topla)", "Sayısal alanların toplamını hesaplar"),
-    MULTIPLY_FIRST_TWO("Çarpım (1. × 2. Alan)", "Örn: Gram × Birim Fiyat veya Adet × Fiyat"),
-    MARKUP_50("%50 Kâr Marjı (1. Alan × 1.5)", "Maliyet üzerinden hızlı satış fiyatı"),
-    FIRST_VALUE("Sadece İlk Sayısal Değer", "Ek işlem yapmadan doğrudan gösterir")
+    NONE("Hesaplama Yok (Sadece Alanları Göster)", "Depo, kütüphane, envanter vb. düz etiket okuma"),
+    SUM("Toplam (Hepsini Topla)", "Sayısal alanların toplamını hesaplayan değişken ekler"),
+    MULTIPLY_FIRST_TWO("Çarpım (1. × 2. Alan)", "Örn: Litre × Fiyat, Gram × Kur veya Adet × Fiyat"),
+    MARKUP_50("%50 Kâr Marjı (1. Alan × 1.5)", "Maliyet üzerinden satış fiyatı değişkeni ekler"),
+    FIRST_VALUE("İlk Alanı Öne Çıkar", "Ek işlem yapmadan ilk alanı ana çıktı olarak sabitler")
 }
 
 /**
  * Pure domain logic powering the 3-step Smart Tag Setup Wizard.
- * Auto-detects delimiters, sanitizes variable identifiers, and constructs
- * a complete, immediately usable [QrProfile] with Mini Excel table cells.
+ * Generalist-first: constructs user-owned variables (no hidden embedded formula!)
+ * and supports formula-less profiles (warehouse, library, inventory) as well as computed profiles.
  */
 object SmartTagWizardAnalyzer {
 
-    val candidateDelimiters = listOf("-", "/", ";", ",", "|", ":", "_", " ")
+    val candidateDelimiters = listOf("-", "/", ";", ",", "|", ":", "_", "&", " ")
 
     fun detectDelimiter(sampleTag: String): String {
         val trimmed = sampleTag.trim()
@@ -76,7 +77,7 @@ object SmartTagWizardAnalyzer {
         triggerSignal: String = ""
     ): QrProfile {
         val usedNames = mutableSetOf<String>()
-        val variables = sampleTokens.mapIndexed { idx, rawTok ->
+        val baseVariables = sampleTokens.mapIndexed { idx, rawTok ->
             val displayLabel = tokenLabels.getOrNull(idx)?.trim().orEmpty()
                 .ifEmpty { "Alan ${idx + 1}" }
             var varName = sanitizeVarName(displayLabel, idx)
@@ -87,70 +88,88 @@ object SmartTagWizardAnalyzer {
             }
             usedNames.add(varName)
 
-            val isNumeric = rawTok.replace(",", ".").toDoubleOrNull() != null
+            val isDate = QrParser.parseBarcodeDate(rawTok) != null && rawTok.length >= 6
+            val isNumeric = !isDate && rawTok.replace(",", ".").toDoubleOrNull() != null
+            val detectedType = when {
+                isDate -> FieldDataType.DATE
+                isNumeric -> FieldDataType.DOUBLE
+                else -> FieldDataType.STRING
+            }
             VariableDefinition(
                 name = varName,
                 position = idx,
                 alias = displayLabel,
-                dataType = if (isNumeric) FieldDataType.DOUBLE else FieldDataType.STRING
+                dataType = detectedType,
+                isPrimaryOutput = (formulaPreset == WizardFormulaPreset.FIRST_VALUE && idx == 0)
             )
         }
 
-        val numericVars = variables.filter { it.dataType == FieldDataType.DOUBLE }
-        val formulaExpr = when (formulaPreset) {
+        val effectivePrefix = if (currencyPrefix == "Yok") "" else currencyPrefix
+        val numericVars = baseVariables.filter { it.dataType == FieldDataType.DOUBLE }
+
+        val computedExpr: String? = when (formulaPreset) {
+            WizardFormulaPreset.NONE, WizardFormulaPreset.FIRST_VALUE -> null
             WizardFormulaPreset.SUM -> {
                 if (numericVars.isNotEmpty()) numericVars.joinToString(" + ") { it.name }
-                else variables.firstOrNull()?.name ?: "a"
+                else baseVariables.firstOrNull()?.name
             }
             WizardFormulaPreset.MULTIPLY_FIRST_TWO -> {
                 when {
                     numericVars.size >= 2 -> "${numericVars[0].name} * ${numericVars[1].name}"
                     numericVars.size == 1 -> numericVars[0].name
-                    else -> "a"
+                    else -> null
                 }
             }
             WizardFormulaPreset.MARKUP_50 -> {
-                val base = numericVars.firstOrNull()?.name ?: variables.firstOrNull()?.name ?: "a"
-                "$base * 1.5"
-            }
-            WizardFormulaPreset.FIRST_VALUE -> {
-                numericVars.firstOrNull()?.name ?: variables.firstOrNull()?.name ?: "a"
+                val base = numericVars.firstOrNull()?.name ?: baseVariables.firstOrNull()?.name
+                base?.let { "$it * 1.5" }
             }
         }
 
-        val effectivePrefix = if (currencyPrefix == "Yok") "" else currencyPrefix
-        val tableItems = variables.mapIndexed { idx, v ->
+        val allVariables = if (computedExpr != null) {
+            baseVariables + VariableDefinition(
+                name = "sonuc",
+                alias = "Sonuç",
+                dataType = FieldDataType.DOUBLE,
+                isComputed = true,
+                isPrimaryOutput = true,
+                computationFormula = computedExpr,
+                prefix = effectivePrefix
+            )
+        } else {
+            baseVariables
+        }
+
+        val tableItems = allVariables.mapIndexed { idx, v ->
             ExcelTableCellItem(
                 id = UUID.randomUUID().toString(),
-                source = TableItemSource.VARIABLE,
+                source = if (v.isComputed) TableItemSource.COMPUTED else TableItemSource.VARIABLE,
                 variableName = v.name,
                 label = v.alias.ifBlank { v.name },
+                prefix = v.prefix,
+                postfix = v.postfix,
                 coordinate = "A${idx + 1}",
-                isVisible = true,
-                isEmphasized = false
+                isVisible = v.showPill,
+                isEmphasized = v.isPrimaryOutput || v.isComputed
             )
-        } + ExcelTableCellItem(
-            id = UUID.randomUUID().toString(),
-            source = TableItemSource.FORMULA_RESULT,
-            label = "SONUÇ",
-            prefix = effectivePrefix,
-            coordinate = "A${variables.size + 1}",
-            isVisible = true,
-            isEmphasized = true
-        )
+        }
 
         return QrProfile(
             id = UUID.randomUUID().toString(),
             name = profileName.trim().ifEmpty { "Akıllı Etiket Profili" },
-            description = "Sihirbazla oluşturuldu ($formulaExpr)",
+            description = if (computedExpr != null) {
+                "Sihirbazla oluşturuldu (sonuc = $computedExpr)"
+            } else {
+                "Sihirbazla oluşturuldu (${allVariables.size} alan)"
+            },
             triggerSignal = triggerSignal.trim(),
             parsingRules = QrParsingRules(
                 delimiter = delimiter,
-                variables = variables.ifEmpty { QrParsingRules().variables }
+                variables = allVariables.ifEmpty { QrParsingRules().variables }
             ),
             formula = ArithmeticFormula(
-                expression = formulaExpr,
-                description = formulaExpr
+                expression = "",
+                description = ""
             ),
             formatting = ResultFormatting(
                 prefix = effectivePrefix,
@@ -161,7 +180,7 @@ object SmartTagWizardAnalyzer {
             overlay = OverlayAppearance(
                 displayMode = OverlayDisplayMode.EXCEL_TABLE,
                 tableConfig = ExcelTableConfig(
-                    headerTitle = profileName.trim().uppercase(Locale("tr", "TR")).ifEmpty { "FİYAT TABLOSU" },
+                    headerTitle = profileName.trim().uppercase(Locale("tr", "TR")).ifEmpty { "ETİKET KARTI" },
                     items = tableItems
                 )
             )

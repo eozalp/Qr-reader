@@ -16,6 +16,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
@@ -36,11 +37,14 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.example.ui.theme.AppMonoFontFamily
+import com.example.ui.theme.resolveOverlayFontFamily
+import com.example.ui.theme.resolveOverlayFontWeight
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -48,13 +52,21 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.inset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -790,6 +802,7 @@ fun OverlayCardContent(
                 result = result,
                 config = config,
                 attachment = attachment,
+                variableDefs = variableDefs,
                 onAttachmentClick = onAttachmentClick,
                 modifier = modifier
             )
@@ -804,6 +817,7 @@ fun OverlayCardContent(
                     result = result,
                     config = config,
                     attachment = attachment,
+                    variableDefs = variableDefs,
                     onAttachmentClick = onAttachmentClick
                 )
                 ExcelTableOverlayContent(
@@ -830,11 +844,21 @@ fun CustomerPriceOnlyCardContent(
     attachment: QrAttachment? = null,
     modifier: Modifier = Modifier
 ) {
-    val cornerRadius = config.cornerRadiusDp.coerceAtLeast(14f).dp
-    val shape = RoundedCornerShape(cornerRadius)
-    val accentColor = parseHexColor(config.borderColorHex)
+    val shape = overlayContainerShape(config)
+    val accentColor = parseHexColor(config.accentColorHex.ifBlank { config.borderColorHex })
+    val borderColor = parseHexColor(config.borderColorHex)
     val textColor = parseHexColor(config.textColorHex)
-    val bgColor = parseHexColor(config.backgroundColorHex).copy(alpha = 0.94f)
+    val primaryBg = parseHexColor(config.backgroundColorHex)
+    val secondaryBg = parseHexColor(config.gradientColorEndHex)
+    val fontFamily = resolveOverlayFontFamily(config.fontFamily)
+    val fontWeight = resolveOverlayFontWeight(config.fontWeightLevel, config.isBold)
+    val textShadow = overlayTextShadow(config)
+    val isLightBg = primaryBg.luminance() > 0.5f && config.fillMode != OverlayFillMode.OUTLINE_ONLY
+    val titleColor = if (config.labelColorHex.isNotBlank()) parseHexColor(config.labelColorHex)
+        else if (isLightBg) Color(0xFF334155) else Color.White
+
+    val widthModifier = if (config.autoWidth) Modifier.widthIn(min = 170.dp, max = 330.dp)
+        else Modifier.width(config.customWidth.coerceIn(120f, 360f).dp)
 
     Box(
         modifier = modifier
@@ -842,23 +866,28 @@ fun CustomerPriceOnlyCardContent(
                 scaleX = config.scale
                 scaleY = config.scale
             }
-            .shadow(elevation = 14.dp, shape = shape, ambientColor = accentColor, spotColor = accentColor)
-            .border(1.5.dp, accentColor, shape)
-            .background(bgColor, shape)
+            .overlayFrameModifiers(
+                config = config,
+                shape = shape,
+                borderColor = borderColor,
+                primaryBg = primaryBg,
+                secondaryBg = secondaryBg
+            )
             .clip(shape)
-            .widthIn(min = 170.dp, max = 320.dp)
-            .padding(horizontal = 18.dp, vertical = 14.dp)
+            .then(widthModifier)
+            .padding(horizontal = (config.paddingDp + 6f).coerceIn(8f, 32f).dp, vertical = (config.paddingDp + 2f).coerceIn(6f, 28f).dp)
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
+            horizontalAlignment = if (config.textAlignCenter) Alignment.CenterHorizontally else Alignment.Start,
             verticalArrangement = Arrangement.Center
         ) {
             if (attachment != null && attachment.title.isNotBlank()) {
                 Text(
                     text = attachment.title,
-                    color = Color.White,
+                    color = titleColor,
                     fontSize = 12.sp,
+                    fontFamily = fontFamily,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1
                 )
@@ -870,9 +899,10 @@ fun CustomerPriceOnlyCardContent(
                 color = accentColor.copy(alpha = 0.16f)
             ) {
                 Text(
-                    text = "SATIŞ FİYATI",
+                    text = "SONUÇ",
                     color = accentColor,
                     fontSize = 10.sp,
+                    fontFamily = fontFamily,
                     fontWeight = FontWeight.ExtraBold,
                     letterSpacing = 1.sp,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
@@ -886,30 +916,249 @@ fun CustomerPriceOnlyCardContent(
                     Text(
                         text = status.formattedText,
                         color = textColor,
-                        fontSize = (config.fontSizeSp * 1.25f).coerceIn(22f, 40f).sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        textAlign = TextAlign.Center
+                        style = TextStyle(
+                            fontSize = (config.fontSizeSp * 1.25f).coerceIn(18f, 44f).sp,
+                            fontFamily = fontFamily,
+                            fontWeight = fontWeight,
+                            fontStyle = if (config.isItalic) FontStyle.Italic else FontStyle.Normal,
+                            letterSpacing = config.letterSpacingSp.sp,
+                            textAlign = if (config.textAlignCenter) TextAlign.Center else TextAlign.Start,
+                            shadow = textShadow
+                        )
                     )
                 }
                 is CalculationStatus.ParseError -> {
                     Text(
-                        text = "Fiyat Hesaplanamadı",
+                        text = "Okunamadı",
                         color = Color(0xFFFCA5A5),
                         fontSize = 14.sp,
+                        fontFamily = fontFamily,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
                 is CalculationStatus.EvaluationError -> {
                     Text(
-                        text = "Fiyat Hesaplanamadı",
+                        text = "Hesaplanamadı",
                         color = Color(0xFFFDE68A),
                         fontSize = 14.sp,
+                        fontFamily = fontFamily,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
             }
         }
     }
+}
+
+fun overlayContainerShape(config: OverlayAppearance): Shape {
+    val radius = config.cornerRadiusDp.coerceAtLeast(0f).dp
+    return when (config.cornerStyle) {
+        OverlayCornerStyle.ROUNDED -> RoundedCornerShape(radius)
+        OverlayCornerStyle.CUT_CORNER -> CutCornerShape(radius)
+    }
+}
+
+fun overlayTextShadow(config: OverlayAppearance): Shadow? {
+    if (!config.showTextShadow) return null
+    val shadowColor = parseHexColor(config.textShadowColorHex).copy(alpha = 0.72f)
+    return Shadow(
+        color = shadowColor,
+        offset = Offset(1.5f, 2f),
+        blurRadius = 4f
+    )
+}
+
+fun overlayBackgroundBrush(
+    config: OverlayAppearance,
+    primaryBg: Color,
+    secondaryBg: Color
+): Brush {
+    val alpha = config.backgroundOpacity.coerceIn(0f, 1f)
+    return when (config.fillMode) {
+        OverlayFillMode.FILLED_SOLID -> SolidColor(primaryBg.copy(alpha = alpha))
+        OverlayFillMode.SEMI_TRANSPARENT -> SolidColor(primaryBg.copy(alpha = (alpha * 0.76f).coerceIn(0.12f, 0.90f)))
+        OverlayFillMode.OUTLINE_ONLY -> SolidColor(Color.Transparent)
+        OverlayFillMode.FILLED_GRADIENT -> {
+            val c1 = primaryBg.copy(alpha = alpha)
+            val c2 = secondaryBg.copy(alpha = alpha)
+            when (config.gradientAngleDeg.roundToInt()) {
+                0 -> Brush.horizontalGradient(listOf(c1, c2))
+                90 -> Brush.verticalGradient(listOf(c1, c2))
+                45 -> Brush.linearGradient(
+                    colors = listOf(c1, c2),
+                    start = Offset(0f, Float.POSITIVE_INFINITY),
+                    end = Offset(Float.POSITIVE_INFINITY, 0f)
+                )
+                else -> Brush.linearGradient(
+                    colors = listOf(c1, c2),
+                    start = Offset.Zero,
+                    end = Offset.Infinite
+                )
+            }
+        }
+    }
+}
+
+fun Modifier.overlayFrameModifiers(
+    config: OverlayAppearance,
+    shape: Shape,
+    borderColor: Color,
+    primaryBg: Color,
+    secondaryBg: Color
+): Modifier {
+    val elevation = if (config.showDropShadow) config.shadowElevationDp.coerceIn(0f, 28f).dp else 0.dp
+    val shadowMod = if (elevation > 0.dp) {
+        val shadowTint = if (config.showGlow) borderColor else Color.Black
+        Modifier.shadow(elevation = elevation, shape = shape, ambientColor = shadowTint, spotColor = shadowTint)
+    } else Modifier
+
+    val glowMod = if (config.showGlow) {
+        Modifier.drawBehind {
+            val glowOutline = shape.createOutline(size, layoutDirection, this)
+            drawOutline(
+                outline = glowOutline,
+                color = borderColor.copy(alpha = 0.24f),
+                style = Stroke(width = (config.borderWidthDp + 4.5f).dp.toPx())
+            )
+        }
+    } else Modifier
+
+    val bgBrush = overlayBackgroundBrush(config, primaryBg, secondaryBg)
+
+    val borderMod = if (config.showBorder && config.borderWidthDp > 0f) {
+        Modifier.drawWithContent {
+            drawContent()
+            val strokePx = config.borderWidthDp.dp.toPx()
+            val outerOutline = shape.createOutline(size, layoutDirection, this)
+            when (config.borderStyle) {
+                BorderStyle.SOLID -> {
+                    drawOutline(
+                        outline = outerOutline,
+                        color = borderColor,
+                        style = Stroke(width = strokePx)
+                    )
+                }
+                BorderStyle.DASHED -> {
+                    drawOutline(
+                        outline = outerOutline,
+                        color = borderColor,
+                        style = Stroke(
+                            width = strokePx,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(strokePx * 4.5f, strokePx * 3f), 0f)
+                        )
+                    )
+                }
+                BorderStyle.DOTTED -> {
+                    drawOutline(
+                        outline = outerOutline,
+                        color = borderColor,
+                        style = Stroke(
+                            width = strokePx,
+                            cap = StrokeCap.Round,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(strokePx * 0.6f, strokePx * 2.8f), 0f)
+                        )
+                    )
+                }
+                BorderStyle.DOUBLE -> {
+                    val thin = (strokePx * 0.55f).coerceAtLeast(1.2f)
+                    drawOutline(
+                        outline = outerOutline,
+                        color = borderColor,
+                        style = Stroke(width = thin)
+                    )
+                    val gap = thin * 2.2f
+                    if (size.width > gap * 2f && size.height > gap * 2f) {
+                        inset(gap) {
+                            val innerOutline = shape.createOutline(size, layoutDirection, this)
+                            drawOutline(
+                                outline = innerOutline,
+                                color = borderColor.copy(alpha = 0.72f),
+                                style = Stroke(width = thin)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    } else Modifier
+
+    return this
+        .then(shadowMod)
+        .then(glowMod)
+        .background(bgBrush, shape)
+        .then(borderMod)
+}
+
+/**
+ * Resolves effective table palette: respects custom Style Builder colors when enabled,
+ * and honors opacity/striping/explicit color overrides even when starting from a theme.
+ */
+fun resolveEffectiveExcelColors(config: OverlayAppearance): ExcelThemeColors {
+    val base = getExcelThemeColors(config.tableConfig.gridTheme)
+    val stripeAlpha = config.rowStripeOpacity.coerceIn(0f, 0.45f)
+
+    if (!config.useCustomTableColors) {
+        val accent = if (config.accentColorHex.isNotBlank()) parseHexColor(config.accentColorHex) else base.accent
+        val label = if (config.labelColorHex.isNotBlank()) parseHexColor(config.labelColorHex) else base.textSecondary
+        val headerStart = if (config.headerBgColorHex.isNotBlank()) parseHexColor(config.headerBgColorHex) else base.headerBgStart
+        val headerEnd = if (config.headerBgColorHex.isNotBlank()) headerStart.copy(alpha = 0.85f) else base.headerBgEnd
+        return base.copy(
+            accent = accent,
+            headerBgStart = headerStart,
+            headerBgEnd = headerEnd,
+            containerBg = base.containerBg.copy(alpha = config.backgroundOpacity.coerceIn(0f, 1f)),
+            rowBgOdd = accent.copy(alpha = stripeAlpha),
+            textSecondary = label
+        )
+    }
+
+    val bg = parseHexColor(config.backgroundColorHex)
+    val bgEnd = parseHexColor(config.gradientColorEndHex)
+    val textPrimary = parseHexColor(config.textColorHex)
+    val borderCol = parseHexColor(config.borderColorHex)
+    val accent = if (config.accentColorHex.isNotBlank()) parseHexColor(config.accentColorHex) else borderCol
+    val isLightBg = bg.luminance() > 0.52f && config.fillMode != OverlayFillMode.OUTLINE_ONLY
+    val textSecondary = if (config.labelColorHex.isNotBlank()) {
+        parseHexColor(config.labelColorHex)
+    } else if (isLightBg) {
+        Color(0xFF475569)
+    } else {
+        textPrimary.copy(alpha = 0.72f)
+    }
+
+    val headerStart = if (config.headerBgColorHex.isNotBlank()) {
+        parseHexColor(config.headerBgColorHex)
+    } else if (isLightBg) {
+        accent.copy(alpha = 0.16f)
+    } else {
+        bgEnd.copy(alpha = 0.95f)
+    }
+    val headerEnd = if (config.headerBgColorHex.isNotBlank()) {
+        headerStart.copy(alpha = 0.78f)
+    } else if (isLightBg) {
+        accent.copy(alpha = 0.08f)
+    } else {
+        bg.copy(alpha = 0.95f)
+    }
+
+    val emphasizedText = if (accent.luminance() > 0.55f) Color(0xFF090D16) else Color.White
+
+    return ExcelThemeColors(
+        accent = accent,
+        headerBgStart = headerStart,
+        headerBgEnd = headerEnd,
+        containerBg = bg.copy(alpha = config.backgroundOpacity.coerceIn(0f, 1f)),
+        gridBorder = borderCol.copy(alpha = if (isLightBg) 0.45f else 0.35f),
+        rowBgEven = Color.Transparent,
+        rowBgOdd = accent.copy(alpha = stripeAlpha),
+        textPrimary = textPrimary,
+        textSecondary = textSecondary,
+        coordinateBg = accent.copy(alpha = if (isLightBg) 0.14f else 0.22f),
+        coordinateText = if (isLightBg) textPrimary else accent,
+        emphasizedBg = Brush.horizontalGradient(listOf(accent.copy(alpha = 0.88f), accent.copy(alpha = 0.68f))),
+        emphasizedBorder = accent,
+        emphasizedText = emphasizedText
+    )
 }
 
 /**
@@ -1011,25 +1260,61 @@ fun resolveTableRows(
     attachment: QrAttachment? = null
 ): List<Pair<ExcelTableCellItem, String>> {
     val itemsToUse = if (tableConfig.items.isNotEmpty()) {
-        tableConfig.items
+        // Respect user's showPill visibility toggle on individual variables
+        tableConfig.items.filter { item ->
+            if (item.source == TableItemSource.VARIABLE || item.source == TableItemSource.COMPUTED) {
+                val linkedVar = variableDefs.find { it.name == item.variableName || (it.alias.isNotBlank() && it.alias == item.variableName) }
+                linkedVar?.showPill ?: true
+            } else {
+                true
+            }
+        }
+    } else if (variableDefs.isNotEmpty()) {
+        // Pure variable-centric auto table: render strictly what the user chose to show, in user order
+        val userRows = variableDefs.filter { it.showPill }.mapIndexed { idx, v ->
+            val displayLabel = v.alias.takeIf { it.isNotBlank() }
+                ?: v.name.replaceFirstChar { it.uppercase() }
+            ExcelTableCellItem(
+                source = if (v.isComputed) TableItemSource.COMPUTED else TableItemSource.VARIABLE,
+                variableName = v.name,
+                label = displayLabel,
+                prefix = v.prefix,
+                postfix = v.postfix,
+                coordinate = "A${idx + 1}",
+                isVisible = true,
+                isEmphasized = v.isPrimaryOutput || v.isComputed
+            )
+        }.toMutableList()
+        // Backward compatibility: if a legacy saved profile still uses a standalone profile.formula
+        // and has no user-computed/starred primary variable, append its formula output row.
+        val hasPrimaryOrComputed = variableDefs.any { it.isPrimaryOutput || it.isComputed }
+        if (result.formulaExpression.isNotBlank() && !hasPrimaryOrComputed) {
+            userRows.add(
+                ExcelTableCellItem(
+                    source = TableItemSource.FORMULA_RESULT,
+                    label = "TOPLAM",
+                    coordinate = "A${userRows.size + 1}",
+                    isVisible = true,
+                    isEmphasized = true
+                )
+            )
+        }
+        userRows
     } else {
-        // Auto-generate from extracted variables + computed variables + final formula summary row
+        // Fallback when no variable definitions were supplied (e.g. unit preview)
         val autoList = mutableListOf<ExcelTableCellItem>()
         var coordIdx = 1
         result.extractedVariables.forEach { (name, _) ->
-            if (!name.contains("_alias")) {
-                val varDef = variableDefs.find { it.name == name }
-                val isComp = varDef?.isComputed ?: false
-                val displayLabel = varDef?.alias?.takeIf { it.isNotBlank() }
-                    ?: name.replaceFirstChar { it.uppercase() }
+            if (!name.contains("_alias") && name !in setOf("bugun", "today")) {
+                val displayLabel = name.replaceFirstChar { it.uppercase() }
                 autoList.add(
                     ExcelTableCellItem(
-                        source = if (isComp) TableItemSource.COMPUTED else TableItemSource.VARIABLE,
+                        source = TableItemSource.VARIABLE,
                         variableName = name,
                         label = displayLabel,
                         coordinate = "A$coordIdx",
                         isVisible = true,
-                        isEmphasized = isComp
+                        isEmphasized = false
                     )
                 )
                 coordIdx++
@@ -1039,7 +1324,7 @@ fun resolveTableRows(
             autoList.add(
                 ExcelTableCellItem(
                     source = TableItemSource.FORMULA_RESULT,
-                    label = "TOPLAM",
+                    label = "SONUÇ",
                     coordinate = "A$coordIdx",
                     isVisible = true,
                     isEmphasized = true
@@ -1052,9 +1337,18 @@ fun resolveTableRows(
     val baseRows = itemsToUse.filter { it.isVisible }.mapIndexed { index, item ->
         val resolvedValue = when (item.source) {
             TableItemSource.VARIABLE, TableItemSource.COMPUTED -> {
+                val varDef = variableDefs.find { it.name == item.variableName || (it.alias.isNotBlank() && it.alias == item.variableName) }
+                val strVal = result.extractedStrings[item.variableName]
                 val numVal = result.extractedVariables[item.variableName]
-                if (numVal != null) {
-                    val varDef = variableDefs.find { it.name == item.variableName || it.alias == item.variableName }
+                val isTextualType = varDef?.dataType == FieldDataType.DATE ||
+                    varDef?.dataType == FieldDataType.STRING ||
+                    varDef?.dataType == FieldDataType.BOOLEAN
+
+                if (isTextualType && strVal != null) {
+                    val effectivePrefix = if (item.prefix.isNotEmpty()) item.prefix else (varDef?.prefix ?: "")
+                    val effectivePostfix = if (item.postfix.isNotEmpty()) item.postfix else (varDef?.postfix ?: "")
+                    "$effectivePrefix$strVal$effectivePostfix"
+                } else if (numVal != null) {
                     val bareFormatted = if (varDef != null) {
                         com.example.engine.ResultFormatter.formatVariable(numVal, varDef, includePrefixPostfix = false)
                     } else {
@@ -1067,17 +1361,14 @@ fun resolveTableRows(
                     val effectivePrefix = if (item.prefix.isNotEmpty()) item.prefix else (varDef?.prefix ?: "")
                     val effectivePostfix = if (item.postfix.isNotEmpty()) item.postfix else (varDef?.postfix ?: "")
                     "$effectivePrefix$bareFormatted$effectivePostfix"
+                } else if (strVal != null) {
+                    val effectivePrefix = if (item.prefix.isNotEmpty()) item.prefix else (varDef?.prefix ?: "")
+                    val effectivePostfix = if (item.postfix.isNotEmpty()) item.postfix else (varDef?.postfix ?: "")
+                    "$effectivePrefix$strVal$effectivePostfix"
+                } else if (item.customValue.isNotBlank()) {
+                    "${item.prefix}${item.customValue}${item.postfix}"
                 } else {
-                    val strVal = result.extractedStrings[item.variableName]
-                    if (strVal != null) {
-                        val effectivePrefix = if (item.prefix.isNotEmpty()) item.prefix else ""
-                        val effectivePostfix = if (item.postfix.isNotEmpty()) item.postfix else ""
-                        "$effectivePrefix$strVal$effectivePostfix"
-                    } else if (item.customValue.isNotBlank()) {
-                        "${item.prefix}${item.customValue}${item.postfix}"
-                    } else {
-                        "-"
-                    }
+                    "-"
                 }
             }
             TableItemSource.FORMULA_RESULT -> {
@@ -1160,8 +1451,40 @@ fun ExcelTableOverlayContent(
     modifier: Modifier = Modifier
 ) {
     val tableConfig = config.tableConfig
-    val themeColors = getExcelThemeColors(tableConfig.gridTheme)
-    val shape = RoundedCornerShape(10.dp)
+    val themeColors = resolveEffectiveExcelColors(config)
+    val shape = overlayContainerShape(config)
+    val primaryFont = resolveOverlayFontFamily(config.fontFamily)
+    val valueFont = if (config.useMonoForValues) AppMonoFontFamily else primaryFont
+    val baseWeight = resolveOverlayFontWeight(config.fontWeightLevel, config.isBold)
+    val fontStyle = if (config.isItalic) FontStyle.Italic else FontStyle.Normal
+    val textShadow = overlayTextShadow(config)
+    val fontScale = (config.fontSizeSp / 16f).coerceIn(0.75f, 1.85f)
+    val headerTitleSp = (11f * fontScale).coerceIn(9f, 22f).sp
+    val headerSubSp = (9f * fontScale).coerceIn(8f, 16f).sp
+    val colHeaderSp = (9f * fontScale).coerceIn(8f, 15f).sp
+    val rowLabelSp = (11f * fontScale).coerceIn(9f, 22f).sp
+    val rowLabelEmphSp = (12f * fontScale).coerceIn(10f, 24f).sp
+    val rowValSp = (11.5f * fontScale).coerceIn(9f, 24f).sp
+    val rowValEmphSp = (13.5f * fontScale).coerceIn(11f, 26f).sp
+    val rowVertPad = config.rowPaddingDp.coerceIn(2f, 14f).dp
+    val innerCorner = (config.cornerRadiusDp * 0.45f).coerceIn(2f, 12f).dp
+
+    val primaryBg = if (config.useCustomTableColors) parseHexColor(config.backgroundColorHex) else themeColors.containerBg
+    val secondaryBg = if (config.useCustomTableColors) parseHexColor(config.gradientColorEndHex) else themeColors.headerBgEnd
+    val borderColor = if (config.useCustomTableColors) parseHexColor(config.borderColorHex) else themeColors.gridBorder
+    val isLightHeader = themeColors.headerBgStart.luminance() > 0.55f
+    val headerTitleColor = if (isLightHeader) Color(0xFF0F172A) else Color.White
+
+    val widthModifier = if (config.autoWidth) {
+        Modifier.widthIn(min = 200.dp, max = 340.dp)
+    } else {
+        Modifier.width(config.customWidth.coerceIn(140f, 360f).dp)
+    }
+    val heightModifier = if (config.autoHeight) {
+        Modifier
+    } else {
+        Modifier.heightIn(min = config.customHeight.coerceIn(70f, 360f).dp)
+    }
 
     val rows = resolveTableRows(
         tableConfig = tableConfig,
@@ -1176,12 +1499,17 @@ fun ExcelTableOverlayContent(
                 scaleX = config.scale
                 scaleY = config.scale
             }
-            .shadow(elevation = 12.dp, shape = shape, spotColor = themeColors.accent, ambientColor = themeColors.accent)
-            .border(1.dp, themeColors.gridBorder, shape)
-            .background(themeColors.containerBg, shape)
+            .overlayFrameModifiers(
+                config = config,
+                shape = shape,
+                borderColor = borderColor,
+                primaryBg = primaryBg,
+                secondaryBg = secondaryBg
+            )
             .clip(shape)
-            .widthIn(min = 200.dp, max = 340.dp)
-            .padding(config.paddingDp.dp.coerceAtMost(10.dp))
+            .then(widthModifier)
+            .then(heightModifier)
+            .padding(config.paddingDp.coerceIn(2f, 24f).dp)
     ) {
         Column(
             modifier = Modifier.fillMaxWidth()
@@ -1189,7 +1517,7 @@ fun ExcelTableOverlayContent(
             // Attached Media Banner / Thumbnail
             if (attachment != null && attachment.showInOverlay) {
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(innerCorner),
                     color = Color.Black.copy(alpha = 0.5f),
                     border = androidx.compose.foundation.BorderStroke(1.dp, themeColors.accent.copy(alpha = 0.6f)),
                     modifier = Modifier
@@ -1239,6 +1567,7 @@ fun ExcelTableOverlayContent(
                                 text = attachment.title.ifBlank { "Linked Data" },
                                 color = Color.White,
                                 fontSize = 10.sp,
+                                fontFamily = primaryFont,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1
                             )
@@ -1247,6 +1576,7 @@ fun ExcelTableOverlayContent(
                                     text = if (attachment.allVideos.size > 1) "▶ ${attachment.allVideos.size} Videos Attached" else "▶ Video Attached",
                                     color = themeColors.accent,
                                     fontSize = 8.sp,
+                                    fontFamily = primaryFont,
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
@@ -1267,7 +1597,7 @@ fun ExcelTableOverlayContent(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(RoundedCornerShape(innerCorner))
                         .background(
                             Brush.horizontalGradient(
                                 listOf(themeColors.headerBgStart, themeColors.headerBgEnd)
@@ -1281,28 +1611,36 @@ fun ExcelTableOverlayContent(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(themeColors.accent),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.TableChart,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(13.dp)
-                            )
+                        val headerIcon = getIconForName(config.iconName) ?: Icons.Default.TableChart
+                        if (config.iconName != "none") {
+                            Box(
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(themeColors.accent),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = headerIcon,
+                                    contentDescription = null,
+                                    tint = if (themeColors.accent.luminance() > 0.55f) Color(0xFF090D16) else Color.White,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
                         }
-                        Spacer(modifier = Modifier.width(6.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = tableConfig.headerTitle.ifBlank { "VERİ TABLOSU" }.uppercase(),
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.6.sp,
+                                color = headerTitleColor,
+                                style = TextStyle(
+                                    fontSize = headerTitleSp,
+                                    fontFamily = primaryFont,
+                                    fontWeight = FontWeight.Bold,
+                                    fontStyle = fontStyle,
+                                    letterSpacing = (0.5f + config.letterSpacingSp * 0.4f).sp,
+                                    shadow = textShadow
+                                ),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -1310,7 +1648,8 @@ fun ExcelTableOverlayContent(
                                 Text(
                                     text = tableConfig.headerSubtitle,
                                     color = themeColors.textSecondary,
-                                    fontSize = 9.sp,
+                                    fontSize = headerSubSp,
+                                    fontFamily = primaryFont,
                                     fontWeight = FontWeight.Medium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -1330,6 +1669,7 @@ fun ExcelTableOverlayContent(
                             text = result.formatName,
                             color = themeColors.accent,
                             fontSize = 8.5.sp,
+                            fontFamily = valueFont,
                             fontWeight = FontWeight.SemiBold,
                             letterSpacing = 0.4.sp,
                             maxLines = 1,
@@ -1342,37 +1682,44 @@ fun ExcelTableOverlayContent(
 
             // 2. Column Headers Row (if enabled)
             if (tableConfig.showColumnHeaders && rows.isNotEmpty()) {
+                val colHeaderBg = if (primaryBg.luminance() > 0.52f && config.fillMode != OverlayFillMode.OUTLINE_ONLY) {
+                    Color.Black.copy(alpha = 0.08f)
+                } else {
+                    Color.Black.copy(alpha = 0.32f)
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(4.dp))
-                        .background(Color.Black.copy(alpha = 0.35f))
+                        .background(colHeaderBg)
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (tableConfig.showCoordinates) {
                         Text(
                             text = "#",
-                            color = themeColors.textSecondary.copy(alpha = 0.8f),
-                            fontSize = 9.sp,
+                            color = themeColors.textSecondary.copy(alpha = 0.85f),
+                            fontSize = colHeaderSp,
                             fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = valueFont,
                             modifier = Modifier.width(28.dp),
                             textAlign = TextAlign.Center
                         )
                     }
                     Text(
-                        text = "HÜCRE / PARAMETRE",
-                        color = themeColors.textSecondary.copy(alpha = 0.8f),
-                        fontSize = 9.sp,
+                        text = "ALAN",
+                        color = themeColors.textSecondary.copy(alpha = 0.85f),
+                        fontSize = colHeaderSp,
+                        fontFamily = primaryFont,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.5.sp,
                         modifier = Modifier.weight(1.1f)
                     )
                     Text(
                         text = "DEĞER",
-                        color = themeColors.textSecondary.copy(alpha = 0.8f),
-                        fontSize = 9.sp,
+                        color = themeColors.textSecondary.copy(alpha = 0.85f),
+                        fontSize = colHeaderSp,
+                        fontFamily = primaryFont,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.5.sp,
                         modifier = Modifier.weight(1.2f),
@@ -1386,11 +1733,11 @@ fun ExcelTableOverlayContent(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(innerCorner))
                     .border(
                         if (tableConfig.showGridLines) 0.5.dp else 0.dp,
-                        themeColors.gridBorder.copy(alpha = 0.3f),
-                        RoundedCornerShape(6.dp)
+                        themeColors.gridBorder.copy(alpha = 0.35f),
+                        RoundedCornerShape(innerCorner)
                     )
             ) {
                 rows.forEachIndexed { index, (item, resolvedVal) ->
@@ -1398,9 +1745,9 @@ fun ExcelTableOverlayContent(
                     val rowBg = if (item.isEmphasized) {
                         themeColors.emphasizedBg
                     } else if (isEven) {
-                        Brush.horizontalGradient(listOf(themeColors.rowBgEven, themeColors.rowBgEven))
+                        SolidColor(themeColors.rowBgEven)
                     } else {
-                        Brush.horizontalGradient(listOf(themeColors.rowBgOdd, themeColors.rowBgOdd))
+                        SolidColor(themeColors.rowBgOdd)
                     }
 
                     val rowBorder = if (item.isEmphasized) {
@@ -1413,7 +1760,10 @@ fun ExcelTableOverlayContent(
                             .then(rowBorder)
                             .clip(RoundedCornerShape(4.dp))
                             .background(rowBg)
-                            .padding(horizontal = 8.dp, vertical = if (item.isEmphasized) 6.dp else 4.dp),
+                            .padding(
+                                horizontal = 8.dp,
+                                vertical = if (item.isEmphasized) rowVertPad + 2.dp else rowVertPad
+                            ),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // Cell Coordinate (A1, A2...)
@@ -1423,16 +1773,16 @@ fun ExcelTableOverlayContent(
                                     .width(28.dp)
                                     .clip(RoundedCornerShape(3.dp))
                                     .background(
-                                        if (item.isEmphasized) Color.Black.copy(alpha = 0.3f) else themeColors.coordinateBg
+                                        if (item.isEmphasized) Color.Black.copy(alpha = 0.25f) else themeColors.coordinateBg
                                     )
                                     .padding(vertical = 1.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = item.coordinate.ifBlank { "A${index + 1}" },
-                                    color = if (item.isEmphasized) Color.White else themeColors.coordinateText,
+                                    color = if (item.isEmphasized) themeColors.emphasizedText else themeColors.coordinateText,
                                     fontSize = 8.sp,
-                                    fontFamily = FontFamily.Monospace,
+                                    fontFamily = valueFont,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
@@ -1447,7 +1797,7 @@ fun ExcelTableOverlayContent(
                             if (item.isEmphasized) {
                                 Icon(
                                     imageVector = Icons.Default.Star,
-                                    contentDescription = "Emphasized",
+                                    contentDescription = "Öne Çıkan",
                                     tint = Color(0xFFFBBF24),
                                     modifier = Modifier
                                         .size(11.dp)
@@ -1455,11 +1805,18 @@ fun ExcelTableOverlayContent(
                                 )
                             }
                             Text(
-                                text = item.label.ifBlank { item.variableName.ifBlank { "Item" } },
+                                text = item.label.ifBlank { item.variableName.ifBlank { "Alan" } },
                                 color = if (item.isEmphasized) themeColors.emphasizedText else themeColors.textPrimary,
-                                fontSize = if (item.isEmphasized) 12.sp else 11.sp,
-                                fontWeight = if (item.isEmphasized) FontWeight.Bold else FontWeight.Medium,
-                                maxLines = 1
+                                style = TextStyle(
+                                    fontSize = if (item.isEmphasized) rowLabelEmphSp else rowLabelSp,
+                                    fontFamily = primaryFont,
+                                    fontWeight = if (item.isEmphasized) FontWeight.Bold else baseWeight,
+                                    fontStyle = fontStyle,
+                                    letterSpacing = (config.letterSpacingSp * 0.4f).sp,
+                                    shadow = textShadow
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
 
@@ -1467,12 +1824,18 @@ fun ExcelTableOverlayContent(
                         Text(
                             text = resolvedVal,
                             color = if (item.isEmphasized) themeColors.emphasizedText else themeColors.accent,
-                            fontSize = if (item.isEmphasized) 13.sp else 11.sp,
-                            fontWeight = if (item.isEmphasized) FontWeight.ExtraBold else FontWeight.SemiBold,
-                            fontFamily = FontFamily.Monospace,
-                            textAlign = TextAlign.End,
+                            style = TextStyle(
+                                fontSize = if (item.isEmphasized) rowValEmphSp else rowValSp,
+                                fontFamily = valueFont,
+                                fontWeight = if (item.isEmphasized) FontWeight.ExtraBold else baseWeight,
+                                fontStyle = fontStyle,
+                                letterSpacing = (config.letterSpacingSp * 0.5f).sp,
+                                textAlign = TextAlign.End,
+                                shadow = textShadow
+                            ),
                             modifier = Modifier.weight(1.2f),
-                            maxLines = 1
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
 
@@ -1554,54 +1917,23 @@ fun CompactCardOverlayContent(
     result: ParsedQrResult,
     config: OverlayAppearance,
     attachment: QrAttachment? = null,
+    variableDefs: List<VariableDefinition> = emptyList(),
     onAttachmentClick: ((QrAttachment) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val cornerRadius = config.cornerRadiusDp.dp
-    val shape = RoundedCornerShape(cornerRadius)
-
+    val shape = overlayContainerShape(config)
     val textColor = parseHexColor(config.textColorHex)
-    val bgColor = parseHexColor(config.backgroundColorHex).copy(alpha = config.backgroundOpacity)
-    val gradEndColor = parseHexColor(config.gradientColorEndHex).copy(alpha = config.backgroundOpacity)
+    val primaryBg = parseHexColor(config.backgroundColorHex)
+    val secondaryBg = parseHexColor(config.gradientColorEndHex)
     val borderColor = parseHexColor(config.borderColorHex)
+    val accentColor = parseHexColor(config.accentColorHex.ifBlank { config.borderColorHex })
+    val primaryFont = resolveOverlayFontFamily(config.fontFamily)
+    val fontWeight = resolveOverlayFontWeight(config.fontWeightLevel, config.isBold)
+    val fontStyle = if (config.isItalic) FontStyle.Italic else FontStyle.Normal
+    val textShadow = overlayTextShadow(config)
 
-    val backgroundModifier = when (config.fillMode) {
-        OverlayFillMode.FILLED_SOLID -> Modifier.background(bgColor, shape)
-        OverlayFillMode.FILLED_GRADIENT -> Modifier.background(
-            Brush.linearGradient(
-                listOf(bgColor, gradEndColor),
-                start = Offset.Zero,
-                end = Offset.Infinite
-            ),
-            shape
-        )
-        OverlayFillMode.SEMI_TRANSPARENT -> Modifier.background(bgColor.copy(alpha = 0.78f), shape)
-        OverlayFillMode.OUTLINE_ONLY -> Modifier.background(Color.Transparent, shape)
-    }
-
-    val shadowModifier = if (config.showDropShadow) {
-        Modifier.shadow(elevation = 10.dp, shape = shape, ambientColor = borderColor, spotColor = borderColor)
-    } else Modifier
-
-    val borderModifier = if (config.showBorder) {
-        if (config.borderStyle == BorderStyle.DASHED) {
-            Modifier.drawBehind {
-                val strokeWidth = config.borderWidthDp.dp.toPx()
-                val pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 12f), 0f)
-                drawRoundRect(
-                    color = borderColor,
-                    size = size,
-                    cornerRadius = CornerRadius(cornerRadius.toPx()),
-                    style = Stroke(width = strokeWidth, pathEffect = pathEffect)
-                )
-            }
-        } else {
-            Modifier.border(config.borderWidthDp.dp, borderColor, shape)
-        }
-    } else Modifier
-
-    val widthModifier = if (config.autoWidth) Modifier.widthIn(min = 140.dp, max = 340.dp) else Modifier.width(config.customWidth.dp)
-    val heightModifier = if (config.autoHeight) Modifier.heightIn(min = 50.dp) else Modifier.height(config.customHeight.dp)
+    val widthModifier = if (config.autoWidth) Modifier.widthIn(min = 140.dp, max = 340.dp) else Modifier.width(config.customWidth.coerceIn(120f, 360f).dp)
+    val heightModifier = if (config.autoHeight) Modifier.heightIn(min = 50.dp) else Modifier.height(config.customHeight.coerceIn(50f, 320f).dp)
 
     Box(
         modifier = modifier
@@ -1609,13 +1941,17 @@ fun CompactCardOverlayContent(
                 scaleX = config.scale
                 scaleY = config.scale
             }
-            .then(shadowModifier)
-            .then(borderModifier)
-            .then(backgroundModifier)
+            .overlayFrameModifiers(
+                config = config,
+                shape = shape,
+                borderColor = borderColor,
+                primaryBg = primaryBg,
+                secondaryBg = secondaryBg
+            )
             .clip(shape)
             .then(widthModifier)
             .then(heightModifier)
-            .padding(config.paddingDp.dp)
+            .padding(config.paddingDp.coerceIn(2f, 24f).dp)
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -1675,14 +2011,16 @@ fun CompactCardOverlayContent(
                                 text = attachment.title.ifBlank { "Linked Data" },
                                 color = Color.White,
                                 fontSize = 10.sp,
+                                fontFamily = primaryFont,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1
                             )
                             if (attachment.allVideos.isNotEmpty()) {
                                 Text(
                                     text = if (attachment.allVideos.size > 1) "▶ ${attachment.allVideos.size} Videos Attached" else "▶ Video Attached",
-                                    color = Color(0xFF00F5D4),
+                                    color = accentColor,
                                     fontSize = 8.sp,
+                                    fontFamily = primaryFont,
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
@@ -1708,9 +2046,9 @@ fun CompactCardOverlayContent(
                     Icon(
                         imageVector = icon,
                         contentDescription = "Overlay Icon",
-                        tint = textColor,
+                        tint = accentColor,
                         modifier = Modifier
-                            .size((config.fontSizeSp * 1.1f).dp)
+                            .size((config.fontSizeSp * 1.1f).coerceIn(14f, 36f).dp)
                             .padding(end = 6.dp)
                     )
                 }
@@ -1720,11 +2058,15 @@ fun CompactCardOverlayContent(
                         Text(
                             text = status.formattedText,
                             color = textColor,
-                            fontSize = config.fontSizeSp.sp,
-                            fontWeight = if (config.isBold) FontWeight.Bold else FontWeight.Normal,
-                            fontStyle = if (config.isItalic) FontStyle.Italic else FontStyle.Normal,
-                            textAlign = if (config.textAlignCenter) TextAlign.Center else TextAlign.Start,
-                            letterSpacing = config.letterSpacingSp.sp
+                            style = TextStyle(
+                                fontSize = config.fontSizeSp.sp,
+                                fontFamily = primaryFont,
+                                fontWeight = fontWeight,
+                                fontStyle = fontStyle,
+                                textAlign = if (config.textAlignCenter) TextAlign.Center else TextAlign.Start,
+                                letterSpacing = config.letterSpacingSp.sp,
+                                shadow = textShadow
+                            )
                         )
                     }
                     is CalculationStatus.ParseError -> {
@@ -1762,10 +2104,32 @@ fun CompactCardOverlayContent(
                 }
             }
 
-            // Individual Pills Row (Formula, Raw QR, and individual Variable pills)
-            val visibleVariables = if (config.showVariableSummaryPill) {
-                result.extractedVariables.entries
-                    .filter { (name, _) -> name !in config.hiddenPillVariables && !name.contains("_alias") }
+            // Individual Pills Row (respecting user's showPill toggles across ALL data types)
+            val visiblePills: List<Pair<String, String>> = if (config.showVariableSummaryPill) {
+                if (variableDefs.isNotEmpty()) {
+                    variableDefs
+                        .filter { it.showPill && it.name !in config.hiddenPillVariables }
+                        .mapNotNull { v ->
+                            val display = result.variablePillDisplay[v.name]
+                                ?: result.extractedStrings[v.name]?.let { "${v.prefix}$it${v.postfix}" }
+                                ?: result.extractedVariables[v.name]?.let { num ->
+                                    if (num % 1.0 == 0.0) num.toLong().toString() else "%.2f".format(num)
+                                }
+                            display?.let { (v.alias.ifBlank { v.name }) to it }
+                        }
+                } else {
+                    result.extractedVariables.entries
+                        .filter { (name, _) ->
+                            name !in config.hiddenPillVariables &&
+                                !name.contains("_alias") &&
+                                name !in setOf("bugun", "today")
+                        }
+                        .map { (name, value) ->
+                            val formattedVal = result.variablePillDisplay[name]
+                                ?: if (value % 1.0 == 0.0) value.toLong().toString() else "%.2f".format(value)
+                            name to formattedVal
+                        }
+                }
             } else emptyList()
 
             val hasPills = true
@@ -1836,11 +2200,7 @@ fun CompactCardOverlayContent(
                     }
 
                     // Individual Variable Pills with custom prefix and postfix
-                    visibleVariables.forEach { (name, value) ->
-                        val formattedVal = result.variablePillDisplay[name] ?: run {
-                            val cleanVal = if (value % 1.0 == 0.0) value.toLong().toString() else "%.2f".format(value)
-                            cleanVal
-                        }
+                    visiblePills.forEach { (label, formattedVal) ->
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
@@ -1849,7 +2209,7 @@ fun CompactCardOverlayContent(
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = "$name: $formattedVal",
+                                text = "$label: $formattedVal",
                                 color = Color.White.copy(alpha = 0.95f),
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.SemiBold

@@ -92,6 +92,7 @@ fun CameraScreen(
 
     val activeProfile by profileRepository.activeProfile.collectAsState()
     val allProfiles by profileRepository.profiles.collectAsState()
+    val globalVariables by profileRepository.globalVariables.collectAsState()
 
     val isRunningOnEmulator = remember {
         android.os.Build.FINGERPRINT.startsWith("generic") ||
@@ -263,7 +264,8 @@ fun CameraScreen(
                 val updated = qrTracker.update(
                     detectedScreenBoxes = combined,
                     profile = activeProfile,
-                    attachmentFinder = { attachmentRepository.findAttachmentForQr(it) }
+                    attachmentFinder = { attachmentRepository.findAttachmentForQr(it) },
+                    globalVariables = globalVariables
                 )
                 trackedQrs = updated
             }
@@ -327,7 +329,8 @@ fun CameraScreen(
                 trackedQrs = qrTracker.update(
                     detectedScreenBoxes = moved,
                     profile = activeProfile,
-                    attachmentFinder = { attachmentRepository.findAttachmentForQr(it) }
+                    attachmentFinder = { attachmentRepository.findAttachmentForQr(it) },
+                    globalVariables = globalVariables
                 )
             }
         }
@@ -1886,7 +1889,8 @@ fun CameraScreen(
                         trackedQrs = qrTracker.update(
                             detectedScreenBoxes = emptyList<RawDetectedCode>(),
                             profile = activeProfile,
-                            attachmentFinder = { attachmentRepository.findAttachmentForQr(it) }
+                            attachmentFinder = { attachmentRepository.findAttachmentForQr(it) },
+                            globalVariables = globalVariables
                         )
                     }
                 )

@@ -3,10 +3,12 @@ package com.example.camera
 import android.graphics.RectF
 import com.example.engine.MathExpressionEvaluator
 import com.example.engine.MathResult
+import com.example.engine.MathValueResult
 import com.example.engine.QrParseOutcome
 import com.example.engine.QrParser
 import com.example.engine.ResultFormatter
 import com.example.model.CalculationStatus
+import com.example.model.GlobalVariable
 import com.example.model.ParsedQrResult
 import com.example.model.QrAttachment
 import com.example.model.QrProfile
@@ -75,7 +77,8 @@ class QrTracker {
         detectedScreenBoxes: List<RawDetectedCode>,
         profile: QrProfile,
         currentTimeMs: Long = System.currentTimeMillis(),
-        attachmentFinder: ((String) -> QrAttachment?)? = null
+        attachmentFinder: ((String) -> QrAttachment?)? = null,
+        globalVariables: List<GlobalVariable> = emptyList()
     ): List<TrackedQr> = synchronized(lock) {
         val smoothingFactor = profile.tracking.smoothingFactor.coerceIn(0.1f, 1.0f)
         val timeoutMs = profile.tracking.disappearanceTimeoutMs.coerceAtLeast(100L)
@@ -111,7 +114,13 @@ class QrTracker {
         for (unmatched in unmatchedDetected) {
             if (activeTracked.size >= profile.tracking.maxTrackedCodes) break
 
-            val initialResult = processQr(unmatched.rawValue, profile, unmatched.format, unmatched.formatName)
+            val initialResult = processQr(
+                unmatched.rawValue,
+                profile,
+                unmatched.format,
+                unmatched.formatName,
+                globalVariables
+            )
             val attachment = attachmentFinder?.invoke(unmatched.rawValue)
             val newTracked = TrackedQr(
                 id = UUID.randomUUID().toString(),
@@ -145,7 +154,13 @@ class QrTracker {
                 }
             } else {
                 // If profile changed, recalculate result
-                item.result = processQr(item.rawContent, profile, item.barcodeFormat, item.formatName)
+                item.result = processQr(
+                    item.rawContent,
+                    profile,
+                    item.barcodeFormat,
+                    item.formatName,
+                    globalVariables
+                )
             }
         }
 
@@ -167,10 +182,11 @@ class QrTracker {
         rawText: String,
         profile: QrProfile,
         format: Int = com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE,
-        formatName: String = "QR CODE"
+        formatName: String = "QR CODE",
+        globalVariables: List<GlobalVariable> = emptyList()
     ): ParsedQrResult {
-        // Step 1: Parse variables & evaluate computed variables
-        return when (val parseOutcome = QrParser.parse(rawText, profile.parsingRules)) {
+        // Step 1: Parse variables & evaluate user-defined computed variables
+        return when (val parseOutcome = QrParser.parse(rawText, profile.parsingRules, globalVariables)) {
             is QrParseOutcome.Error -> {
                 ParsedQrResult(
                     rawText = rawText,
@@ -181,12 +197,15 @@ class QrTracker {
                 )
             }
             is QrParseOutcome.Success -> {
-                // Pre-compute formatted display string for each variable pill with its individual prefix, postfix, and decimal settings
+                // Pre-compute formatted display string for every user variable
                 val pillDisplay = mutableMapOf<String, String>()
                 for (v in profile.parsingRules.variables) {
                     val strVal = parseOutcome.stringVariables[v.name]
                     val numVal = parseOutcome.numericVariables[v.name]
-                    if ((v.dataType == com.example.model.FieldDataType.DATE || v.dataType == com.example.model.FieldDataType.STRING || v.dataType == com.example.model.FieldDataType.BOOLEAN) && strVal != null) {
+                    val isTextualType = v.dataType == com.example.model.FieldDataType.DATE ||
+                        v.dataType == com.example.model.FieldDataType.STRING ||
+                        v.dataType == com.example.model.FieldDataType.BOOLEAN
+                    if (isTextualType && strVal != null) {
                         val displayStr = "${v.prefix}$strVal${v.postfix}"
                         pillDisplay[v.name] = displayStr
                         if (v.alias.isNotBlank()) {
@@ -207,29 +226,43 @@ class QrTracker {
                     }
                 }
 
-                // Step 2: Determine primary result from computed variables
-                val computedVars = profile.parsingRules.variables.filter { it.isComputed }
-                val primaryComputed = computedVars.lastOrNull() ?: computedVars.firstOrNull()
+                // Step 2: Variable-centric headline selection (no forced embedded formula!)
+                // Priority:
+                // 1) User-starred primary variable (isPrimaryOutput = true)
+                // 2) Last visible computed variable (or last computed variable)
+                // 3) Legacy profile.formula (backward compatibility with older saved profiles)
+                // 4) First visible variable (so formula-less profiles like library/warehouse work seamlessly)
+                val allVars = profile.parsingRules.variables
+                val pinnedVar = allVars.firstOrNull { it.isPrimaryOutput }
+                val computedVars = allVars.filter { it.isComputed }
+                val primaryVar = pinnedVar
+                    ?: computedVars.lastOrNull { it.showPill }
+                    ?: computedVars.lastOrNull()
 
-                if (primaryComputed != null) {
-                    val compValue = parseOutcome.numericVariables[primaryComputed.name] ?: 0.0
-                    val formattedResult = pillDisplay[primaryComputed.name]
-                        ?: ResultFormatter.formatVariable(compValue, primaryComputed, profile.formatting)
-
+                if (primaryVar != null) {
+                    val numVal = parseOutcome.numericVariables[primaryVar.name] ?: 0.0
+                    val formattedResult = pillDisplay[primaryVar.name]
+                        ?: parseOutcome.stringVariables[primaryVar.name]?.let { "${primaryVar.prefix}$it${primaryVar.postfix}" }
+                        ?: ResultFormatter.formatVariable(numVal, primaryVar, profile.formatting)
+                    val exprHint = if (primaryVar.isComputed && primaryVar.computationFormula.isNotBlank()) {
+                        "${primaryVar.name} = ${primaryVar.computationFormula}"
+                    } else {
+                        primaryVar.alias.ifBlank { primaryVar.name }
+                    }
                     ParsedQrResult(
                         rawText = rawText,
                         extractedVariables = parseOutcome.numericVariables,
                         extractedStrings = parseOutcome.stringVariables,
                         variablePillDisplay = pillDisplay,
-                        status = CalculationStatus.Success(compValue, formattedResult),
-                        formulaExpression = "${primaryComputed.name} = ${primaryComputed.computationFormula}",
+                        status = CalculationStatus.Success(numVal, formattedResult),
+                        formulaExpression = exprHint,
                         barcodeFormat = format,
                         formatName = formatName
                     )
                 } else if (profile.formula.expression.isNotBlank()) {
-                    // Graceful formula evaluation fallback when no computed variables defined
-                    when (val evalOutcome = mathEvaluator.evaluate(profile.formula.expression, parseOutcome.numericVariables, parseOutcome.stringVariables)) {
-                        is MathResult.Success -> {
+                    // Legacy fallback when an older profile relies on profile.formula
+                    when (val evalOutcome = mathEvaluator.evaluateValue(profile.formula.expression, parseOutcome.numericVariables, parseOutcome.stringVariables)) {
+                        is MathValueResult.SuccessNum -> {
                             val formatted = ResultFormatter.format(evalOutcome.value, profile.formatting)
                             ParsedQrResult(
                                 rawText = rawText,
@@ -242,7 +275,19 @@ class QrTracker {
                                 formatName = formatName
                             )
                         }
-                        is MathResult.Error -> {
+                        is MathValueResult.SuccessText -> {
+                            ParsedQrResult(
+                                rawText = rawText,
+                                extractedVariables = parseOutcome.numericVariables,
+                                extractedStrings = parseOutcome.stringVariables,
+                                variablePillDisplay = pillDisplay,
+                                status = CalculationStatus.Success(0.0, evalOutcome.text),
+                                formulaExpression = profile.formula.expression,
+                                barcodeFormat = format,
+                                formatName = formatName
+                            )
+                        }
+                        is MathValueResult.Error -> {
                             ParsedQrResult(
                                 rawText = rawText,
                                 extractedVariables = parseOutcome.numericVariables,
@@ -256,14 +301,17 @@ class QrTracker {
                         }
                     }
                 } else {
-                    // No computed variable defined: use first token variable or primary numeric value
-                    val firstVar = profile.parsingRules.variables.firstOrNull { !it.isManual }
-                        ?: profile.parsingRules.variables.firstOrNull()
+                    // Pure variable profile with zero formulas: display first visible variable cleanly
+                    val firstVar = allVars.firstOrNull { it.showPill }
+                        ?: allVars.firstOrNull { !it.isManual }
+                        ?: allVars.firstOrNull()
                     val numVal = if (firstVar != null) parseOutcome.numericVariables[firstVar.name] ?: 0.0 else 0.0
                     val formatted = if (firstVar != null) {
-                        pillDisplay[firstVar.name] ?: ResultFormatter.formatVariable(numVal, firstVar, profile.formatting)
+                        pillDisplay[firstVar.name]
+                            ?: parseOutcome.stringVariables[firstVar.name]?.let { "${firstVar.prefix}$it${firstVar.postfix}" }
+                            ?: ResultFormatter.formatVariable(numVal, firstVar, profile.formatting)
                     } else {
-                        ResultFormatter.format(numVal, profile.formatting)
+                        rawText
                     }
 
                     ParsedQrResult(
@@ -272,7 +320,7 @@ class QrTracker {
                         extractedStrings = parseOutcome.stringVariables,
                         variablePillDisplay = pillDisplay,
                         status = CalculationStatus.Success(numVal, formatted),
-                        formulaExpression = "",
+                        formulaExpression = firstVar?.alias?.ifBlank { firstVar.name } ?: "",
                         barcodeFormat = format,
                         formatName = formatName
                     )
