@@ -46,11 +46,13 @@ class QrCodeAnalyzer(
     var enableInvertedDetection: Boolean = true
 
     private val isProcessingInverted = AtomicBoolean(false)
+    private val isClosed = AtomicBoolean(false)
     private var frameCounter = 0
     private var lastAnalyzedTimeMs = 0L
     private var cachedNv21: ByteArray? = null
 
     fun close() {
+        isClosed.set(true)
         runCatching { currentScanner.close() }
             .onFailure { AppDebugLogger.w("CAM-QR", "Scanner kapatma uyarısı", it) }
     }
@@ -86,7 +88,7 @@ class QrCodeAnalyzer(
     @OptIn(ExperimentalGetImage::class)
     override fun analyze(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image
-        if (mediaImage == null || isPaused) {
+        if (mediaImage == null || isPaused || isClosed.get()) {
             imageProxy.close()
             return
         }
@@ -170,7 +172,7 @@ class QrCodeAnalyzer(
         uprightHeight: Float,
         rotationDegrees: Int
     ): Boolean {
-        if (!isProcessingInverted.compareAndSet(false, true)) {
+        if (isClosed.get() || !isProcessingInverted.compareAndSet(false, true)) {
             return false
         }
         val mediaImage = imageProxy.image ?: run {
@@ -234,7 +236,9 @@ class QrCodeAnalyzer(
                     onBarcodesDetected(detectedList)
                 }
                 .addOnFailureListener { err ->
-                    AppDebugLogger.w("CAM-QR", "Ters renk ML Kit hatası", err)
+                    if (!isClosed.get()) {
+                        AppDebugLogger.w("CAM-QR", "Ters renk ML Kit hatası", err)
+                    }
                 }
                 .addOnCompleteListener {
                     isProcessingInverted.set(false)

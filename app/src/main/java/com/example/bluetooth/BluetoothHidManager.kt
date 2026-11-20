@@ -571,13 +571,15 @@ class BluetoothHidManager(private val context: Context? = null) {
 
                     override fun onServiceDisconnected(profile: Int) {
                         isProxyRequested = false
-                        AppDebugLogger.w("BT-HID", "HID ProfileProxy kesildi (profile=$profile)")
+                        AppDebugLogger.w("BT-HID", "HID ProfileProxy kesildi (profile=$profile, intentional=$isIntentionalUnregister)")
                         if (profile == BluetoothProfile.HID_DEVICE) {
                             hidDeviceProfile = null
                             isAppRegistered = false
                             isRegistering = false
-                            clearConnectionState(stopService = true)
-                            _connectionStatus.value = HidConnectionStatus.DISCONNECTED
+                            if (!isIntentionalUnregister) {
+                                clearConnectionState(stopService = true)
+                                _connectionStatus.value = HidConnectionStatus.DISCONNECTED
+                            }
                         }
                     }
                 },
@@ -714,7 +716,18 @@ class BluetoothHidManager(private val context: Context? = null) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !hasBluetoothPermissions()) return
         val oldProxy = hidDeviceProfile
         isIntentionalUnregister = true
+        pendingConnectAddress = keepPendingAddress
         if (oldProxy != null) {
+            // Abort any stuck STATE_CONNECTING or stale STATE_CONNECTED links before unregistering!
+            runCatching {
+                oldProxy.getDevicesMatchingConnectionStates(
+                    intArrayOf(BluetoothProfile.STATE_CONNECTED, BluetoothProfile.STATE_CONNECTING)
+                )?.forEach { dev ->
+                    AppDebugLogger.d("BT-HID", "Rebind öncesi takılı HID soketi kapatılıyor: ${dev.address}")
+                    runCatching { oldProxy.disconnect(dev) }
+                }
+            }
+            sleepQuietly(120L)
             runCatching { oldProxy.unregisterApp() }
             runCatching { bluetoothAdapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, oldProxy) }
         }
@@ -722,9 +735,8 @@ class BluetoothHidManager(private val context: Context? = null) {
         isAppRegistered = false
         isRegistering = false
         isProxyRequested = false
-        qosTierIndex = targetTier ?: if (_hidProfileMode.value == HidProfileMode.SIMPLE_KEYBOARD) 2 else 0
-        pendingConnectAddress = keepPendingAddress
-        sleepQuietly(320L)
+        qosTierIndex = targetTier ?: 0
+        sleepQuietly(360L)
         isIntentionalUnregister = false
         initHidProfile()
     }
@@ -778,24 +790,16 @@ class BluetoothHidManager(private val context: Context? = null) {
     private fun buildQosTier(tier: Int): Triple<BluetoothHidDeviceAppQosSettings?, BluetoothHidDeviceAppQosSettings?, String> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return Triple(null, null, "Desteklenmiyor")
         return when (tier) {
-            0 -> Triple(
-                BluetoothHidDeviceAppQosSettings(
-                    BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
-                    800, 9, 0, 11250, BluetoothHidDeviceAppQosSettings.MAX
-                ),
-                BluetoothHidDeviceAppQosSettings(
-                    BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
-                    3200, 16, 3200, 11250, BluetoothHidDeviceAppQosSettings.MAX
-                ),
-                "Düşük Gecikme (11.2ms QoS)"
-            )
+            // Default to null/null (AOSP standard best-effort QoS) so Windows, Linux BlueZ, macOS,
+            // and Samsung Android 17 never stall 10s on L2CAP Flow Spec QoS negotiation!
+            0 -> Triple(null, null, "Standart Uyumlu QoS")
             1 -> Triple(
                 null,
                 BluetoothHidDeviceAppQosSettings(
                     BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
                     800, 9, 0, 11250, BluetoothHidDeviceAppQosSettings.MAX
                 ),
-                "Standart HID (11.2ms QoS)"
+                "Düşük Gecikme Out-QoS (11.2ms)"
             )
             else -> Triple(null, null, "Uyumluluk Modu (Varsayılan QoS)")
         }
@@ -860,7 +864,10 @@ class BluetoothHidManager(private val context: Context? = null) {
                     }
                 } else {
                     clearConnectionState(stopService = true)
-                    if (!isIntentionalUnregister && qosTierIndex < 2 && hidDeviceProfile != null) {
+                    if (isIntentionalUnregister) {
+                        // Intentional rebind/fallback in progress — DO NOT wipe pendingConnectAddress!
+                        AppDebugLogger.d("BT-HID", "Bilinçli unregister tamamlandı (pending=${pendingConnectAddress ?: "yok"})")
+                    } else if (qosTierIndex < 2 && hidDeviceProfile != null) {
                         AppDebugLogger.w("BT-HID", "QoS tier=$qosTierIndex reddedildi; alt QoS katmanına geçiliyor")
                         qosTierIndex += 1
                         hidDeviceProfile?.let { registerHidApp(it) }
@@ -908,25 +915,23 @@ class BluetoothHidManager(private val context: Context? = null) {
                             }
                         }
 
-                        // AUTO-FALLBACK: If remote host (e.g. Linux BlueZ / strict Windows) rejected L2CAP
-                        // while using custom non-null QoS (tier < 2), immediately re-register with Compatibility
-                        // QoS (null, null) and retry once automatically!
+                        // AUTO-FALLBACK: Only fall back if currently on custom non-null QoS (tier == 1)
                         if (state == BluetoothProfile.STATE_DISCONNECTED &&
                             wasConnectingToThis &&
                             device != null &&
-                            qosTierIndex < 2 &&
+                            qosTierIndex == 1 &&
                             compatFallbackTriedForAddress.add(device.address)
                         ) {
                             val targetAddr = device.address
                             AppDebugLogger.w(
                                 "BT-HID",
-                                "Host ($targetAddr) QoS tier=$qosTierIndex bağlantısını reddetti -> Uyumluluk QoS (null,null) ile otomatik yeniden kayıt & deneme başlatılıyor"
+                                "Host ($targetAddr) özel QoS bağlantısını reddetti -> Standart Uyumlu QoS (null,null) ile yeniden deneniyor"
                             )
                             cancelConnectWatchdog()
                             _connectionStatus.value = HidConnectionStatus.CONNECTING
-                            _connectionDiagnostic.value = "Bilgisayar özel QoS'u reddetti — Uyumluluk Modu (QoS=Varsayılan) ile tekrar deneniyor..."
+                            _connectionDiagnostic.value = "Özel QoS reddedildi — Standart Uyumlu QoS ile tekrar deneniyor..."
                             controlExecutor.execute {
-                                rebindHidProxyInternal(targetTier = 2, keepPendingAddress = targetAddr)
+                                rebindHidProxyInternal(targetTier = 0, keepPendingAddress = targetAddr)
                             }
                             return
                         }
@@ -942,9 +947,9 @@ class BluetoothHidManager(private val context: Context? = null) {
                                 val devName = getDeviceDisplayName(device)
                                 val sysAcl = if (device != null) isDeviceSystemConnected(device) else false
                                 _connectionDiagnostic.value = if (wasConnectingToThis && sysAcl) {
-                                    "Android '$devName' ile bağlı ama bilgisayar HID (Klavye/Fare) kanalını reddetti. 'Saf Klavye (Linux/Uyumluluk)' modunu deneyin veya PC/Linux Bluetooth'tan telefonu kaldırıp ALVETAK açıkken yeniden eşleştirin."
+                                    "Android '$devName' ile bağlı ama bilgisayar HID (Klavye/Fare) kanalını reddetti. 'Saf Klavye (Linux)' modunu deneyin veya PC Bluetooth'tan telefonu kaldırıp ALVETAK açıkken yeniden eşleştirin."
                                 } else if (wasConnectingToThis) {
-                                    "'$devName' HID bağlantısını reddetti. PC'den 'Bağlan' demeyi veya telefonu kaldırıp ALVETAK açıkken yeniden eşleştirmeyi deneyin."
+                                    "'$devName' Bluetooth yanıtı vermedi (ACL kapalı). PC Bluetooth'unun açık olduğundan emin olun; gerekirse PC'den telefona 'Bağlan' deyin veya kaldırıp ALVETAK açıkken yeniden eşleştirin."
                                 } else {
                                     "Bağlantı kesildi ($devName)."
                                 }
@@ -1129,6 +1134,14 @@ class BluetoothHidManager(private val context: Context? = null) {
                     _connectionDiagnostic.value = "$name cihazına HID bağlantısı kuruluyor..."
                 }
 
+                // If this exact device is already stuck in STATE_CONNECTING (e.g. lingering L2CAP attempt),
+                // abort the stale pending attempt first so hid.connect() starts a clean handshake!
+                if (preHidState == BluetoothProfile.STATE_CONNECTING) {
+                    AppDebugLogger.w("BT-HID", "Cihaz zaten takılı STATE_CONNECTING ($address); önce temizleniyor")
+                    runCatching { hid.disconnect(device) }
+                    sleepQuietly(350L)
+                }
+
                 // Disconnect any OTHER previous host first and give Bluetooth stack a short settle gap
                 val otherConnected = alreadyConnectedList.filter { it.address != address }
                 if (otherConnected.isNotEmpty() || (connectedHostDevice != null && connectedHostDevice?.address != address)) {
@@ -1152,12 +1165,12 @@ class BluetoothHidManager(private val context: Context? = null) {
                 }
 
                 if (!initiated) {
-                    if (!isAutoReconnect && qosTierIndex < 2 && compatFallbackTriedForAddress.add(address)) {
-                        AppDebugLogger.w("BT-HID", "hid.connect($address) false döndü (tier=$qosTierIndex); Uyumluluk QoS (null,null) ile yeniden deneniyor")
+                    if (!isAutoReconnect && qosTierIndex == 1 && compatFallbackTriedForAddress.add(address)) {
+                        AppDebugLogger.w("BT-HID", "hid.connect($address) false döndü (tier=$qosTierIndex); Standart Uyumlu QoS ile yeniden deneniyor")
                         cancelConnectWatchdog()
                         _connectionStatus.value = HidConnectionStatus.CONNECTING
-                        _connectionDiagnostic.value = "Özel QoS kabul edilmedi — Uyumluluk Modu (QoS=Varsayılan) ile yeniden deneniyor..."
-                        rebindHidProxyInternal(targetTier = 2, keepPendingAddress = address)
+                        _connectionDiagnostic.value = "Özel QoS kabul edilmedi — Standart Uyumlu QoS ile yeniden deneniyor..."
+                        rebindHidProxyInternal(targetTier = 0, keepPendingAddress = address)
                         return@execute
                     }
                     cancelConnectWatchdog()
@@ -1216,16 +1229,16 @@ class BluetoothHidManager(private val context: Context? = null) {
                     // 3) Hard 10s timeout -> auto-fallback to Compatibility QoS once if on custom QoS, else cleanly exit!
                     if (elapsedMs >= 10000L) {
                         val isAclConnected = isDeviceSystemConnected(device)
-                        if (!isAutoReconnect && qosTierIndex < 2 && compatFallbackTriedForAddress.add(address)) {
+                        if (!isAutoReconnect && qosTierIndex == 1 && compatFallbackTriedForAddress.add(address)) {
                             AppDebugLogger.w(
                                 "BT-HID",
-                                "10s zaman aşımı (tier=$qosTierIndex, dev=$address); Uyumluluk QoS (null,null) ile otomatik yeniden deneniyor"
+                                "10s zaman aşımı (tier=$qosTierIndex, dev=$address); Standart Uyumlu QoS ile otomatik yeniden deneniyor"
                             )
                             runCatching { currentProxy.disconnect(device) }
                             cancelConnectWatchdog()
                             _connectionStatus.value = HidConnectionStatus.CONNECTING
-                            _connectionDiagnostic.value = "Özel QoS yanıt vermedi — Uyumluluk Modu (QoS=Varsayılan) ile tekrar deneniyor..."
-                            rebindHidProxyInternal(targetTier = 2, keepPendingAddress = address)
+                            _connectionDiagnostic.value = "Özel QoS yanıt vermedi — Standart Uyumlu QoS ile tekrar deneniyor..."
+                            rebindHidProxyInternal(targetTier = 0, keepPendingAddress = address)
                             return@scheduleAtFixedRate
                         }
                         AppDebugLogger.e(
