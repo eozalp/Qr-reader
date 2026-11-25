@@ -38,15 +38,22 @@ class BluetoothHidForegroundService : Service() {
         super.onCreate()
         isServiceAlive.set(true)
         // Promote immediately on create so even a racing stop never misses Android's FGS deadline
-        ensureForeground("Bilgisayar")
+        ensureForeground(lastRequestedHostName, lastRequestedConnected)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val hasConnectedExtra = intent?.hasExtra(EXTRA_IS_CONNECTED) == true
+        val isConnected = if (hasConnectedExtra) {
+            intent?.getBooleanExtra(EXTRA_IS_CONNECTED, true) ?: true
+        } else {
+            lastRequestedConnected
+        }
         val hostName = intent?.getStringExtra(EXTRA_HOST_NAME) ?: lastRequestedHostName
         lastRequestedHostName = hostName
+        lastRequestedConnected = isConnected
 
         // Always satisfy startForeground() for this start command before evaluating actions
-        val started = ensureForeground(hostName)
+        val started = ensureForeground(hostName, isConnected)
 
         when (intent?.action) {
             ACTION_MEDIA_PLAY_PAUSE -> {
@@ -68,6 +75,12 @@ class BluetoothHidForegroundService : Service() {
                 return START_STICKY
             }
             ACTION_STOP -> {
+                if (intent.getBooleanExtra(EXTRA_USER_STOP, false)) {
+                    runCatching {
+                        BluetoothHidManager.getInstance(applicationContext)
+                            .onForegroundServiceStoppedByUser()
+                    }
+                }
                 isForegroundActive.set(false)
                 stopForegroundCompat()
                 stopSelf()
@@ -92,8 +105,8 @@ class BluetoothHidForegroundService : Service() {
         super.onDestroy()
     }
 
-    private fun ensureForeground(hostName: String): Boolean {
-        val notification = buildNotification(hostName)
+    private fun ensureForeground(hostName: String, isConnected: Boolean): Boolean {
+        val notification = buildNotification(hostName, isConnected)
         return runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
@@ -108,7 +121,11 @@ class BluetoothHidForegroundService : Service() {
             isForegroundActive.set(true)
             true
         }.onFailure { err ->
-            AppDebugLogger.e("BT-SVC", "HID Foreground Service startForeground hatası ($hostName)", err)
+            AppDebugLogger.e(
+                "BT-SVC",
+                "HID Foreground Service startForeground hatası (connected=$isConnected, host=$hostName)",
+                err
+            )
         }.getOrDefault(false)
     }
 
@@ -125,7 +142,7 @@ class BluetoothHidForegroundService : Service() {
         }
     }
 
-    private fun buildNotification(hostName: String): Notification {
+    private fun buildNotification(hostName: String, isConnected: Boolean): Notification {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -133,7 +150,7 @@ class BluetoothHidForegroundService : Service() {
                 "Bluetooth PC Kumanda & Klavye",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Kilit ekranından hızlı PC medya & kumanda erişimi sağlar"
+                description = "PC/Linux HID profilini arka planda aktif tutar ve kilit ekranından hızlı erişim sağlar"
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 setShowBadge(false)
             }
@@ -148,6 +165,27 @@ class BluetoothHidForegroundService : Service() {
             putExtra(MainActivity.EXTRA_OPEN_REMOTE, true)
         }
         val openRemotePi = PendingIntent.getActivity(this, 10, launchRemoteIntent, pendingFlags)
+
+        if (!isConnected) {
+            val stopIntent = Intent(this, BluetoothHidForegroundService::class.java).apply {
+                action = ACTION_STOP
+                putExtra(EXTRA_USER_STOP, true)
+            }
+            val stopPi = PendingIntent.getService(this, 13, stopIntent, pendingFlags)
+
+            return NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_kb_classic)
+                .setContentTitle("Bluetooth HID Hazır (Eşleştirme Açık)")
+                .setContentText("PC / Linux eşleştirirken HID profili arka planda aktif tutulur")
+                .setOngoing(true)
+                .setSilent(true)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setContentIntent(openRemotePi)
+                .addAction(0, "🎮 Kumanda", openRemotePi)
+                .addAction(0, "✕ Kapat", stopPi)
+                .build()
+        }
 
         val playPauseIntent = Intent(this, BluetoothHidForegroundService::class.java).apply {
             action = ACTION_MEDIA_PLAY_PAUSE
@@ -181,14 +219,29 @@ class BluetoothHidForegroundService : Service() {
         private const val ACTION_MEDIA_PLAY_PAUSE = "com.example.bluetooth.MEDIA_PLAY_PAUSE"
         private const val ACTION_MEDIA_MUTE = "com.example.bluetooth.MEDIA_MUTE"
         private const val EXTRA_HOST_NAME = "extra_host_name"
+        private const val EXTRA_IS_CONNECTED = "extra_is_connected"
+        private const val EXTRA_USER_STOP = "extra_user_stop"
 
         private val isServiceAlive = AtomicBoolean(false)
         private val isForegroundActive = AtomicBoolean(false)
         private val stopRequestedBeforeStart = AtomicBoolean(false)
         @Volatile
         private var lastRequestedHostName: String = "Bilgisayar"
+        @Volatile
+        private var lastRequestedConnected: Boolean = false
 
-        fun startOrUpdate(context: Context, hostName: String) {
+        fun isRunning(): Boolean = isForegroundActive.get() && isServiceAlive.get()
+
+        /**
+         * Promotes the service in Standby/Pairing-Ready mode so Android's `HidDeviceService`
+         * keeps our UID at `IMPORTANCE_FOREGROUND_SERVICE` and NEVER unregisters the `0x1124`
+         * Bluetooth HID SDP record when the user switches to Bluetooth Settings or pairs from Linux/Windows.
+         */
+        fun startStandby(context: Context) {
+            startOrUpdate(context = context, hostName = "", isConnected = false)
+        }
+
+        fun startOrUpdate(context: Context, hostName: String, isConnected: Boolean = true) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val hasBt = ContextCompat.checkSelfPermission(
                     context,
@@ -197,10 +250,12 @@ class BluetoothHidForegroundService : Service() {
                 if (!hasBt) return
             }
             stopRequestedBeforeStart.set(false)
-            lastRequestedHostName = hostName
+            lastRequestedHostName = hostName.ifBlank { "Bilgisayar" }
+            lastRequestedConnected = isConnected
             val appCtx = context.applicationContext
             val intent = Intent(appCtx, BluetoothHidForegroundService::class.java).apply {
-                putExtra(EXTRA_HOST_NAME, hostName)
+                putExtra(EXTRA_HOST_NAME, lastRequestedHostName)
+                putExtra(EXTRA_IS_CONNECTED, isConnected)
             }
             runCatching {
                 if (isForegroundActive.get() && isServiceAlive.get()) {
@@ -210,7 +265,7 @@ class BluetoothHidForegroundService : Service() {
                     ContextCompat.startForegroundService(appCtx, intent)
                 }
             }.onFailure { err ->
-                AppDebugLogger.e("BT-SVC", "startForegroundService başlatılamadı ($hostName)", err)
+                AppDebugLogger.e("BT-SVC", "startForegroundService başlatılamadı (connected=$isConnected, host=$hostName)", err)
             }
         }
 

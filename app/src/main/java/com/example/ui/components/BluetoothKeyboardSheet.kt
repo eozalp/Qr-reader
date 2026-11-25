@@ -74,6 +74,7 @@ fun BluetoothKeyboardSheet(
     val batchSentMap by hidManager.batchSentMap.collectAsState()
     val telemetry by hidManager.telemetry.collectAsState()
     val hidProfileMode by hidManager.hidProfileMode.collectAsState()
+    val isHidProfileRegistered by hidManager.isHidProfileRegistered.collectAsState()
 
     val lifecycleOwner = LocalLifecycleOwner.current
     fun checkImeEnabled(): Boolean = runCatching {
@@ -170,6 +171,7 @@ fun BluetoothKeyboardSheet(
                         diagnosticMessage = connectionDiagnostic,
                         telemetry = telemetry,
                         hidProfileMode = hidProfileMode,
+                        isHidProfileRegistered = isHidProfileRegistered,
                         pairedDevices = pairedDevices,
                         onConnectDevice = { hidManager.connectToDevice(it) },
                         onDisconnect = {
@@ -940,6 +942,7 @@ private fun ConnectionStatusCard(
     diagnosticMessage: String?,
     telemetry: com.example.bluetooth.HidProtocolTelemetry,
     hidProfileMode: HidProfileMode,
+    isHidProfileRegistered: Boolean,
     pairedDevices: List<com.example.bluetooth.PairedBluetoothDevice>,
     onConnectDevice: (String) -> Unit,
     onDisconnect: () -> Unit,
@@ -1038,6 +1041,45 @@ private fun ConnectionStatusCard(
                 } else {
                     IconButton(onClick = onRefresh, modifier = Modifier.size(34.dp)) {
                         Icon(Icons.Default.Refresh, contentDescription = "Yenile", tint = NeonCyan, modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+
+            if (status == HidConnectionStatus.DISCONNECTED || status == HidConnectionStatus.CONNECTING || status == HidConnectionStatus.CONNECTED) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isHidProfileRegistered) NeonCyan.copy(alpha = 0.12f) else AmberGold.copy(alpha = 0.12f),
+                    border = androidx.compose.foundation.BorderStroke(
+                        0.8.dp,
+                        if (isHidProfileRegistered) NeonCyan.copy(alpha = 0.45f) else AmberGold.copy(alpha = 0.45f)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("sheet_hid_sdp_status_badge")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(if (isHidProfileRegistered) NeonCyan else AmberGold)
+                        )
+                        Text(
+                            text = if (isHidProfileRegistered) {
+                                "HID SDP Yayını: AKTİF ✓ (BT Ayarlarına geçseniz de arka planda korunur)"
+                            } else {
+                                "HID SDP Yayını: Hazırlanıyor..."
+                            },
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isHidProfileRegistered) NeonCyan else AmberGold,
+                            maxLines = 2
+                        )
                     }
                 }
             }
@@ -1405,7 +1447,7 @@ private fun ConnectionStatusCard(
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "İpucu: İlk kez bağlıyorsanız veya bağlantı kopuyorsa PC Bluetooth ayarlarından cihazı 'Kaldır' deyip telefonla yeniden eşleştirin.",
+                    text = "Linux / PC eşleştirme: Üstte 'HID SDP Yayını: AKTİF ✓' görünürken PC/Linux Bluetooth'tan telefonu kaldırıp yeniden eşleştirin — artık BT Ayarlarına geçince HID yayını kesilmez.",
                     fontSize = 10.5.sp,
                     color = Color(0xFF94A3B8)
                 )

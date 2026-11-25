@@ -156,11 +156,16 @@ class BluetoothHidManager(private val context: Context? = null) {
     @Volatile
     private var lastMouseReportAtMs: Long = 0L
     @Volatile
+    private var userStoppedStandbyService: Boolean = false
+    @Volatile
     var lastSendWasSimulated: Boolean = false
         private set
 
     private val _hidProfileMode = MutableStateFlow(loadSavedProfileMode())
     val hidProfileMode: StateFlow<HidProfileMode> = _hidProfileMode.asStateFlow()
+
+    private val _isHidProfileRegistered = MutableStateFlow(false)
+    val isHidProfileRegistered: StateFlow<Boolean> = _isHidProfileRegistered.asStateFlow()
 
     private val _connectionStatus = MutableStateFlow(HidConnectionStatus.DISCONNECTED)
     val connectionStatus: StateFlow<HidConnectionStatus> = _connectionStatus.asStateFlow()
@@ -244,6 +249,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                         aclConnectedAddresses.clear()
                         clearConnectionState(stopService = true)
                         isAppRegistered = false
+                        _isHidProfileRegistered.value = false
                         isRegistering = false
                         isProxyRequested = false
                         hidDeviceProfile = null
@@ -253,7 +259,19 @@ class BluetoothHidManager(private val context: Context? = null) {
                 BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
                     val dev = extractBluetoothDevice(intent)
                     val bond = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)
-                    AppDebugLogger.i("BT-HID", "ACTION_BOND_STATE_CHANGED dev=${dev?.address} bond=$bond")
+                    AppDebugLogger.i("BT-HID", "ACTION_BOND_STATE_CHANGED dev=${dev?.address} bond=$bond reg=$isAppRegistered")
+                    // Ensure HID SDP 0x1124 is actively advertised BEFORE/DURING Linux BlueZ or Windows pairing SDP scan!
+                    if ((bond == BluetoothDevice.BOND_BONDING || bond == BluetoothDevice.BOND_BONDED) &&
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                        hasBluetoothPermissions()
+                    ) {
+                        val hid = hidDeviceProfile
+                        if (hid == null) {
+                            initHidProfile()
+                        } else if (!isAppRegistered && !isRegistering) {
+                            registerHidApp(hid)
+                        }
+                    }
                     refreshPairedDevices()
                     if (bond == BluetoothDevice.BOND_BONDED && dev != null) {
                         scheduleHidSyncBurst("bond_bonded_${dev.address}")
@@ -263,7 +281,15 @@ class BluetoothHidManager(private val context: Context? = null) {
                     val dev = extractBluetoothDevice(intent)
                     if (dev != null) {
                         aclConnectedAddresses.add(dev.address)
-                        AppDebugLogger.i("BT-HID", "ACTION_ACL_CONNECTED dev=${dev.address} (${getDeviceDisplayName(dev)})")
+                        AppDebugLogger.i("BT-HID", "ACTION_ACL_CONNECTED dev=${dev.address} (${getDeviceDisplayName(dev)}) reg=$isAppRegistered")
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && hasBluetoothPermissions()) {
+                            val hid = hidDeviceProfile
+                            if (hid == null) {
+                                initHidProfile()
+                            } else if (!isAppRegistered && !isRegistering) {
+                                registerHidApp(hid)
+                            }
+                        }
                         refreshPairedDevices()
                         scheduleHidSyncBurst("acl_connected_${dev.address}")
                     }
@@ -274,7 +300,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                         aclConnectedAddresses.remove(dev.address)
                         AppDebugLogger.i("BT-HID", "ACTION_ACL_DISCONNECTED dev=${dev.address}")
                         if (connectedHostDevice?.address == dev.address) {
-                            clearConnectionState(stopService = true)
+                            clearConnectionState(stopService = false)
                             _connectionStatus.value = HidConnectionStatus.DISCONNECTED
                             syncHidConnectionFromProxy("acl_disconnected")
                         }
@@ -433,6 +459,42 @@ class BluetoothHidManager(private val context: Context? = null) {
         activeRegisterWatchdog = null
     }
 
+    fun onForegroundServiceStoppedByUser() {
+        userStoppedStandbyService = true
+        AppDebugLogger.i("BT-HID", "Kullanıcı bildirimden HID bekleme servisini kapattı")
+    }
+
+    /**
+     * Locks Android's `BluetoothHidDevice` SDP record (`0x1124`) alive via our `connectedDevice`
+     * Foreground Service BEFORE the user switches to Android Bluetooth Settings or Discoverable
+     * dialog — preventing AOSP `HidDeviceService` from auto-unregistering HID during Linux/PC pairing!
+     */
+    @SuppressLint("MissingPermission")
+    fun prepareForPairing() {
+        userStoppedStandbyService = false
+        if (bluetoothAdapter?.isEnabled != true || !hasBluetoothPermissions()) return
+        val connectedName = connectedHostDevice?.let { getDeviceDisplayName(it) }
+        context?.let { ctx ->
+            if (connectedName != null && _connectionStatus.value == HidConnectionStatus.CONNECTED) {
+                BluetoothHidForegroundService.startOrUpdate(ctx, connectedName, isConnected = true)
+            } else {
+                BluetoothHidForegroundService.startStandby(ctx)
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val hid = hidDeviceProfile
+            if (hid == null) {
+                initHidProfile()
+            } else if (!isAppRegistered && !isRegistering) {
+                registerHidApp(hid)
+            }
+        }
+        AppDebugLogger.i(
+            "BT-HID",
+            "prepareForPairing(): HID FGS standby koruma aktif (reg=$isAppRegistered, proxy=${hidDeviceProfile != null}, mode=${_hidProfileMode.value})"
+        )
+    }
+
     @SuppressLint("MissingPermission")
     fun refreshState() {
         if (bluetoothAdapter == null) {
@@ -443,6 +505,8 @@ class BluetoothHidManager(private val context: Context? = null) {
             cancelConnectWatchdog()
             cancelRegisterWatchdog()
             clearConnectionState(stopService = true)
+            isAppRegistered = false
+            _isHidProfileRegistered.value = false
             _connectionStatus.value = HidConnectionStatus.BLUETOOTH_OFF
             _connectionDiagnostic.value = "Bluetooth kapalı. Ayarlardan Bluetooth'u açın."
             return
@@ -459,8 +523,8 @@ class BluetoothHidManager(private val context: Context? = null) {
                 refreshPairedDevices()
                 return
             } else if (connectedHostDevice != null) {
-                // Clear stale host reference if system dropped link silently
-                clearConnectionState(stopService = true)
+                // Clear stale host reference if system dropped link silently, but keep HID standby alive
+                clearConnectionState(stopService = false)
             }
 
             // Never stay permanently trapped in CONNECTING when user taps Refresh
@@ -485,6 +549,8 @@ class BluetoothHidManager(private val context: Context? = null) {
             initHidProfile()
         } else if (!isAppRegistered && !isRegistering && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             registerHidApp(hidDeviceProfile!!)
+        } else if (isAppRegistered && !userStoppedStandbyService && connectedHostDevice == null) {
+            context?.let { BluetoothHidForegroundService.startStandby(it) }
         }
         refreshPairedDevices()
     }
@@ -579,6 +645,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                         if (profile == BluetoothProfile.HID_DEVICE) {
                             hidDeviceProfile = null
                             isAppRegistered = false
+                            _isHidProfileRegistered.value = false
                             isRegistering = false
                             if (!isIntentionalUnregister) {
                                 clearConnectionState(stopService = true)
@@ -737,6 +804,7 @@ class BluetoothHidManager(private val context: Context? = null) {
         }
         hidDeviceProfile = null
         isAppRegistered = false
+        _isHidProfileRegistered.value = false
         isRegistering = false
         isProxyRequested = false
         qosTierIndex = targetTier ?: 0
@@ -762,6 +830,8 @@ class BluetoothHidManager(private val context: Context? = null) {
     @SuppressLint("MissingPermission")
     fun reregisterHidProfile(reconnectAddress: String? = null) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !hasBluetoothPermissions()) return
+        userStoppedStandbyService = false
+        context?.let { BluetoothHidForegroundService.startStandby(it) }
         AppDebugLogger.i(
             "BT-HID",
             "Kullanıcı tarafından tam HID Proxy + Profil Sıfırlama tetiklendi (mode=${_hidProfileMode.value}, reconnect=${reconnectAddress ?: "yok"})"
@@ -827,6 +897,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                 cancelRegisterWatchdog()
                 isRegistering = false
                 isAppRegistered = registered
+                _isHidProfileRegistered.value = registered
                 AppDebugLogger.i(
                     "BT-HID",
                     "onAppStatusChanged registered=$registered tier=$qosTierIndex plugged=${pluggedDevice?.address ?: "null"}"
@@ -849,6 +920,11 @@ class BluetoothHidManager(private val context: Context? = null) {
                         )
                         onHostConnected(pluggedDevice)
                     } else {
+                        // Promote FGS Standby immediately while registered so Android's HidDeviceService
+                        // NEVER unregisters our 0x1124 HID SDP record when switching to BT Settings or pairing on Linux!
+                        if (!userStoppedStandbyService && connectedHostDevice == null) {
+                            context?.let { BluetoothHidForegroundService.startStandby(it) }
+                        }
                         if (pluggedDevice != null) {
                             AppDebugLogger.i(
                                 "BT-HID",
@@ -878,7 +954,8 @@ class BluetoothHidManager(private val context: Context? = null) {
                         }
                     }
                 } else {
-                    clearConnectionState(stopService = true)
+                    val shouldStopService = !isIntentionalUnregister && (bluetoothAdapter?.isEnabled != true || userStoppedStandbyService)
+                    clearConnectionState(stopService = shouldStopService)
                     if (isIntentionalUnregister) {
                         // Intentional rebind/fallback in progress — DO NOT wipe pendingConnectAddress!
                         AppDebugLogger.d("BT-HID", "Bilinçli unregister tamamlandı (pending=${pendingConnectAddress ?: "yok"})")
@@ -890,6 +967,19 @@ class BluetoothHidManager(private val context: Context? = null) {
                         cancelConnectWatchdog()
                         pendingConnectAddress = null
                         _connectionStatus.value = HidConnectionStatus.DISCONNECTED
+                        // If Android unexpectedly unregistered HID while BT is ON and standby FGS is still running,
+                        // schedule a single fast re-registration attempt so Linux/PC pairing always sees HID SDP!
+                        if (bluetoothAdapter?.isEnabled == true && !userStoppedStandbyService && hidDeviceProfile != null &&
+                            !autoRegisterRetryPending.getAndSet(true)
+                        ) {
+                            AppDebugLogger.w("BT-HID", "Beklenmeyen HID kaydı düşüşü — 650ms sonra otomatik yeniden kayıt deneniyor")
+                            controlExecutor.schedule({
+                                autoRegisterRetryPending.set(false)
+                                if (!isAppRegistered && !isRegistering && bluetoothAdapter?.isEnabled == true && !userStoppedStandbyService) {
+                                    hidDeviceProfile?.let { registerHidApp(it) }
+                                }
+                            }, 650L, TimeUnit.MILLISECONDS)
+                        }
                     }
                 }
             }
@@ -956,15 +1046,16 @@ class BluetoothHidManager(private val context: Context? = null) {
                             if (state == BluetoothProfile.STATE_DISCONNECTED) {
                                 cancelConnectWatchdog()
                             }
-                            clearConnectionState(stopService = true)
+                            // Transition FGS to standby rather than killing it so HID SDP stays alive for re-pairing!
+                            clearConnectionState(stopService = false)
                             _connectionStatus.value = HidConnectionStatus.DISCONNECTED
                             if (state == BluetoothProfile.STATE_DISCONNECTED) {
                                 val devName = getDeviceDisplayName(device)
                                 val sysAcl = if (device != null) isDeviceSystemConnected(device) else false
                                 _connectionDiagnostic.value = if (wasConnectingToThis && sysAcl) {
-                                    "Android '$devName' ile bağlı ama bilgisayar HID (Klavye/Fare) kanalını reddetti. 'Saf Klavye (Linux)' modunu deneyin veya PC Bluetooth'tan telefonu kaldırıp ALVETAK açıkken yeniden eşleştirin."
+                                    "Android '$devName' ile bağlı ama PC/Linux eski eşleşmede HID (Klavye/Fare) kaydı olmadığı için reddetti. HID yayını artık arka planda korunuyor — PC/Linux Bluetooth'tan telefonu 1 kez 'Kaldır' yapıp yeniden eşleştirin."
                                 } else if (wasConnectingToThis) {
-                                    "'$devName' Bluetooth yanıtı vermedi (ACL kapalı). PC Bluetooth'unun açık olduğundan emin olun; gerekirse PC'den telefona 'Bağlan' deyin veya kaldırıp ALVETAK açıkken yeniden eşleştirin."
+                                    "'$devName' Bluetooth yanıtı vermedi (ACL kapalı). PC Bluetooth'unun açık olduğundan emin olun; gerekirse PC'den telefona 'Bağlan' deyin veya kaldırıp yeniden eşleştirin."
                                 } else {
                                     "Bağlantı kesildi ($devName)."
                                 }
@@ -1032,7 +1123,7 @@ class BluetoothHidManager(private val context: Context? = null) {
             override fun onVirtualCableUnplug(device: BluetoothDevice?) {
                 AppDebugLogger.w("BT-HID", "onVirtualCableUnplug dev=${device?.address}")
                 if (connectedHostDevice?.address == device?.address) {
-                    clearConnectionState(stopService = true)
+                    clearConnectionState(stopService = false)
                     _connectionStatus.value = HidConnectionStatus.DISCONNECTED
                     _connectionDiagnostic.value = "Bilgisayar kablosuz klavye bağlantısını sonlandırdı."
                     refreshPairedDevices()
@@ -1047,6 +1138,7 @@ class BluetoothHidManager(private val context: Context? = null) {
             // Avoid duplicate log/service/state churn when both Callback and Broadcast fire for the same connection
             return
         }
+        userStoppedStandbyService = false
         cancelConnectWatchdog()
         pendingConnectAddress = null
         compatFallbackTriedForAddress.remove(device.address)
@@ -1074,7 +1166,7 @@ class BluetoothHidManager(private val context: Context? = null) {
             lastFailureReason = null
         )
         prefs?.edit()?.putString(KEY_LAST_HOST_ADDRESS, device.address)?.apply()
-        context?.let { BluetoothHidForegroundService.startOrUpdate(it, name) }
+        context?.let { BluetoothHidForegroundService.startOrUpdate(it, name, isConnected = true) }
         refreshPairedDevices()
     }
 
@@ -1095,6 +1187,9 @@ class BluetoothHidManager(private val context: Context? = null) {
         )
         if (stopService) {
             context?.let { BluetoothHidForegroundService.stop(it) }
+        } else if (bluetoothAdapter?.isEnabled == true && !userStoppedStandbyService && hasBluetoothPermissions()) {
+            // Keep FGS in Standby so HID SDP stays continuously registered across disconnects & re-pairing
+            context?.let { BluetoothHidForegroundService.startStandby(it) }
         }
     }
 
@@ -1110,6 +1205,7 @@ class BluetoothHidManager(private val context: Context? = null) {
             return
         }
 
+        userStoppedStandbyService = false
         val attemptId = connectAttemptSeq.incrementAndGet()
         cancelConnectWatchdog()
         connectingTargetAddress = address
@@ -1330,7 +1426,7 @@ class BluetoothHidManager(private val context: Context? = null) {
         pendingMouseDy.set(0)
         pendingMouseWheel.set(0)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || hidDeviceProfile == null) {
-            clearConnectionState(stopService = true)
+            clearConnectionState(stopService = false)
             _connectionStatus.value = HidConnectionStatus.DISCONNECTED
             refreshPairedDevices()
             return
@@ -1351,7 +1447,8 @@ class BluetoothHidManager(private val context: Context? = null) {
                     runCatching { hid.disconnect(dev) }
                 }
             }
-            clearConnectionState(stopService = true)
+            // Keep FGS in Standby after user disconnects so switching to another PC/Linux works immediately!
+            clearConnectionState(stopService = false)
             _connectionStatus.value = HidConnectionStatus.DISCONNECTED
             _connectionDiagnostic.value = null
             refreshPairedDevices()
@@ -1387,16 +1484,20 @@ class BluetoothHidManager(private val context: Context? = null) {
                 }
             }
         }
+        isAppRegistered = false
+        _isHidProfileRegistered.value = false
         clearConnectionState(stopService = true)
     }
 
     fun makeDiscoverableIntent(durationSeconds: Int = 180): Intent {
+        prepareForPairing()
         return Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
             putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, durationSeconds)
         }
     }
 
     fun openBluetoothSettingsIntent(): Intent {
+        prepareForPairing()
         return Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
     }
 
