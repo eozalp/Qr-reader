@@ -223,6 +223,8 @@ class BluetoothHidManager(private val context: Context? = null) {
     private val hidTxDispatcher: CoroutineDispatcher = hidTxExecutor.asCoroutineDispatcher()
     private val sendMutex = Mutex()
     private val hidSendLock = Any()
+    private val hostStateLock = Any()
+    private val simpleModeMouseWarned = AtomicBoolean(false)
 
     private val pendingMouseDx = AtomicInteger(0)
     private val pendingMouseDy = AtomicInteger(0)
@@ -1134,36 +1136,40 @@ class BluetoothHidManager(private val context: Context? = null) {
 
     @SuppressLint("MissingPermission")
     private fun onHostConnected(device: BluetoothDevice) {
-        if (connectedHostDevice?.address == device.address && _connectionStatus.value == HidConnectionStatus.CONNECTED) {
-            // Avoid duplicate log/service/state churn when both Callback and Broadcast fire for the same connection
-            return
+        val name: String
+        synchronized(hostStateLock) {
+            if (connectedHostDevice?.address == device.address && _connectionStatus.value == HidConnectionStatus.CONNECTED) {
+                // Avoid duplicate log/service/state churn when both Callback and Broadcast fire simultaneously
+                return
+            }
+            userStoppedStandbyService = false
+            simpleModeMouseWarned.set(false)
+            cancelConnectWatchdog()
+            pendingConnectAddress = null
+            compatFallbackTriedForAddress.remove(device.address)
+            connectedHostDevice = device
+            connectedAtMs = System.currentTimeMillis()
+            if (!protocolNegotiatedForConnection) {
+                isBootProtocolMode = false
+                activeReportId = currentKeyboardReportId()
+            }
+            name = getDeviceDisplayName(device)
+            _connectedDeviceName.value = name
+            _connectionStatus.value = HidConnectionStatus.CONNECTED
+            _connectionDiagnostic.value = null
+            _telemetry.value = _telemetry.value.copy(
+                isBootMode = isBootProtocolMode,
+                keyboardReportsSent = 0L,
+                keyboardReportsFailed = 0L,
+                mouseReportsSent = 0L,
+                mouseReportsFailed = 0L,
+                hostAckCount = 0L,
+                lastFailureReason = null
+            )
         }
-        userStoppedStandbyService = false
-        cancelConnectWatchdog()
-        pendingConnectAddress = null
-        compatFallbackTriedForAddress.remove(device.address)
-        connectedHostDevice = device
-        connectedAtMs = System.currentTimeMillis()
-        if (!protocolNegotiatedForConnection) {
-            isBootProtocolMode = false
-            activeReportId = currentKeyboardReportId()
-        }
-        val name = getDeviceDisplayName(device)
         AppDebugLogger.i(
             "BT-HID",
             "Host bağlandı: $name (${device.address}) · ${_telemetry.value.qosLabel} · mode=${_hidProfileMode.value} · boot=$isBootProtocolMode · reportId=$activeReportId"
-        )
-        _connectedDeviceName.value = name
-        _connectionStatus.value = HidConnectionStatus.CONNECTED
-        _connectionDiagnostic.value = null
-        _telemetry.value = _telemetry.value.copy(
-            isBootMode = isBootProtocolMode,
-            keyboardReportsSent = 0L,
-            keyboardReportsFailed = 0L,
-            mouseReportsSent = 0L,
-            mouseReportsFailed = 0L,
-            hostAckCount = 0L,
-            lastFailureReason = null
         )
         prefs?.edit()?.putString(KEY_LAST_HOST_ADDRESS, device.address)?.apply()
         context?.let { BluetoothHidForegroundService.startOrUpdate(it, name, isConnected = true) }
@@ -1443,7 +1449,9 @@ class BluetoothHidManager(private val context: Context? = null) {
                 }
                 toDisconnect.values.forEach { dev ->
                     sendRawHidReportImmediate(hid, dev, activeReportId, newZeroReport())
-                    sendRawHidReportImmediate(hid, dev, REPORT_ID_MOUSE, buildEffectiveMousePayload(0, 0, 0, 0))
+                    if (supportsMouseAndMedia()) {
+                        sendRawHidReportImmediate(hid, dev, REPORT_ID_MOUSE, buildEffectiveMousePayload(0, 0, 0, 0))
+                    }
                     runCatching { hid.disconnect(dev) }
                 }
             }
@@ -1475,7 +1483,9 @@ class BluetoothHidManager(private val context: Context? = null) {
                 runCatching {
                     connectedHostDevice?.let { dev ->
                         sendRawHidReportImmediate(hid, dev, activeReportId, newZeroReport())
-                        sendRawHidReportImmediate(hid, dev, REPORT_ID_MOUSE, buildEffectiveMousePayload(0, 0, 0, 0))
+                        if (supportsMouseAndMedia()) {
+                            sendRawHidReportImmediate(hid, dev, REPORT_ID_MOUSE, buildEffectiveMousePayload(0, 0, 0, 0))
+                        }
                     }
                     hid.unregisterApp()
                     bluetoothAdapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, hid)
@@ -1785,6 +1795,26 @@ class BluetoothHidManager(private val context: Context? = null) {
             connectedHostDevice != null
     }
 
+    /**
+     * Returns true only when the active HID SDP descriptor includes Report ID 2 (Mouse)
+     * and Report ID 3 (Consumer Control). In [HidProfileMode.SIMPLE_KEYBOARD] (`id=0`),
+     * transmitting Report ID 2/3 violates the advertised descriptor and causes Linux BlueZ/hidp
+     * to reject input or drop the ACL link.
+     */
+    fun supportsMouseAndMedia(): Boolean = _hidProfileMode.value == HidProfileMode.COMBO
+
+    private fun warnSimpleModeBlockedIfNeeded(actionLabel: String) {
+        if (simpleModeMouseWarned.compareAndSet(false, true)) {
+            AppDebugLogger.w(
+                "BT-MOUSE",
+                "$actionLabel engellendi: Saf Klavye (id=0) modunda Mouse/Medya descriptor yok — Kombo moda geçin"
+            )
+            _telemetry.value = _telemetry.value.copy(
+                lastFailureReason = "Saf Klavye (id=0) modunda Mouse/Medya kapalı — Kombo moda geçin"
+            )
+        }
+    }
+
     @SuppressLint("MissingPermission")
     private fun sendRawHidReport(
         hid: BluetoothHidDevice,
@@ -1882,6 +1912,10 @@ class BluetoothHidManager(private val context: Context? = null) {
     suspend fun sendConsumerControl(usageCode: Int): Boolean = sendMutex.withLock {
         withContext(hidTxDispatcher) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return@withContext false
+            if (!supportsMouseAndMedia()) {
+                warnSimpleModeBlockedIfNeeded("Medya tuşu")
+                return@withContext false
+            }
             if (isBootProtocolMode) return@withContext false
             val hid = hidDeviceProfile ?: return@withContext false
             val dev = connectedHostDevice ?: return@withContext false
@@ -1903,6 +1937,10 @@ class BluetoothHidManager(private val context: Context? = null) {
         withContext(hidTxDispatcher) {
             if (wheelSteps == 0) return@withContext true
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || isBootProtocolMode) return@withContext false
+            if (!supportsMouseAndMedia()) {
+                warnSimpleModeBlockedIfNeeded("Yakınlaştırma (Wheel)")
+                return@withContext false
+            }
             val hid = hidDeviceProfile ?: return@withContext false
             val dev = connectedHostDevice ?: return@withContext false
 
@@ -1972,6 +2010,10 @@ class BluetoothHidManager(private val context: Context? = null) {
     fun sendMouseMove(dx: Int, dy: Int, wheel: Int = 0) {
         if (dx == 0 && dy == 0 && wheel == 0) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isHidHostConnected()) return
+        if (!supportsMouseAndMedia()) {
+            warnSimpleModeBlockedIfNeeded("Mouse hareketi")
+            return
+        }
 
         // Coalesce high-frequency sensor/touch deltas atomically so L2CAP never queues stale lag
         pendingMouseDx.updateAndGet { cur -> (cur + dx).coerceIn(-1600, 1600) }
@@ -1998,7 +2040,7 @@ class BluetoothHidManager(private val context: Context? = null) {
     private fun drainPendingMouseDeltas() {
         var consecutiveFailures = 0
         try {
-            while (isHidHostConnected()) {
+            while (isHidHostConnected() && supportsMouseAndMedia()) {
                 val now = System.currentTimeMillis()
                 val sinceLastMouse = now - lastMouseReportAtMs
                 if (sinceLastMouse in 0L until 8L) {
@@ -2056,7 +2098,7 @@ class BluetoothHidManager(private val context: Context? = null) {
             }
         } finally {
             mousePumpScheduled.set(false)
-            if (consecutiveFailures == 0 && isHidHostConnected() &&
+            if (consecutiveFailures == 0 && isHidHostConnected() && supportsMouseAndMedia() &&
                 (pendingMouseDx.get() != 0 || pendingMouseDy.get() != 0 || pendingMouseWheel.get() != 0)
             ) {
                 scheduleMousePumpIfNeeded()
@@ -2067,6 +2109,10 @@ class BluetoothHidManager(private val context: Context? = null) {
     @SuppressLint("MissingPermission")
     fun setMouseButton(buttonMask: Int, isDown: Boolean) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isHidHostConnected()) return
+        if (!supportsMouseAndMedia()) {
+            if (isDown) warnSimpleModeBlockedIfNeeded("Mouse tuşu")
+            return
+        }
         mouseTxExecutor.execute {
             activeMouseButtons = if (isDown) {
                 activeMouseButtons or buttonMask
@@ -2084,6 +2130,10 @@ class BluetoothHidManager(private val context: Context? = null) {
     @SuppressLint("MissingPermission")
     fun sendMouseClick(buttonMask: Int = MOUSE_BTN_LEFT) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isHidHostConnected()) return
+        if (!supportsMouseAndMedia()) {
+            warnSimpleModeBlockedIfNeeded("Mouse tıklama")
+            return
+        }
         mouseTxExecutor.execute {
             val hid = hidDeviceProfile ?: return@execute
             val dev = connectedHostDevice ?: return@execute
@@ -2099,6 +2149,10 @@ class BluetoothHidManager(private val context: Context? = null) {
     @SuppressLint("MissingPermission")
     fun sendMouseDoubleClick() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isHidHostConnected()) return
+        if (!supportsMouseAndMedia()) {
+            warnSimpleModeBlockedIfNeeded("Mouse çift tıklama")
+            return
+        }
         mouseTxExecutor.execute {
             val hid = hidDeviceProfile ?: return@execute
             val dev = connectedHostDevice ?: return@execute
@@ -2139,7 +2193,7 @@ class BluetoothHidManager(private val context: Context? = null) {
         pendingMouseDx.set(0)
         pendingMouseDy.set(0)
         pendingMouseWheel.set(0)
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isHidHostConnected()) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isHidHostConnected() || !supportsMouseAndMedia()) return
         mouseTxExecutor.execute {
             val hid = hidDeviceProfile ?: return@execute
             val dev = connectedHostDevice ?: return@execute

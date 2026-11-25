@@ -501,4 +501,21 @@ class BluetoothHidPayloadTest {
             BluetoothHidManager.extractReportIdsFromDescriptor(desc).isEmpty()
         )
     }
+
+    @Test
+    fun testSupportsMouseAndMediaFollowsHidProfileMode() {
+        val hidManager = BluetoothHidManager()
+        assertEquals(com.example.bluetooth.HidProfileMode.COMBO, hidManager.hidProfileMode.value)
+        assertTrue("COMBO mode must allow Mouse & Consumer Control reports", hidManager.supportsMouseAndMedia())
+
+        hidManager.setHidProfileMode(com.example.bluetooth.HidProfileMode.SIMPLE_KEYBOARD)
+        assertEquals(com.example.bluetooth.HidProfileMode.SIMPLE_KEYBOARD, hidManager.hidProfileMode.value)
+        assertFalse(
+            "SIMPLE_KEYBOARD (id=0) mode must block illegal Report ID 2/3 mouse/media packets",
+            hidManager.supportsMouseAndMedia()
+        )
+
+        hidManager.setHidProfileMode(com.example.bluetooth.HidProfileMode.COMBO)
+        assertTrue("Switching back to COMBO must re-enable Mouse & Media", hidManager.supportsMouseAndMedia())
+    }
 }

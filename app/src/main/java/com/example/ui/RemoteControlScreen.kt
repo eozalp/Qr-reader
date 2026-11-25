@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import com.example.bluetooth.AirMouseController
 import com.example.bluetooth.BluetoothHidManager
 import com.example.bluetooth.HidConnectionStatus
+import com.example.bluetooth.HidProfileMode
 import com.example.debug.AppDebugLogger
 import com.example.model.BluetoothKeyboardConfig
 import com.example.model.KeyboardEndingKey
@@ -139,6 +140,7 @@ fun RemoteControlScreen(
     val connectionStatus by hidManager.connectionStatus.collectAsState()
     val connectedDeviceName by hidManager.connectedDeviceName.collectAsState()
     val hidTelemetry by hidManager.telemetry.collectAsState()
+    val hidProfileMode by hidManager.hidProfileMode.collectAsState()
 
     var selectedTabName by rememberSaveable { mutableStateOf(RemoteControlTab.KUMANDA.name) }
     var lastSlideDirection by remember { mutableIntStateOf(1) }
@@ -619,6 +621,73 @@ fun RemoteControlScreen(
                                 text = hidTelemetry.lastFailureReason.orEmpty(),
                                 fontSize = 10.sp,
                                 color = Color(0xFFFCA5A5)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Alert banner when user is on Mouse/Game tab while HID profile is in Keyboard-only (SIMPLE_KEYBOARD) mode
+            val isSimpleKeyboardBlockingMouse =
+                hidProfileMode == HidProfileMode.SIMPLE_KEYBOARD &&
+                    (selectedTab == RemoteControlTab.KUMANDA || selectedTab == RemoteControlTab.GAMEPAD)
+            AnimatedVisibility(
+                visible = isSimpleKeyboardBlockingMouse,
+                enter = expandVertically(spring()) + fadeIn(),
+                exit = shrinkVertically(spring()) + fadeOut()
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = AmberGold.copy(alpha = 0.14f),
+                    border = BorderStroke(1.dp, AmberGold.copy(alpha = 0.55f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("remote_simple_kb_mouse_warning")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = AmberGold,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Saf Klavye (id=0) aktif — Mouse & Medya kapalı",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = AmberGold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = NeonCyan,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    hidManager.setHidProfileMode(HidProfileMode.COMBO)
+                                    Toast.makeText(
+                                        context,
+                                        "Kombo (Klavye+Fare) moduna geçildi — gerekirse PC'den tekrar bağlanın",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                                .testTag("remote_switch_to_combo_btn")
+                        ) {
+                            Text(
+                                text = "Kombo Aç",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFF00382E),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                             )
                         }
                     }
