@@ -129,6 +129,9 @@ class BluetoothHidManager(private val context: Context? = null) {
     private var activeReportId: Int = REPORT_ID_KEYBOARD
     @Volatile
     private var activeMouseButtons: Int = 0
+    private val liveHeldKeysLock = Any()
+    private val liveHeldKeys = LinkedHashSet<Byte>()
+    private var liveHeldModifiers: Byte = 0
     @Volatile
     private var pendingConnectAddress: String? = null
     @Volatile
@@ -1791,6 +1794,79 @@ class BluetoothHidManager(private val context: Context? = null) {
         }
     }
 
+    /**
+     * Sends a Ctrl + Mouse Wheel burst for universal pinch-to-zoom on PC apps (browsers, Excel, PDFs).
+     */
+    @SuppressLint("MissingPermission")
+    suspend fun sendZoomWheel(wheelSteps: Int): Boolean = sendMutex.withLock {
+        withContext(hidTxDispatcher) {
+            if (wheelSteps == 0) return@withContext true
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || isBootProtocolMode) return@withContext false
+            val hid = hidDeviceProfile ?: return@withContext false
+            val dev = connectedHostDevice ?: return@withContext false
+
+            val ctrlDown = byteArrayOf(MODIFIER_LEFT_CTRL, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+            var sentOk = false
+            try {
+                if (!sendReportWithRetryBlocking(hid, dev, ctrlDown, maxAttempts = 4, backoffMs = 4L)) {
+                    return@withContext false
+                }
+                sleepQuietly(10L)
+                val mouseReport = buildEffectiveMousePayload(activeMouseButtons, 0, 0, wheelSteps.coerceIn(-8, 8))
+                sentOk = sendRawHidReport(hid, dev, REPORT_ID_MOUSE, mouseReport)
+                recordMouseButtonResult(sentOk)
+                sleepQuietly(10L)
+                sentOk
+            } finally {
+                sendZeroReportWithRetry(hid, dev, maxAttempts = 10)
+            }
+        }
+    }
+
+    /**
+     * Real-time 6-Key Rollover (6KRO) live keyboard state for PC gaming (simultaneous WASD + Shift + Space).
+     * Dispatches atomically on [hidTxExecutor] without blocking delays.
+     */
+    @SuppressLint("MissingPermission")
+    fun updateLiveKeyboardState(keys: Set<Byte>, modifiers: Byte) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isHidHostConnected()) return
+        val report = synchronized(liveHeldKeysLock) {
+            if (liveHeldKeys == keys && liveHeldModifiers == modifiers) return
+            liveHeldKeys.clear()
+            liveHeldKeys.addAll(keys)
+            liveHeldModifiers = modifiers
+            buildSixKeyReport(liveHeldKeys, liveHeldModifiers)
+        }
+        hidTxExecutor.execute {
+            val hid = hidDeviceProfile ?: return@execute
+            val dev = connectedHostDevice ?: return@execute
+            if (sendRawHidReport(hid, dev, activeReportId, report)) {
+                lastReportSentAtMs = System.currentTimeMillis()
+                val prev = _telemetry.value
+                _telemetry.value = prev.copy(keyboardReportsSent = prev.keyboardReportsSent + 1L)
+            }
+        }
+    }
+
+    /**
+     * Releases all live-held gaming keys cleanly with an emergency zero keyboard report.
+     */
+    @SuppressLint("MissingPermission")
+    fun releaseAllLiveKeys() {
+        val hadAny = synchronized(liveHeldKeysLock) {
+            val nonEmpty = liveHeldKeys.isNotEmpty() || liveHeldModifiers != 0.toByte()
+            liveHeldKeys.clear()
+            liveHeldModifiers = 0
+            nonEmpty
+        }
+        if (!hadAny || Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isHidHostConnected()) return
+        hidTxExecutor.execute {
+            val hid = hidDeviceProfile ?: return@execute
+            val dev = connectedHostDevice ?: return@execute
+            sendRawHidReport(hid, dev, activeReportId, newZeroReport())
+        }
+    }
+
     @SuppressLint("MissingPermission")
     fun sendMouseMove(dx: Int, dy: Int, wheel: Int = 0) {
         if (dx == 0 && dy == 0 && wheel == 0) return
@@ -2180,12 +2256,36 @@ class BluetoothHidManager(private val context: Context? = null) {
         const val MODIFIER_ALT_GR: Byte = 0x40
 
         const val KEY_A: Byte = 0x04
+        const val KEY_B: Byte = 0x05
         const val KEY_C: Byte = 0x06
         const val KEY_D: Byte = 0x07
+        const val KEY_E: Byte = 0x08
+        const val KEY_F: Byte = 0x09
+        const val KEY_G: Byte = 0x0A
+        const val KEY_H: Byte = 0x0B
+        const val KEY_I: Byte = 0x0C
+        const val KEY_J: Byte = 0x0D
+        const val KEY_K: Byte = 0x0E
+        const val KEY_L: Byte = 0x0F
+        const val KEY_M: Byte = 0x10
+        const val KEY_N: Byte = 0x11
+        const val KEY_O: Byte = 0x12
+        const val KEY_P: Byte = 0x13
+        const val KEY_Q: Byte = 0x14
+        const val KEY_R: Byte = 0x15
         const val KEY_S: Byte = 0x16
+        const val KEY_T: Byte = 0x17
+        const val KEY_U: Byte = 0x18
         const val KEY_V: Byte = 0x19
+        const val KEY_W: Byte = 0x1A
         const val KEY_X: Byte = 0x1B
+        const val KEY_Y: Byte = 0x1C
         const val KEY_Z: Byte = 0x1D
+
+        const val KEY_1: Byte = 0x1E
+        const val KEY_2: Byte = 0x1F
+        const val KEY_3: Byte = 0x20
+        const val KEY_4: Byte = 0x21
 
         const val KEY_ENTER: Byte = 0x28
         const val KEY_ESCAPE: Byte = 0x29
@@ -2216,6 +2316,12 @@ class BluetoothHidManager(private val context: Context? = null) {
         const val KEY_LEFT: Byte = 0x50
         const val KEY_DOWN: Byte = 0x51
         const val KEY_UP: Byte = 0x52
+        const val KEY_NUM_LOCK: Byte = 0x53
+        const val KEY_KP_DIVIDE: Byte = 0x54
+        const val KEY_KP_MULTIPLY: Byte = 0x55
+        const val KEY_KP_MINUS: Byte = 0x56
+        const val KEY_KP_PLUS: Byte = 0x57
+        const val KEY_KP_ENTER: Byte = 0x58
 
         const val MOUSE_BTN_LEFT: Int = 0x01
         const val MOUSE_BTN_RIGHT: Int = 0x02
@@ -2275,6 +2381,22 @@ class BluetoothHidManager(private val context: Context? = null) {
                 (usageCode and 0xFF).toByte(),
                 ((usageCode shr 8) and 0xFF).toByte()
             )
+        }
+
+        /**
+         * Builds a standard 8-byte 6-Key Rollover (6KRO) USB HID keyboard report for live multi-key gaming.
+         */
+        fun buildSixKeyReport(pressedKeys: Collection<Byte>, modifiers: Byte): ByteArray {
+            val report = ByteArray(8)
+            report[0] = modifiers
+            report[1] = 0x00
+            var slot = 2
+            for (code in pressedKeys) {
+                if (code == 0x00.toByte()) continue
+                if (slot >= 8) break
+                report[slot++] = code
+            }
+            return report
         }
 
         /**

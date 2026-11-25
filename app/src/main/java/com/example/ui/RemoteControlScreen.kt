@@ -1,46 +1,56 @@
 package com.example.ui
 
+import android.content.ClipboardManager
+import android.content.Context
+import android.view.KeyEvent
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Backspace
-import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
-import androidx.compose.material.icons.automirrored.filled.KeyboardTab
-import androidx.compose.material.icons.automirrored.filled.VolumeDown
-import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,58 +61,153 @@ import com.example.bluetooth.HidConnectionStatus
 import com.example.debug.AppDebugLogger
 import com.example.model.BluetoothKeyboardConfig
 import com.example.model.KeyboardEndingKey
-import com.example.model.KeyboardLayoutType
-import com.example.ui.theme.*
+import com.example.ui.remote.FullPcKeyboardDeck
+import com.example.ui.remote.GyroCalibrationDrawer
+import com.example.ui.remote.KeyboardDeckPage
+import com.example.ui.remote.MediaRemoteDeckCard
+import com.example.ui.remote.ModifierLatchState
+import com.example.ui.remote.PcShortcutsRibbon
+import com.example.ui.remote.PrecisionTouchpadWithScroll
+import com.example.ui.remote.QuickTextAndClipboardBar
+import com.example.ui.remote.RemoteGamePadDeck
+import com.example.ui.remote.StandaloneNumpadDeck
+import com.example.ui.remote.ThreeFingerSwipeDirection
+import com.example.ui.remote.ThumbMouseActionBar
+import com.example.ui.remote.TouchpadGestureGuideDialog
+import com.example.ui.theme.AmberGold
+import com.example.ui.theme.AppMonoFontFamily
+import com.example.ui.theme.NeonCyan
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import java.util.Locale
-import kotlin.math.hypot
 
-enum class RemoteControlTab(val title: String, val icon: ImageVector) {
-    MOUSE_AIR("Mouse & Air", Icons.Default.Mouse),
-    COMBO("Karma", Icons.Default.Devices),
-    KEYBOARD("Tam Klavye", Icons.Default.Keyboard)
+private const val REMOTE_PREFS_NAME = "alvetak_remote_prefs"
+private const val PREF_TOUCHPAD_SPEED = "touchpad_speed"
+private const val PREF_NATURAL_SCROLL = "natural_scroll"
+private const val PREF_AIR_SENSITIVITY = "air_sensitivity"
+private const val PREF_LOCK_SCREEN_MODE = "lock_screen_enabled"
+private const val PREF_VOLUME_KEYS_PC = "volume_keys_pc"
+private const val PREF_GAME_VOLUME_TRIGGERS = "game_volume_triggers"
+private const val PREF_WIDE_TEN_COL = "wide_ten_col_kbd"
+
+private val AccentViolet = Color(0xFFA78BFA)
+private val AccentCoral = Color(0xFFFF4D6D)
+private val ObsidianDeep = Color(0xFF070B14)
+private val ObsidianSurface = Color(0xFF0D1526)
+private val ObsidianBorder = Color(0xFF22314D)
+
+/**
+ * 4 ultra-clean, zero-overlap cockpit modes rotatable via Swipe-on-Dock or 1-Tap "Döndür" button:
+ * Kumanda (Touchpad + Thumb Air + Media) ↔ Klavye (Mini Pad + Natural-Height Keyboard) ↔ 123 (Pro Numpad) ↔ Oyun (6KRO Gamepad)
+ */
+enum class RemoteControlTab(
+    val title: String,
+    val icon: ImageVector,
+    val accent: Color
+) {
+    KUMANDA("Kumanda", Icons.Default.Mouse, NeonCyan),
+    KEYBOARD("Klavye", Icons.Default.Keyboard, AccentViolet),
+    NUMPAD("123", Icons.Default.Dialpad, AmberGold),
+    GAMEPAD("Oyun", Icons.Default.SportsEsports, AccentCoral);
+
+    fun rotated(step: Int): RemoteControlTab {
+        val list = entries
+        val idx = (ordinal + step).mod(list.size)
+        return list[idx]
+    }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RemoteControlScreen(
     hidManager: BluetoothHidManager,
     keyboardConfig: BluetoothKeyboardConfig,
     onOpenBluetoothSheet: () -> Unit,
-    onNavigateBack: () -> Unit,
+    onOpenQrScanner: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
+    onLockScreenConfigChanged: (lockScreenEnabled: Boolean, keepAwake: Boolean) -> Unit = { _, _ -> },
+    onLandscapeModeChanged: (landscapeEnabled: Boolean) -> Unit = {},
+    onRegisterVolumeKeyHandler: (((keyCode: Int, isDown: Boolean) -> Boolean)?) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    BackHandler {
-        onNavigateBack()
-    }
-
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
+    val remotePrefs = remember(context) {
+        context.applicationContext.getSharedPreferences(REMOTE_PREFS_NAME, Context.MODE_PRIVATE)
+    }
 
     val connectionStatus by hidManager.connectionStatus.collectAsState()
     val connectedDeviceName by hidManager.connectedDeviceName.collectAsState()
     val hidTelemetry by hidManager.telemetry.collectAsState()
 
-    var selectedTab by remember { mutableStateOf(RemoteControlTab.MOUSE_AIR) }
+    var selectedTabName by rememberSaveable { mutableStateOf(RemoteControlTab.KUMANDA.name) }
+    var lastSlideDirection by remember { mutableIntStateOf(1) }
+    val selectedTab = remember(selectedTabName) {
+        RemoteControlTab.entries.firstOrNull { it.name == selectedTabName } ?: RemoteControlTab.KUMANDA
+    }
+
+    fun selectTab(next: RemoteControlTab, directionHint: Int? = null) {
+        if (next == selectedTab) return
+        lastSlideDirection = directionHint ?: if (next.ordinal > selectedTab.ordinal) 1 else -1
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        selectedTabName = next.name
+    }
+
+    // Persisted power-user preferences
+    var touchpadSpeed by remember {
+        mutableFloatStateOf(remotePrefs.getFloat(PREF_TOUCHPAD_SPEED, 1.15f).coerceIn(0.6f, 2.5f))
+    }
+    var isPrecisionMode by remember { mutableStateOf(false) }
+    var naturalScroll by remember {
+        mutableStateOf(remotePrefs.getBoolean(PREF_NATURAL_SCROLL, false))
+    }
     var isAirMouseContinuous by remember { mutableStateOf(false) }
-    var airSensitivity by remember { mutableFloatStateOf(1.25f) }
-    var isDragLocked by remember { mutableStateOf(false) }
-    var showRepairHint by remember { mutableStateOf(false) }
-
-    // Raw zero-latency hold-to-aim / clutch state
+    var isGyroDrawerOpen by remember { mutableStateOf(false) }
+    var isMediaDeckOpen by remember { mutableStateOf(false) }
+    var airSensitivity by remember {
+        mutableFloatStateOf(remotePrefs.getFloat(PREF_AIR_SENSITIVITY, 1.25f).coerceIn(0.5f, 2.5f))
+    }
     var isAirHoldPressed by remember { mutableStateOf(false) }
+    var isDragLocked by remember { mutableStateOf(false) }
+    var showDiagnosticsBar by remember { mutableStateOf(false) }
+    var showGestureGuide by remember { mutableStateOf(false) }
 
-    // Full PC Keyboard States
-    var isSymbolsPage by remember { mutableStateOf(false) }
+    // Lock-Screen, Landscape Gaming & Hardware Volume Key states
+    var isLockScreenEnabled by remember {
+        mutableStateOf(remotePrefs.getBoolean(PREF_LOCK_SCREEN_MODE, true))
+    }
+    var isVolumeKeysPcEnabled by remember {
+        mutableStateOf(remotePrefs.getBoolean(PREF_VOLUME_KEYS_PC, true))
+    }
+    var isGameVolumeTriggersEnabled by remember {
+        mutableStateOf(remotePrefs.getBoolean(PREF_GAME_VOLUME_TRIGGERS, true))
+    }
+    var isGameGyroAimEnabled by remember { mutableStateOf(false) }
+    var isGameLandscapeLocked by remember { mutableStateOf(false) }
+
+    // Keyboard & Numpad states
+    var keyboardPage by remember { mutableStateOf(KeyboardDeckPage.ALPHA) }
+    var useWideTenColLayout by remember {
+        mutableStateOf(remotePrefs.getBoolean(PREF_WIDE_TEN_COL, true))
+    }
     var isShiftOnce by remember { mutableStateOf(false) }
     var isCapsLock by remember { mutableStateOf(false) }
-    var isCtrlSticky by remember { mutableStateOf(false) }
-    var isAltSticky by remember { mutableStateOf(false) }
-    var isWinSticky by remember { mutableStateOf(false) }
-    var showFunctionRow by remember { mutableStateOf(true) }
+    var ctrlState by remember { mutableStateOf(ModifierLatchState.OFF) }
+    var altState by remember { mutableStateOf(ModifierLatchState.OFF) }
+    var winState by remember { mutableStateOf(ModifierLatchState.OFF) }
+    var showFunctionRow by remember { mutableStateOf(false) }
     var quickSendBuffer by remember { mutableStateOf("") }
+    var numpadTape by remember { mutableStateOf("") }
+
+    // Intercept Back only when an overlay/drawer or landscape lock is active; otherwise let system Back behave naturally (this is now Home!)
+    BackHandler(enabled = showGestureGuide || isMediaDeckOpen || isGyroDrawerOpen || isGameLandscapeLocked) {
+        when {
+            showGestureGuide -> showGestureGuide = false
+            isMediaDeckOpen -> isMediaDeckOpen = false
+            isGyroDrawerOpen -> isGyroDrawerOpen = false
+            isGameLandscapeLocked -> isGameLandscapeLocked = false
+        }
+    }
 
     val airMouseController = remember(context) {
         AirMouseController(context) { dx, dy ->
@@ -112,23 +217,41 @@ fun RemoteControlScreen(
         }
     }
 
-    // Keep sensitivity & running state synchronized with lifecycle
     LaunchedEffect(airSensitivity) {
         airMouseController.sensitivity = airSensitivity
     }
 
+    LaunchedEffect(isLockScreenEnabled) {
+        onLockScreenConfigChanged(isLockScreenEnabled, isLockScreenEnabled)
+    }
+
+    LaunchedEffect(isGameLandscapeLocked, selectedTab) {
+        onLandscapeModeChanged(selectedTab == RemoteControlTab.GAMEPAD && isGameLandscapeLocked)
+    }
+
     LaunchedEffect(selectedTab) {
-        if (selectedTab == RemoteControlTab.KEYBOARD) {
+        if (selectedTab != RemoteControlTab.KUMANDA) {
             isAirHoldPressed = false
+        }
+        if (selectedTab != RemoteControlTab.GAMEPAD) {
+            isGameLandscapeLocked = false
+            hidManager.releaseAllLiveKeys()
+            if (!isDragLocked) {
+                hidManager.releaseAllMouseButtons()
+            }
         }
     }
 
-    val shouldRunAirMouse = (selectedTab != RemoteControlTab.KEYBOARD) &&
-        (isAirMouseContinuous || isAirHoldPressed)
+    val shouldRunAirMouse = when (selectedTab) {
+        RemoteControlTab.KUMANDA -> isAirMouseContinuous || isAirHoldPressed
+        RemoteControlTab.GAMEPAD -> isGameGyroAimEnabled
+        else -> false
+    }
 
-    LaunchedEffect(shouldRunAirMouse, isAirMouseContinuous, isAirHoldPressed) {
+    LaunchedEffect(shouldRunAirMouse, isAirMouseContinuous, isAirHoldPressed, selectedTab) {
         if (shouldRunAirMouse) {
-            airMouseController.isClutchPaused = isAirMouseContinuous && isAirHoldPressed
+            airMouseController.isClutchPaused =
+                (selectedTab == RemoteControlTab.KUMANDA) && isAirMouseContinuous && isAirHoldPressed
             if (!airMouseController.isRunning) {
                 airMouseController.start()
             }
@@ -146,11 +269,59 @@ fun RemoteControlScreen(
         }
     }
 
+    // Route physical Volume keys -> PC Volume OR Game Mode L1/R1 Fire & Aim triggers!
+    DisposableEffect(selectedTab, isVolumeKeysPcEnabled, isGameVolumeTriggersEnabled) {
+        val handler: (Int, Boolean) -> Boolean = handler@{ keyCode, isDown ->
+            if (!hidManager.isHidHostConnected()) return@handler false
+
+            if (selectedTab == RemoteControlTab.GAMEPAD && isGameVolumeTriggersEnabled) {
+                when (keyCode) {
+                    KeyEvent.KEYCODE_VOLUME_UP -> {
+                        hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDown)
+                        return@handler true
+                    }
+                    KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                        hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_RIGHT, isDown)
+                        return@handler true
+                    }
+                }
+            } else if (isVolumeKeysPcEnabled) {
+                when (keyCode) {
+                    KeyEvent.KEYCODE_VOLUME_UP -> {
+                        if (isDown) {
+                            coroutineScope.launch {
+                                hidManager.sendConsumerControl(BluetoothHidManager.CONSUMER_VOL_UP)
+                            }
+                        }
+                        return@handler true
+                    }
+                    KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                        if (isDown) {
+                            coroutineScope.launch {
+                                hidManager.sendConsumerControl(BluetoothHidManager.CONSUMER_VOL_DOWN)
+                            }
+                        }
+                        return@handler true
+                    }
+                }
+            }
+            false
+        }
+        onRegisterVolumeKeyHandler(handler)
+        onDispose {
+            onRegisterVolumeKeyHandler(null)
+        }
+    }
+
     DisposableEffect(Unit) {
         hidManager.refreshState()
         onDispose {
+            onRegisterVolumeKeyHandler(null)
+            onLockScreenConfigChanged(false, false)
+            onLandscapeModeChanged(false)
             hidKeyQueue.close()
             airMouseController.stop()
+            hidManager.releaseAllLiveKeys()
             hidManager.releaseAllMouseButtons()
         }
     }
@@ -160,38 +331,43 @@ fun RemoteControlScreen(
         val now = System.currentTimeMillis()
         if (now - lastDisconnectToastMs > 1800L) {
             lastDisconnectToastMs = now
-            android.widget.Toast.makeText(
-                context,
-                "Önce PC Bluetooth bağlantısı kurun",
-                android.widget.Toast.LENGTH_SHORT
-            ).show()
+            Toast.makeText(context, "Önce üstten PC Bluetooth bağlantısı kurun", Toast.LENGTH_SHORT).show()
         }
     }
 
     fun currentModifierMask(): Byte {
         var mask = 0
-        if (isCtrlSticky) mask = mask or BluetoothHidManager.MODIFIER_LEFT_CTRL.toInt()
-        if (isAltSticky) mask = mask or BluetoothHidManager.MODIFIER_LEFT_ALT.toInt()
-        if (isWinSticky) mask = mask or BluetoothHidManager.MODIFIER_LEFT_GUI.toInt()
+        if (ctrlState.isActive()) mask = mask or BluetoothHidManager.MODIFIER_LEFT_CTRL.toInt()
+        if (altState.isActive()) mask = mask or BluetoothHidManager.MODIFIER_LEFT_ALT.toInt()
+        if (winState.isActive()) mask = mask or BluetoothHidManager.MODIFIER_LEFT_GUI.toInt()
         return mask.toByte()
     }
 
     fun consumeOneShotModifiers() {
-        isCtrlSticky = false
-        isAltSticky = false
-        isWinSticky = false
+        ctrlState = ctrlState.consumeIfOneShot()
+        altState = altState.consumeIfOneShot()
+        winState = winState.consumeIfOneShot()
         if (isShiftOnce && !isCapsLock) {
             isShiftOnce = false
         }
     }
 
-    fun sendCharKey(baseChar: Char) {
+    val trLocale = remember { Locale.forLanguageTag("tr-TR") }
+
+    fun sendCharKey(baseChar: Char, trackInNumpadTape: Boolean = false) {
         if (!hidManager.isHidHostConnected()) {
             notifyDisconnected()
             return
         }
         val useUpper = isShiftOnce || isCapsLock
-        val effectiveChar = if (useUpper) baseChar.toString().uppercase(Locale("tr", "TR")).firstOrNull() ?: baseChar else baseChar
+        val effectiveChar = if (useUpper) {
+            baseChar.toString().uppercase(trLocale).firstOrNull() ?: baseChar
+        } else {
+            baseChar
+        }
+        if (trackInNumpadTape) {
+            numpadTape = (numpadTape + effectiveChar).takeLast(24)
+        }
         val extraMods = currentModifierMask()
         hidKeyQueue.trySend {
             hidManager.sendSingleCharacter(
@@ -204,10 +380,49 @@ fun RemoteControlScreen(
         consumeOneShotModifiers()
     }
 
-    fun sendSpecialKey(keyCode: Byte, forceMods: Byte? = null) {
+    fun sendTextString(text: String, endingKey: KeyboardEndingKey = KeyboardEndingKey.NONE) {
+        if (text.isEmpty()) return
         if (!hidManager.isHidHostConnected()) {
             notifyDisconnected()
             return
+        }
+        hidKeyQueue.trySend {
+            hidManager.sendToComputer(
+                textToSend = text,
+                endingKey = endingKey,
+                typingDelayMs = keyboardConfig.typingDelayMs,
+                convertTurkishChars = keyboardConfig.convertTurkishChars,
+                keyboardLayout = keyboardConfig.keyboardLayout
+            )
+        }
+    }
+
+    fun pasteClipboardToPc() {
+        if (!hidManager.isHidHostConnected()) {
+            notifyDisconnected()
+            return
+        }
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        val clipText = cm?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+        if (clipText.isBlank()) {
+            Toast.makeText(context, "Telefon panosu boş", Toast.LENGTH_SHORT).show()
+            return
+        }
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        sendTextString(clipText, KeyboardEndingKey.NONE)
+        Toast.makeText(context, "Panodan ${clipText.length} karakter PC'ye yazılıyor", Toast.LENGTH_SHORT).show()
+    }
+
+    fun sendSpecialKey(keyCode: Byte, forceMods: Byte? = null, trackNumpadTape: Boolean = false) {
+        if (!hidManager.isHidHostConnected()) {
+            notifyDisconnected()
+            return
+        }
+        if (trackNumpadTape) {
+            when (keyCode) {
+                BluetoothHidManager.KEY_BACKSPACE -> numpadTape = numpadTape.dropLast(1)
+                BluetoothHidManager.KEY_ENTER, BluetoothHidManager.KEY_ESCAPE -> numpadTape = ""
+            }
         }
         val mods = forceMods ?: run {
             var m = currentModifierMask().toInt()
@@ -226,191 +441,133 @@ fun RemoteControlScreen(
         }
     }
 
+    fun handleThreeFingerSwipe(direction: ThreeFingerSwipeDirection) {
+        when (direction) {
+            ThreeFingerSwipeDirection.LEFT -> sendSpecialKey(BluetoothHidManager.KEY_LEFT, BluetoothHidManager.MODIFIER_LEFT_ALT)
+            ThreeFingerSwipeDirection.RIGHT -> sendSpecialKey(BluetoothHidManager.KEY_RIGHT, BluetoothHidManager.MODIFIER_LEFT_ALT)
+            ThreeFingerSwipeDirection.UP -> sendSpecialKey(BluetoothHidManager.KEY_TAB, BluetoothHidManager.MODIFIER_LEFT_GUI)
+            ThreeFingerSwipeDirection.DOWN -> sendSpecialKey(BluetoothHidManager.KEY_D, BluetoothHidManager.MODIFIER_LEFT_GUI)
+        }
+    }
+
+    fun handleZoomWheel(steps: Int) {
+        hidKeyQueue.trySend {
+            hidManager.sendZoomWheel(steps)
+        }
+    }
+
+    val modeAccent by animateColorAsState(
+        targetValue = selectedTab.accent,
+        animationSpec = tween(300),
+        label = "cockpit_ambient_accent"
+    )
+
+    val isConnected = connectionStatus == HidConnectionStatus.CONNECTED
+    val hasFailure = !hidTelemetry.lastFailureReason.isNullOrBlank()
+
     Scaffold(
-        modifier = modifier.fillMaxSize(),
-        containerColor = Color(0xFF090D16),
-        topBar = {
-            Column(
-                modifier = Modifier
-                    .background(Color(0xFF0D1422))
-                    .fillMaxWidth()
-            ) {
-                TopAppBar(
-                    title = {
-                        Column {
-                            Text(
-                                text = "PC Kumanda & Air Mouse",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White,
-                                maxLines = 1
-                            )
-                            Text(
-                                text = when (connectionStatus) {
-                                    HidConnectionStatus.CONNECTED -> "Bağlı: ${connectedDeviceName ?: "Bilgisayar"}"
-                                    HidConnectionStatus.CONNECTING -> "Bağlanıyor..."
-                                    else -> "Bağlı Değil — Dokunup Bağlanın"
-                                },
-                                fontSize = 11.sp,
-                                color = if (connectionStatus == HidConnectionStatus.CONNECTED) NeonCyan else AmberGold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    },
-                    navigationIcon = {
-                        IconButton(
-                            onClick = onNavigateBack,
-                            modifier = Modifier.testTag("remote_back_btn")
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Kameraya Dön",
-                                tint = Color.White
-                            )
-                        }
-                    },
-                    actions = {
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = if (connectionStatus == HidConnectionStatus.CONNECTED) {
-                                NeonCyan.copy(alpha = 0.16f)
-                            } else {
-                                AmberGold.copy(alpha = 0.16f)
-                            },
-                            border = BorderStroke(
-                                1.dp,
-                                if (connectionStatus == HidConnectionStatus.CONNECTED) NeonCyan else AmberGold
-                            ),
-                            modifier = Modifier
-                                .padding(end = 10.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { onOpenBluetoothSheet() }
-                                .testTag("remote_bt_status_btn")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Bluetooth,
-                                    contentDescription = "Bluetooth Bağlantısı",
-                                    tint = if (connectionStatus == HidConnectionStatus.CONNECTED) NeonCyan else AmberGold,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = if (connectionStatus == HidConnectionStatus.CONNECTED) "Bağlı" else "Bağlan",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (connectionStatus == HidConnectionStatus.CONNECTED) NeonCyan else AmberGold
-                                )
-                            }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color(0xFF0D1422)
+        modifier = modifier
+            .fillMaxSize()
+            .background(ObsidianDeep)
+            .drawBehind {
+                drawRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(modeAccent.copy(alpha = 0.14f), ObsidianDeep),
+                        center = Offset(size.width * 0.5f, 0f),
+                        radius = size.maxDimension * 0.62f
                     )
                 )
-
-                // Segmented Mode Tabs
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    RemoteControlTab.entries.forEach { tab ->
-                        val isSelected = selectedTab == tab
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = if (isSelected) NeonCyan.copy(alpha = 0.16f) else Color(0xFF151E31),
-                            border = BorderStroke(
-                                1.dp,
-                                if (isSelected) NeonCyan else Color(0xFF25324B)
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .clickable { selectedTab = tab }
-                                .testTag("remote_tab_${tab.name.lowercase(java.util.Locale.ROOT)}")
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center,
-                                modifier = Modifier.padding(horizontal = 8.dp)
-                            ) {
-                                Icon(
-                                    imageVector = tab.icon,
-                                    contentDescription = null,
-                                    tint = if (isSelected) NeonCyan else Color(0xFF94A3B8),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(5.dp))
-                                Text(
-                                    text = tab.title,
-                                    fontSize = 11.5.sp,
-                                    fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                                    color = if (isSelected) NeonCyan else Color(0xFFCBD5E1),
-                                    maxLines = 1
-                                )
-                            }
-                        }
+            },
+        containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        topBar = {
+            RemoteSlimHudTopBar(
+                connectionStatus = connectionStatus,
+                connectedDeviceName = connectedDeviceName,
+                modeAccent = modeAccent,
+                isLockScreenEnabled = isLockScreenEnabled,
+                isVolumeControlActive = if (selectedTab == RemoteControlTab.GAMEPAD) {
+                    isGameVolumeTriggersEnabled
+                } else {
+                    isVolumeKeysPcEnabled
+                },
+                isGameMode = selectedTab == RemoteControlTab.GAMEPAD,
+                showDiagnostics = showDiagnosticsBar || hasFailure,
+                onOpenQrScanner = onOpenQrScanner,
+                onOpenSettings = onOpenSettings,
+                onOpenBluetoothSheet = onOpenBluetoothSheet,
+                onToggleLockScreen = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    isLockScreenEnabled = !isLockScreenEnabled
+                    remotePrefs.edit().putBoolean(PREF_LOCK_SCREEN_MODE, isLockScreenEnabled).apply()
+                    Toast.makeText(
+                        context,
+                        if (isLockScreenEnabled) "Kilit ekranında aktif + ekran açık kalır"
+                        else "Kilit ekranı modu kapatıldı",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                },
+                onToggleVolumeKeys = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    if (selectedTab == RemoteControlTab.GAMEPAD) {
+                        isGameVolumeTriggersEnabled = !isGameVolumeTriggersEnabled
+                        remotePrefs.edit().putBoolean(PREF_GAME_VOLUME_TRIGGERS, isGameVolumeTriggersEnabled).apply()
+                        Toast.makeText(
+                            context,
+                            if (isGameVolumeTriggersEnabled) "Yan ses tuşları: Ateş / Nişan tetiği aktif"
+                            else "Yan ses tuşları: Oyun tetiği kapatıldı",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        isVolumeKeysPcEnabled = !isVolumeKeysPcEnabled
+                        remotePrefs.edit().putBoolean(PREF_VOLUME_KEYS_PC, isVolumeKeysPcEnabled).apply()
+                        Toast.makeText(
+                            context,
+                            if (isVolumeKeysPcEnabled) "Yan ses tuşları artık PC sesini kontrol eder"
+                            else "Yan ses tuşları normale döndü",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
+                },
+                onToggleDiagnostics = { showDiagnosticsBar = !showDiagnosticsBar },
+                onOpenGestureGuide = { showGestureGuide = true }
+            )
+        },
+        bottomBar = {
+            SwipeableRotateModeDock(
+                selectedTab = selectedTab,
+                onSelectTab = { selectTab(it) },
+                onRotateStep = { step ->
+                    selectTab(selectedTab.rotated(step), directionHint = step)
                 }
-            }
+            )
         }
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .windowInsetsPadding(WindowInsets.navigationBars)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
-            if (connectionStatus != HidConnectionStatus.CONNECTED) {
+            // Optional HID Diagnostics & Recovery Drawer (ZERO duplicate disconnected banner!)
+            AnimatedVisibility(
+                visible = isConnected && (hasFailure || showDiagnosticsBar),
+                enter = expandVertically(spring()) + fadeIn(),
+                exit = shrinkVertically(spring()) + fadeOut()
+            ) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF2B2108),
-                    border = BorderStroke(1.dp, AmberGold.copy(alpha = 0.7f)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable { onOpenBluetoothSheet() }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                            Icon(Icons.Default.BluetoothSearching, contentDescription = null, tint = AmberGold, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Bilgisayar bağlı değil. Eşleşmiş PC'ye bağlanmak için dokunun.",
-                                fontSize = 11.5.sp,
-                                color = Color.White
-                            )
-                        }
-                        Text("Bağlan →", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AmberGold)
-                    }
-                }
-            } else {
-                val hasFailure = !hidTelemetry.lastFailureReason.isNullOrBlank()
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
                     color = if (hasFailure) Color(0xFF2B1115) else Color(0xFF0E1728),
                     border = BorderStroke(
                         1.dp,
-                        if (hasFailure) Color(0xFFEF4444).copy(alpha = 0.7f) else Color(0xFF1F2D45)
+                        if (hasFailure) Color(0xFFEF4444).copy(alpha = 0.7f) else Color(0xFF223350)
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                        verticalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -419,7 +576,7 @@ fun RemoteControlScreen(
                         ) {
                             Text(
                                 text = "${if (hidTelemetry.isBootMode) "Boot" else "Report"} · Klavye ${hidTelemetry.keyboardReportsSent} · Mouse ${hidTelemetry.mouseReportsSent}",
-                                fontSize = 10.5.sp,
+                                fontSize = 10.sp,
                                 fontFamily = AppMonoFontFamily,
                                 color = if (hasFailure) Color(0xFFFCA5A5) else NeonCyan,
                                 maxLines = 1,
@@ -438,39 +595,12 @@ fun RemoteControlScreen(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(6.dp))
                                         .clickable { hidManager.reregisterHidProfile() }
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        .padding(horizontal = 6.dp, vertical = 3.dp)
                                         .testTag("remote_hid_reregister_btn")
                                 )
                                 Text(
-                                    text = if (showRepairHint) "Gizle" else "Yardım?",
-                                    fontSize = 10.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = AmberGold,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable { showRepairHint = !showRepairHint }
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-
-                        if (hasFailure || showRepairHint) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = hidTelemetry.lastFailureReason
-                                        ?: "Mouse yanıt vermiyorsa PC Bluetooth'tan cihazı 'Kaldır' deyip bir kez yeniden eşleştirin (Windows eski klavye SDP'sini önbellekte tutar).",
-                                    fontSize = 10.sp,
-                                    color = if (hasFailure) Color(0xFFFCA5A5) else Color(0xFFCBD5E1),
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
                                     text = "BT Ayarları",
-                                    fontSize = 10.sp,
+                                    fontSize = 10.5.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = AmberGold,
                                     modifier = Modifier
@@ -479,1291 +609,642 @@ fun RemoteControlScreen(
                                             runCatching { context.startActivity(hidManager.openBluetoothSettingsIntent()) }
                                                 .onFailure { AppDebugLogger.e("UI", "BT ayarları açılamadı", it) }
                                         }
-                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                        .padding(horizontal = 6.dp, vertical = 3.dp)
                                 )
                             }
                         }
-                    }
-                }
-            }
 
-            when (selectedTab) {
-                RemoteControlTab.MOUSE_AIR -> {
-                    // Air Mouse Card
-                    AirMouseCard(
-                        isGyroSupported = airMouseController.isGyroSupported,
-                        isContinuous = isAirMouseContinuous,
-                        isHoldPressed = isAirHoldPressed,
-                        sensitivity = airSensitivity,
-                        onHoldPressChange = { isDown ->
-                            if (isDown && !hidManager.isHidHostConnected()) {
-                                notifyDisconnected()
-                            }
-                            isAirHoldPressed = isDown
-                        },
-                        onToggleContinuous = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            isAirMouseContinuous = !isAirMouseContinuous
-                        },
-                        onSensitivityChanged = { airSensitivity = it },
-                        onRecalibrate = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            airMouseController.recalibrate()
-                            android.widget.Toast.makeText(
-                                context,
-                                "Jiroskop ve 1€ filtresi merkezlendi",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    )
-
-                    // Full Touchpad + Scroll Strip
-                    PrecisionTouchpadWithScroll(
-                        hidManager = hidManager,
-                        onDisconnectedTap = ::notifyDisconnected,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                    )
-
-                    // Hardware Mouse Buttons Row (Left, Drag Lock, Middle, Right)
-                    MouseButtonBar(
-                        isDragLocked = isDragLocked,
-                        onLeftDownChange = { isDown ->
-                            if (!hidManager.isHidHostConnected()) {
-                                if (isDown) notifyDisconnected()
-                                return@MouseButtonBar
-                            }
-                            if (isDown && isDragLocked) isDragLocked = false
-                            hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDown)
-                        },
-                        onToggleDragLock = {
-                            if (!hidManager.isHidHostConnected()) {
-                                notifyDisconnected()
-                                return@MouseButtonBar
-                            }
-                            isDragLocked = !isDragLocked
-                            hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDragLocked)
-                        },
-                        onMiddleDownChange = { isDown ->
-                            if (!hidManager.isHidHostConnected()) {
-                                if (isDown) notifyDisconnected()
-                                return@MouseButtonBar
-                            }
-                            hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_MIDDLE, isDown)
-                        },
-                        onRightDownChange = { isDown ->
-                            if (!hidManager.isHidHostConnected()) {
-                                if (isDown) notifyDisconnected()
-                                return@MouseButtonBar
-                            }
-                            hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_RIGHT, isDown)
-                        }
-                    )
-
-                    // Media & Volume Bar (Consumer HID)
-                    ConsumerMediaStrip(
-                        onConsumer = { usage ->
-                            if (!hidManager.isHidHostConnected()) {
-                                notifyDisconnected()
-                                return@ConsumerMediaStrip
-                            }
-                            coroutineScope.launch { hidManager.sendConsumerControl(usage) }
-                        }
-                    )
-                }
-
-                RemoteControlTab.COMBO -> {
-                    // Compact Air Mouse Strip + Touchpad on Top Half
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        FilterChip(
-                            selected = isAirMouseContinuous,
-                            onClick = {
-                                if (airMouseController.isGyroSupported) {
-                                    isAirMouseContinuous = !isAirMouseContinuous
-                                    if (isAirMouseContinuous && !hidManager.isHidHostConnected()) {
-                                        notifyDisconnected()
-                                    }
-                                }
-                            },
-                            label = {
-                                Text(
-                                    text = if (!airMouseController.isGyroSupported) "Jiroskop Yok"
-                                    else if (isAirMouseContinuous) "✈ Air: AÇIK"
-                                    else "✈ Air Mouse",
-                                    fontSize = 11.5.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            },
-                            enabled = airMouseController.isGyroSupported,
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = NeonCyan,
-                                selectedLabelColor = Color(0xFF00382E)
-                            )
-                        )
-
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isAirHoldPressed) AmberGold else Color(0xFF151E31),
-                            border = BorderStroke(1.dp, if (isAirHoldPressed) AmberGold else Color(0xFF2A3955)),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(44.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .pointerInput(airMouseController.isGyroSupported) {
-                                    if (!airMouseController.isGyroSupported) return@pointerInput
-                                    awaitEachGesture {
-                                        awaitFirstDown(requireUnconsumed = false)
-                                        if (!hidManager.isHidHostConnected()) {
-                                            notifyDisconnected()
-                                        }
-                                        isAirHoldPressed = true
-                                        try {
-                                            while (true) {
-                                                val event = awaitPointerEvent()
-                                                if (event.changes.none { it.pressed }) break
-                                            }
-                                        } finally {
-                                            isAirHoldPressed = false
-                                        }
-                                    }
-                                }
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = if (isAirMouseContinuous && isAirHoldPressed) "⏸ Duraklatıldı"
-                                    else if (isAirMouseContinuous) "⏸ Basılı Tut = Duraklat"
-                                    else if (isAirHoldPressed) "🎯 Bileği Oynatın"
-                                    else "🎯 Tut & Air Mouse",
-                                    fontSize = 11.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isAirHoldPressed) Color(0xFF042F2E) else Color.White
-                                )
-                            }
-                        }
-                    }
-
-                    PrecisionTouchpadWithScroll(
-                        hidManager = hidManager,
-                        onDisconnectedTap = ::notifyDisconnected,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(0.95f)
-                    )
-
-                    MouseButtonBar(
-                        isDragLocked = isDragLocked,
-                        onLeftDownChange = { isDown ->
-                            if (!hidManager.isHidHostConnected()) {
-                                if (isDown) notifyDisconnected()
-                                return@MouseButtonBar
-                            }
-                            if (isDown && isDragLocked) isDragLocked = false
-                            hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDown)
-                        },
-                        onToggleDragLock = {
-                            if (!hidManager.isHidHostConnected()) {
-                                notifyDisconnected()
-                                return@MouseButtonBar
-                            }
-                            isDragLocked = !isDragLocked
-                            hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDragLocked)
-                        },
-                        onMiddleDownChange = { isDown ->
-                            if (!hidManager.isHidHostConnected()) {
-                                if (isDown) notifyDisconnected()
-                                return@MouseButtonBar
-                            }
-                            hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_MIDDLE, isDown)
-                        },
-                        onRightDownChange = { isDown ->
-                            if (!hidManager.isHidHostConnected()) {
-                                if (isDown) notifyDisconnected()
-                                return@MouseButtonBar
-                            }
-                            hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_RIGHT, isDown)
-                        }
-                    )
-
-                    // Compact PC Keyboard on Bottom Half
-                    FullPcKeyboardDeck(
-                        isCompact = true,
-                        isSymbolsPage = isSymbolsPage,
-                        isShiftOnce = isShiftOnce,
-                        isCapsLock = isCapsLock,
-                        isCtrlSticky = isCtrlSticky,
-                        isAltSticky = isAltSticky,
-                        isWinSticky = isWinSticky,
-                        showFunctionRow = false,
-                        onToggleSymbols = { isSymbolsPage = !isSymbolsPage },
-                        onTapShift = {
-                            if (isCapsLock) {
-                                isCapsLock = false
-                                isShiftOnce = false
-                            } else if (isShiftOnce) {
-                                isCapsLock = true
-                            } else {
-                                isShiftOnce = true
-                            }
-                        },
-                        onToggleCtrl = { isCtrlSticky = !isCtrlSticky },
-                        onToggleAlt = { isAltSticky = !isAltSticky },
-                        onToggleWin = { isWinSticky = !isWinSticky },
-                        onCharKey = ::sendCharKey,
-                        onSpecialKey = ::sendSpecialKey,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1.15f)
-                    )
-                }
-
-                RemoteControlTab.KEYBOARD -> {
-                    // Quick Batch Text / URL Sender
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                            value = quickSendBuffer,
-                            onValueChange = { quickSendBuffer = it },
-                            placeholder = { Text("Uzun metin veya URL yapıştırıp PC'ye gönderin", fontSize = 12.sp) },
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = NeonCyan,
-                                unfocusedBorderColor = Color(0xFF28354E),
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White
-                            ),
-                            modifier = Modifier.weight(1f)
-                        )
-                        Button(
-                            onClick = {
-                                val text = quickSendBuffer
-                                if (text.isEmpty()) return@Button
-                                if (!hidManager.isHidHostConnected()) {
-                                    notifyDisconnected()
-                                    return@Button
-                                }
-                                quickSendBuffer = ""
-                                hidKeyQueue.trySend {
-                                    hidManager.sendToComputer(
-                                        textToSend = text,
-                                        endingKey = KeyboardEndingKey.NONE,
-                                        typingDelayMs = keyboardConfig.typingDelayMs,
-                                        convertTurkishChars = keyboardConfig.convertTurkishChars,
-                                        keyboardLayout = keyboardConfig.keyboardLayout
-                                    )
-                                }
-                            },
-                            enabled = quickSendBuffer.isNotEmpty(),
-                            colors = ButtonDefaults.buttonColors(containerColor = NeonCyan, contentColor = Color(0xFF00382E)),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.height(52.dp)
-                        ) {
-                            Icon(Icons.Default.Send, contentDescription = "PC'ye Yaz", modifier = Modifier.size(18.dp))
-                        }
-                    }
-
-                    // PC Shortcuts Row (Esc, F1..F12 toggle, Copy/Paste/Undo/SelectAll/Save/Alt+Tab/Win+D)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        ShortcutChip("F1–F12", isActive = showFunctionRow) {
-                            showFunctionRow = !showFunctionRow
-                        }
-                        ShortcutChip("Esc") { sendSpecialKey(BluetoothHidManager.KEY_ESCAPE, 0) }
-                        ShortcutChip("Ctrl+C") { sendSpecialKey(BluetoothHidManager.KEY_C, BluetoothHidManager.MODIFIER_LEFT_CTRL) }
-                        ShortcutChip("Ctrl+V") { sendSpecialKey(BluetoothHidManager.KEY_V, BluetoothHidManager.MODIFIER_LEFT_CTRL) }
-                        ShortcutChip("Ctrl+X") { sendSpecialKey(BluetoothHidManager.KEY_X, BluetoothHidManager.MODIFIER_LEFT_CTRL) }
-                        ShortcutChip("Ctrl+Z") { sendSpecialKey(BluetoothHidManager.KEY_Z, BluetoothHidManager.MODIFIER_LEFT_CTRL) }
-                        ShortcutChip("Ctrl+A") { sendSpecialKey(BluetoothHidManager.KEY_A, BluetoothHidManager.MODIFIER_LEFT_CTRL) }
-                        ShortcutChip("Ctrl+S") { sendSpecialKey(BluetoothHidManager.KEY_S, BluetoothHidManager.MODIFIER_LEFT_CTRL) }
-                        ShortcutChip("Alt+Tab") { sendSpecialKey(BluetoothHidManager.KEY_TAB, BluetoothHidManager.MODIFIER_LEFT_ALT) }
-                        ShortcutChip("Win+D") { sendSpecialKey(BluetoothHidManager.KEY_D, BluetoothHidManager.MODIFIER_LEFT_GUI) }
-                    }
-
-                    FullPcKeyboardDeck(
-                        isCompact = false,
-                        isSymbolsPage = isSymbolsPage,
-                        isShiftOnce = isShiftOnce,
-                        isCapsLock = isCapsLock,
-                        isCtrlSticky = isCtrlSticky,
-                        isAltSticky = isAltSticky,
-                        isWinSticky = isWinSticky,
-                        showFunctionRow = showFunctionRow,
-                        onToggleSymbols = { isSymbolsPage = !isSymbolsPage },
-                        onTapShift = {
-                            if (isCapsLock) {
-                                isCapsLock = false
-                                isShiftOnce = false
-                            } else if (isShiftOnce) {
-                                isCapsLock = true
-                            } else {
-                                isShiftOnce = true
-                            }
-                        },
-                        onToggleCtrl = { isCtrlSticky = !isCtrlSticky },
-                        onToggleAlt = { isAltSticky = !isAltSticky },
-                        onToggleWin = { isWinSticky = !isWinSticky },
-                        onCharKey = ::sendCharKey,
-                        onSpecialKey = ::sendSpecialKey,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AirMouseCard(
-    isGyroSupported: Boolean,
-    isContinuous: Boolean,
-    isHoldPressed: Boolean,
-    sensitivity: Float,
-    onHoldPressChange: (Boolean) -> Unit,
-    onToggleContinuous: () -> Unit,
-    onSensitivityChanged: (Float) -> Unit,
-    onRecalibrate: () -> Unit = {}
-) {
-    val latestOnHoldChange by rememberUpdatedState(onHoldPressChange)
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xFF101829),
-        border = BorderStroke(
-            1.dp,
-            if (isContinuous || isHoldPressed) NeonCyan.copy(alpha = 0.8f) else Color(0xFF23304A)
-        ),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Box(
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(if (isContinuous || isHoldPressed) NeonCyan.copy(alpha = 0.2f) else Color(0xFF1A253B)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ScreenRotation,
-                            contentDescription = null,
-                            tint = if (isContinuous || isHoldPressed) NeonCyan else Color(0xFF94A3B8),
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Text(
-                            text = "Air Mouse (1€ Jiroskop)",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                        Text(
-                            text = if (!isGyroSupported) "Bu cihazda jiroskop sensörü algılanmadı"
-                            else if (isContinuous && isHoldPressed) "Duraklatıldı — Bileğinizi merkeze alın"
-                            else if (isContinuous) "Sürekli Aktif — Telefonu havada oynatın"
-                            else if (isHoldPressed) "Nişan Aktif — Telefonu doğrultup oynatın"
-                            else "Havada imleç kontrolü için açın veya basılı tutun",
-                            fontSize = 10.5.sp,
-                            color = if (isContinuous || isHoldPressed) NeonCyan else Color(0xFF94A3B8)
-                        )
-                    }
-                }
-                if (isGyroSupported) {
-                    IconButton(
-                        onClick = onRecalibrate,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .testTag("air_mouse_recalibrate_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MyLocation,
-                            contentDescription = "Jiroskopu Kalibre Et",
-                            tint = NeonCyan,
-                            modifier = Modifier.size(19.dp)
-                        )
-                    }
-                }
-                Switch(
-                    checked = isContinuous,
-                    onCheckedChange = { onToggleContinuous() },
-                    enabled = isGyroSupported,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = NeonCyan,
-                        checkedTrackColor = Color(0xFF00382E)
-                    ),
-                    modifier = Modifier.testTag("air_mouse_switch")
-                )
-            }
-
-            if (isGyroSupported) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = when {
-                            isContinuous && isHoldPressed -> Color(0xFF334155)
-                            isHoldPressed -> AmberGold
-                            isContinuous -> Color(0xFF162238)
-                            else -> NeonCyan.copy(alpha = 0.14f)
-                        },
-                        border = BorderStroke(
-                            1.dp,
-                            when {
-                                isHoldPressed -> AmberGold
-                                isContinuous -> Color(0xFF334155)
-                                else -> NeonCyan.copy(alpha = 0.6f)
-                            }
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .pointerInput(Unit) {
-                                awaitEachGesture {
-                                    awaitFirstDown(requireUnconsumed = false)
-                                    latestOnHoldChange(true)
-                                    try {
-                                        while (true) {
-                                            val event = awaitPointerEvent()
-                                            if (event.changes.none { it.pressed }) break
-                                        }
-                                    } finally {
-                                        latestOnHoldChange(false)
-                                    }
-                                }
-                            }
-                            .testTag("air_mouse_hold_btn")
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
+                        if (hasFailure) {
                             Text(
-                                text = when {
-                                    isContinuous && isHoldPressed -> "⏸ İmleç Duraklatıldı"
-                                    isContinuous -> "⏸ Basılı Tut = Merkezle (Clutch)"
-                                    isHoldPressed -> "🎯 Oynatın — Bırakınca Durur"
-                                    else -> "🎯 Basılı Tut & Havada Oynat"
-                                },
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isHoldPressed && !isContinuous) Color(0xFF042F2E) else Color.White
+                                text = hidTelemetry.lastFailureReason.orEmpty(),
+                                fontSize = 10.sp,
+                                color = Color(0xFFFCA5A5)
                             )
                         }
                     }
+                }
+            }
 
-                    Column(
-                        modifier = Modifier.width(120.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "Hız: ${String.format(Locale.US, "%.1fx", airSensitivityText(sensitivity))}",
-                            fontSize = 10.sp,
-                            color = Color(0xFF94A3B8),
-                            fontWeight = FontWeight.SemiBold
+            // Smooth Directional Slide+Fade Mode Switcher ("Döndür" transitions!)
+            AnimatedContent(
+                targetState = selectedTab,
+                transitionSpec = {
+                    val dir = if (lastSlideDirection >= 0) 1 else -1
+                    (slideInHorizontally(animationSpec = tween(220)) { width -> dir * (width / 5) } + fadeIn(tween(180)))
+                        .togetherWith(
+                            slideOutHorizontally(animationSpec = tween(200)) { width -> -dir * (width / 5) } + fadeOut(tween(140))
                         )
-                        Slider(
-                            value = sensitivity,
-                            onValueChange = onSensitivityChanged,
-                            valueRange = 0.5f..2.5f,
-                            colors = SliderDefaults.colors(
-                                thumbColor = NeonCyan,
-                                activeTrackColor = NeonCyan
-                            ),
-                            modifier = Modifier.height(24.dp)
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun airSensitivityText(v: Float): Float = (v * 10f).toInt() / 10f
-
-@Composable
-private fun PrecisionTouchpadWithScroll(
-    hidManager: BluetoothHidManager,
-    onDisconnectedTap: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val density = LocalDensity.current
-    val haptic = LocalHapticFeedback.current
-    val tapSlopPx = with(density) { 12.dp.toPx() }
-    val scrollStepPx = with(density) { 14.dp.toPx() }
-
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // Main Touchpad Canvas
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(18.dp))
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color(0xFF111A2D), Color(0xFF0C1322))
-                    )
-                )
-                .border(1.dp, Color(0xFF283754), RoundedCornerShape(18.dp))
-                .pointerInput(hidManager) {
-                    var accumDx = 0f
-                    var accumDy = 0f
-                    var accumWheel = 0f
-                    var lastTapUpTime = 0L
-
-                    awaitEachGesture {
-                        val firstDown = awaitFirstDown(requireUnconsumed = false)
-                        val startTime = System.currentTimeMillis()
-                        val startPos = firstDown.position
-                        var lastSinglePos = firstDown.position
-                        var lastMultiY = firstDown.position.y
-                        var maxPointers = 1
-                        var movedPastSlop = false
-                        var didTwoFingerScroll = false
-                        accumDx = 0f
-                        accumDy = 0f
-                        accumWheel = 0f
-
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val activeChanges = event.changes.filter { it.pressed }
-                            maxPointers = maxOf(maxPointers, activeChanges.size)
-
-                            if (activeChanges.isEmpty()) {
-                                // Gesture lifted
-                                val dt = System.currentTimeMillis() - startTime
-                                if (!movedPastSlop && !didTwoFingerScroll && dt < 240L) {
-                                    if (!hidManager.isHidHostConnected()) {
-                                        onDisconnectedTap()
-                                    } else if (maxPointers >= 2) {
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        hidManager.sendMouseClick(BluetoothHidManager.MOUSE_BTN_RIGHT)
-                                    } else {
-                                        val now = System.currentTimeMillis()
-                                        if (now - lastTapUpTime < 260L) {
-                                            hidManager.sendMouseDoubleClick()
-                                            lastTapUpTime = 0L
-                                        } else {
-                                            hidManager.sendMouseClick(BluetoothHidManager.MOUSE_BTN_LEFT)
-                                            lastTapUpTime = now
-                                        }
-                                    }
-                                }
-                                break
-                            }
-
-                            if (event.type == PointerEventType.Release && activeChanges.size == 1) {
-                                // Re-anchor remaining pointer to prevent cursor jump when lifting 1 finger
-                                val remaining = activeChanges.first().position
-                                lastSinglePos = remaining
-                                lastMultiY = remaining.y
-                            } else if (event.type == PointerEventType.Move) {
-                                if (!hidManager.isHidHostConnected()) {
-                                    onDisconnectedTap()
-                                }
-                                if (activeChanges.size >= 2) {
-                                    // Two-finger vertical scroll
-                                    val avgY = activeChanges.map { it.position.y }.average().toFloat()
-                                    val dy = avgY - lastMultiY
-                                    lastMultiY = avgY
-                                    if (kotlin.math.abs(dy) > 1.5f) {
-                                        movedPastSlop = true
-                                        didTwoFingerScroll = true
-                                    }
-                                    accumWheel -= dy / scrollStepPx
-                                    val steps = accumWheel.toInt()
-                                    if (steps != 0) {
-                                        accumWheel -= steps
-                                        hidManager.sendMouseMove(0, 0, wheel = steps.coerceIn(-12, 12))
-                                    }
-                                    activeChanges.forEach { it.consume() }
-                                } else if (!didTwoFingerScroll) {
-                                    val cur = activeChanges.first().position
-                                    if (hypot(cur.x - startPos.x, cur.y - startPos.y) > tapSlopPx) {
-                                        movedPastSlop = true
-                                    }
-                                    val dx = cur.x - lastSinglePos.x
-                                    val dy = cur.y - lastSinglePos.y
-                                    lastSinglePos = cur
-                                    lastMultiY = cur.y
-
-                                    val speed = hypot(dx, dy)
-                                    val accel = (1.15f + (speed / 28f).coerceIn(0f, 1.5f)) / (density.density * 0.62f)
-                                    accumDx += dx * accel
-                                    accumDy += dy * accel
-                                    val sendX = accumDx.toInt()
-                                    val sendY = accumDy.toInt()
-                                    if (sendX != 0 || sendY != 0) {
-                                        accumDx -= sendX
-                                        accumDy -= sendY
-                                        hidManager.sendMouseMove(sendX, sendY)
-                                    }
-                                    activeChanges.first().consume()
-                                }
-                            } else if (event.type == PointerEventType.Press && activeChanges.size >= 2) {
-                                lastMultiY = activeChanges.map { it.position.y }.average().toFloat()
-                            }
-                        }
-                    }
-                }
-                .testTag("remote_touchpad_surface"),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    imageVector = Icons.Default.TouchApp,
-                    contentDescription = null,
-                    tint = Color(0xFF334155),
-                    modifier = Modifier.size(38.dp)
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = "Dokunmatik Yüzey (Touchpad)",
-                    color = Color(0xFF64748B),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Tek tık = Sol · Çift tık = Aç · 2 parmak = Sağ / Kaydır",
-                    color = Color(0xFF475569),
-                    fontSize = 10.5.sp
-                )
-            }
-        }
-
-        // Dedicated 1-Finger Vertical Scroll Wheel Strip
-        Box(
-            modifier = Modifier
-                .width(48.dp)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xFF141E32))
-                .border(1.dp, Color(0xFF283754), RoundedCornerShape(16.dp))
-                .pointerInput(hidManager) {
-                    var scrollAccum = 0f
-                    detectVerticalDragGestures(
-                        onDragEnd = { scrollAccum = 0f },
-                        onDragCancel = { scrollAccum = 0f }
-                    ) { change, dragAmount ->
-                        change.consume()
-                        if (!hidManager.isHidHostConnected()) {
-                            onDisconnectedTap()
-                            return@detectVerticalDragGestures
-                        }
-                        scrollAccum -= dragAmount / scrollStepPx
-                        val steps = scrollAccum.toInt()
-                        if (steps != 0) {
-                            scrollAccum -= steps
-                            hidManager.sendMouseMove(0, 0, wheel = steps.coerceIn(-12, 12))
-                        }
-                    }
-                }
-                .testTag("remote_scroll_strip"),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .padding(vertical = 18.dp)
-            ) {
-                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Yukarı Kaydır", tint = NeonCyan, modifier = Modifier.size(20.dp))
-                Text("KAYDIR", fontSize = 8.5.sp, color = Color(0xFF64748B), fontWeight = FontWeight.Bold)
-                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Aşağı Kaydır", tint = NeonCyan, modifier = Modifier.size(20.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun MouseButtonBar(
-    isDragLocked: Boolean,
-    onLeftDownChange: (Boolean) -> Unit,
-    onToggleDragLock: () -> Unit,
-    onMiddleDownChange: (Boolean) -> Unit,
-    onRightDownChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(50.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        HoldableActionSurface(
-            label = "Sol Tık",
-            bgColor = Color(0xFF172338),
-            pressedColor = NeonCyan.copy(alpha = 0.3f),
-            fgColor = Color.White,
-            onPressChange = onLeftDownChange,
-            modifier = Modifier
-                .weight(1.8f)
-                .fillMaxHeight()
-                .testTag("mouse_left_btn")
-        )
-
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = if (isDragLocked) AmberGold else Color(0xFF131C2E),
-            border = BorderStroke(1.dp, if (isDragLocked) AmberGold else Color(0xFF283754)),
-            modifier = Modifier
-                .weight(1.05f)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(14.dp))
-                .clickable { onToggleDragLock() }
-                .testTag("mouse_drag_lock_btn")
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = if (isDragLocked) "Sürükle ●" else "Sürükle",
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isDragLocked) Color(0xFF042F2E) else Color(0xFFCBD5E1)
-                )
-            }
-        }
-
-        HoldableActionSurface(
-            label = "Orta",
-            bgColor = Color(0xFF131C2E),
-            pressedColor = Color(0xFF334155),
-            fgColor = Color(0xFFCBD5E1),
-            onPressChange = onMiddleDownChange,
-            modifier = Modifier
-                .weight(0.85f)
-                .fillMaxHeight()
-                .testTag("mouse_middle_btn")
-        )
-
-        HoldableActionSurface(
-            label = "Sağ Tık",
-            bgColor = Color(0xFF172338),
-            pressedColor = NeonCyan.copy(alpha = 0.3f),
-            fgColor = NeonCyan,
-            onPressChange = onRightDownChange,
-            modifier = Modifier
-                .weight(1.5f)
-                .fillMaxHeight()
-                .testTag("mouse_right_btn")
-        )
-    }
-}
-
-@Composable
-private fun HoldableActionSurface(
-    label: String,
-    bgColor: Color,
-    pressedColor: Color,
-    fgColor: Color,
-    onPressChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var isPressed by remember { mutableStateOf(false) }
-    val latestOnPressChange by rememberUpdatedState(onPressChange)
-
-    DisposableEffect(Unit) {
-        onDispose {
-            if (isPressed) {
-                isPressed = false
-                latestOnPressChange(false)
-            }
-        }
-    }
-
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = if (isPressed) pressedColor else bgColor,
-        border = BorderStroke(1.dp, if (isPressed) NeonCyan else Color(0xFF283754)),
-        modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
-                    isPressed = true
-                    latestOnPressChange(true)
-                    try {
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            if (event.changes.none { it.pressed }) break
-                        }
-                    } finally {
-                        if (isPressed) {
-                            isPressed = false
-                            latestOnPressChange(false)
-                        }
-                    }
-                }
-            }
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(
-                text = label,
-                fontSize = 12.5.sp,
-                fontWeight = FontWeight.Bold,
-                color = fgColor,
-                maxLines = 1
-            )
-        }
-    }
-}
-
-@Composable
-private fun ConsumerMediaStrip(
-    onConsumer: (Int) -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = Color(0xFF101829),
-        border = BorderStroke(1.dp, Color(0xFF23304A)),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = { onConsumer(BluetoothHidManager.CONSUMER_MUTE) }, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.AutoMirrored.Filled.VolumeOff, contentDescription = "Sessiz", tint = Color(0xFFCBD5E1))
-            }
-            IconButton(onClick = { onConsumer(BluetoothHidManager.CONSUMER_VOL_DOWN) }, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.AutoMirrored.Filled.VolumeDown, contentDescription = "Sesi Azalt", tint = Color(0xFFCBD5E1))
-            }
-            IconButton(onClick = { onConsumer(BluetoothHidManager.CONSUMER_VOL_UP) }, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = "Sesi Artır", tint = Color(0xFFCBD5E1))
-            }
-            IconButton(onClick = { onConsumer(BluetoothHidManager.CONSUMER_PREV) }, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Default.SkipPrevious, contentDescription = "Önceki", tint = Color(0xFFCBD5E1))
-            }
-            IconButton(onClick = { onConsumer(BluetoothHidManager.CONSUMER_PLAY_PAUSE) }, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Default.PlayArrow, contentDescription = "Oynat / Duraklat", tint = NeonCyan)
-            }
-            IconButton(onClick = { onConsumer(BluetoothHidManager.CONSUMER_NEXT) }, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Default.SkipNext, contentDescription = "Sonraki", tint = Color(0xFFCBD5E1))
-            }
-        }
-    }
-}
-
-@Composable
-private fun ShortcutChip(
-    label: String,
-    isActive: Boolean = false,
-    onClick: () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = if (isActive) NeonCyan.copy(alpha = 0.2f) else Color(0xFF131D30),
-        border = BorderStroke(1.dp, if (isActive) NeonCyan else Color(0xFF283754)),
-        modifier = Modifier
-            .height(36.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable { onClick() }
-    ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.padding(horizontal = 10.dp)
-        ) {
-            Text(
-                text = label,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = if (isActive) NeonCyan else Color(0xFFE2E8F0)
-            )
-        }
-    }
-}
-
-@Composable
-private fun FullPcKeyboardDeck(
-    isCompact: Boolean,
-    isSymbolsPage: Boolean,
-    isShiftOnce: Boolean,
-    isCapsLock: Boolean,
-    isCtrlSticky: Boolean,
-    isAltSticky: Boolean,
-    isWinSticky: Boolean,
-    showFunctionRow: Boolean,
-    onToggleSymbols: () -> Unit,
-    onTapShift: () -> Unit,
-    onToggleCtrl: () -> Unit,
-    onToggleAlt: () -> Unit,
-    onToggleWin: () -> Unit,
-    onCharKey: (Char) -> Unit,
-    onSpecialKey: (Byte, Byte?) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val trLocale = remember { Locale("tr", "TR") }
-    val isUpper = isShiftOnce || isCapsLock
-
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(if (isCompact) 4.dp else 5.dp)
-    ) {
-        // Optional F1..F12 + Nav Row
-        AnimatedVisibility(visible = showFunctionRow) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    val fnKeys = listOf(
-                        "F1" to BluetoothHidManager.KEY_F1,
-                        "F2" to BluetoothHidManager.KEY_F2,
-                        "F3" to BluetoothHidManager.KEY_F3,
-                        "F4" to BluetoothHidManager.KEY_F4,
-                        "F5" to BluetoothHidManager.KEY_F5,
-                        "F6" to BluetoothHidManager.KEY_F6,
-                        "F7" to BluetoothHidManager.KEY_F7,
-                        "F8" to BluetoothHidManager.KEY_F8,
-                        "F9" to BluetoothHidManager.KEY_F9,
-                        "F10" to BluetoothHidManager.KEY_F10,
-                        "F11" to BluetoothHidManager.KEY_F11,
-                        "F12" to BluetoothHidManager.KEY_F12,
-                        "PrtSc" to BluetoothHidManager.KEY_PRINT_SCREEN,
-                        "Ins" to BluetoothHidManager.KEY_INSERT,
-                        "Del" to BluetoothHidManager.KEY_DELETE,
-                        "Home" to BluetoothHidManager.KEY_HOME,
-                        "End" to BluetoothHidManager.KEY_END,
-                        "PgUp" to BluetoothHidManager.KEY_PAGE_UP,
-                        "PgDn" to BluetoothHidManager.KEY_PAGE_DOWN
-                    )
-                    fnKeys.forEach { (label, code) ->
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF162136),
-                            border = BorderStroke(0.8.dp, Color(0xFF293855)),
-                            modifier = Modifier
-                                .height(34.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onSpecialKey(code, null) }
-                        ) {
-                            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 10.dp)) {
-                                Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFCBD5E1))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Number Row (when full keyboard mode and not compact)
-        if (!isCompact && !isSymbolsPage) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(0.95f),
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                listOf('1', '2', '3', '4', '5', '6', '7', '8', '9', '0').forEach { digit ->
-                    KeyCapButton(
-                        label = digit.toString(),
-                        onClick = { onCharKey(digit) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                    )
-                }
-            }
-        }
-
-        if (!isSymbolsPage) {
-            // Row 1: q w e r t y u ı o p ğ ü
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                listOf('q', 'w', 'e', 'r', 't', 'y', 'u', 'ı', 'o', 'p', 'ğ', 'ü').forEach { ch ->
-                    val label = if (isUpper) ch.toString().uppercase(trLocale) else ch.toString()
-                    KeyCapButton(
-                        label = label,
-                        onClick = { onCharKey(ch) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                    )
-                }
-            }
-
-            // Row 2: a s d f g h j k l ş i
-            Row(
+                },
+                label = "mode_carousel_content",
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                listOf('a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'ş', 'i').forEach { ch ->
-                    val label = if (isUpper) ch.toString().uppercase(trLocale) else ch.toString()
-                    KeyCapButton(
-                        label = label,
-                        onClick = { onCharKey(ch) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                    )
+            ) { tab ->
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    when (tab) {
+                        RemoteControlTab.KUMANDA -> {
+                            // Collapsible Gyro Calibration Drawer (hidden by default for maximum Touchpad!)
+                            AnimatedVisibility(
+                                visible = isGyroDrawerOpen || isAirMouseContinuous,
+                                enter = expandVertically(spring()) + fadeIn(),
+                                exit = shrinkVertically(spring()) + fadeOut()
+                            ) {
+                                GyroCalibrationDrawer(
+                                    isGyroSupported = airMouseController.isGyroSupported,
+                                    isContinuous = isAirMouseContinuous,
+                                    sensitivity = airSensitivity,
+                                    onToggleContinuous = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        isAirMouseContinuous = !isAirMouseContinuous
+                                    },
+                                    onSensitivityChanged = { next ->
+                                        airSensitivity = next
+                                        remotePrefs.edit().putFloat(PREF_AIR_SENSITIVITY, next).apply()
+                                    },
+                                    onRecalibrate = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        airMouseController.recalibrate()
+                                        Toast.makeText(context, "Jiroskop merkezlendi", Toast.LENGTH_SHORT).show()
+                                    }
+                                )
+                            }
+
+                            // Collapsible Media & TV Remote Deck (1-tap from Touchpad toolbar!)
+                            AnimatedVisibility(
+                                visible = isMediaDeckOpen,
+                                enter = expandVertically(spring()) + fadeIn(),
+                                exit = shrinkVertically(spring()) + fadeOut()
+                            ) {
+                                MediaRemoteDeckCard(
+                                    onConsumer = { usage ->
+                                        if (!hidManager.isHidHostConnected()) {
+                                            notifyDisconnected()
+                                            return@MediaRemoteDeckCard
+                                        }
+                                        coroutineScope.launch { hidManager.sendConsumerControl(usage) }
+                                    },
+                                    onFullscreenToggle = { sendSpecialKey(BluetoothHidManager.KEY_F, 0) },
+                                    onWindowSwitch = { sendSpecialKey(BluetoothHidManager.KEY_TAB, BluetoothHidManager.MODIFIER_LEFT_ALT) },
+                                    onEscape = { sendSpecialKey(BluetoothHidManager.KEY_ESCAPE, 0) }
+                                )
+                            }
+
+                            // Massive Glass Touchpad (~70% screen!)
+                            PrecisionTouchpadWithScroll(
+                                hidManager = hidManager,
+                                touchpadSpeed = touchpadSpeed,
+                                isPrecisionMode = isPrecisionMode,
+                                naturalScroll = naturalScroll,
+                                isDragLocked = isDragLocked,
+                                onSpeedChange = { next ->
+                                    touchpadSpeed = next
+                                    isPrecisionMode = false
+                                    remotePrefs.edit().putFloat(PREF_TOUCHPAD_SPEED, next).apply()
+                                },
+                                onTogglePrecisionMode = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    isPrecisionMode = !isPrecisionMode
+                                },
+                                onToggleNaturalScroll = {
+                                    naturalScroll = !naturalScroll
+                                    remotePrefs.edit().putBoolean(PREF_NATURAL_SCROLL, naturalScroll).apply()
+                                },
+                                onZoomWheel = ::handleZoomWheel,
+                                onThreeFingerSwipe = ::handleThreeFingerSwipe,
+                                onDisconnectedTap = ::notifyDisconnected,
+                                showToolbar = true,
+                                isMediaOpen = isMediaDeckOpen,
+                                onToggleMediaOpen = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    isMediaDeckOpen = !isMediaDeckOpen
+                                },
+                                isGyroDrawerOpen = isGyroDrawerOpen,
+                                isAirContinuous = isAirMouseContinuous,
+                                onToggleGyroDrawer = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    isGyroDrawerOpen = !isGyroDrawerOpen
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f)
+                            )
+
+                            // Ergonomic Bottom Thumb Action Bar: [Sol Tık] [🎯 Air Tut] [Sürükle] [Sağ Tık]
+                            ThumbMouseActionBar(
+                                isDragLocked = isDragLocked,
+                                isGyroSupported = airMouseController.isGyroSupported,
+                                isAirContinuous = isAirMouseContinuous,
+                                isAirHoldPressed = isAirHoldPressed,
+                                onLeftDownChange = { isDown ->
+                                    if (!hidManager.isHidHostConnected()) {
+                                        if (isDown) notifyDisconnected()
+                                        return@ThumbMouseActionBar
+                                    }
+                                    if (isDown && isDragLocked) isDragLocked = false
+                                    hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDown)
+                                },
+                                onAirHoldPressChange = { isDown ->
+                                    if (isDown && !hidManager.isHidHostConnected()) notifyDisconnected()
+                                    isAirHoldPressed = isDown
+                                },
+                                onToggleDragLock = {
+                                    if (!hidManager.isHidHostConnected()) {
+                                        notifyDisconnected()
+                                        return@ThumbMouseActionBar
+                                    }
+                                    isDragLocked = !isDragLocked
+                                    hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDragLocked)
+                                },
+                                onRightDownChange = { isDown ->
+                                    if (!hidManager.isHidHostConnected()) {
+                                        if (isDown) notifyDisconnected()
+                                        return@ThumbMouseActionBar
+                                    }
+                                    hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_RIGHT, isDown)
+                                }
+                            )
+                        }
+
+                        RemoteControlTab.KEYBOARD -> {
+                            // Upper Flexible Space: Live Mini-Touchpad + Native Typing + Shortcuts!
+                            // Lower Space: Fixed Natural-Height Ergonomic Keyboard (NO skyscraper keys!)
+                            PrecisionTouchpadWithScroll(
+                                hidManager = hidManager,
+                                touchpadSpeed = touchpadSpeed,
+                                isPrecisionMode = isPrecisionMode,
+                                naturalScroll = naturalScroll,
+                                isDragLocked = isDragLocked,
+                                onSpeedChange = { next ->
+                                    touchpadSpeed = next
+                                    isPrecisionMode = false
+                                    remotePrefs.edit().putFloat(PREF_TOUCHPAD_SPEED, next).apply()
+                                },
+                                onTogglePrecisionMode = { isPrecisionMode = !isPrecisionMode },
+                                onToggleNaturalScroll = {
+                                    naturalScroll = !naturalScroll
+                                    remotePrefs.edit().putBoolean(PREF_NATURAL_SCROLL, naturalScroll).apply()
+                                },
+                                onZoomWheel = ::handleZoomWheel,
+                                onThreeFingerSwipe = ::handleThreeFingerSwipe,
+                                onDisconnectedTap = ::notifyDisconnected,
+                                showToolbar = false,
+                                compactHint = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f)
+                                    .heightIn(min = 84.dp)
+                            )
+
+                            QuickTextAndClipboardBar(
+                                textValue = quickSendBuffer,
+                                onTextChanged = { quickSendBuffer = it },
+                                onPasteClipboardToPc = ::pasteClipboardToPc,
+                                onSendText = { appendEnter ->
+                                    val text = quickSendBuffer
+                                    if (text.isEmpty()) return@QuickTextAndClipboardBar
+                                    if (!hidManager.isHidHostConnected()) {
+                                        notifyDisconnected()
+                                        return@QuickTextAndClipboardBar
+                                    }
+                                    quickSendBuffer = ""
+                                    sendTextString(
+                                        text = text,
+                                        endingKey = if (appendEnter) KeyboardEndingKey.ENTER else KeyboardEndingKey.NONE
+                                    )
+                                }
+                            )
+
+                            PcShortcutsRibbon(
+                                showFunctionRow = showFunctionRow,
+                                onToggleFunctionRow = { showFunctionRow = !showFunctionRow },
+                                useWideTenColLayout = useWideTenColLayout,
+                                onToggleWideLayout = {
+                                    useWideTenColLayout = !useWideTenColLayout
+                                    remotePrefs.edit().putBoolean(PREF_WIDE_TEN_COL, useWideTenColLayout).apply()
+                                },
+                                onSpecialKey = { code, mods -> sendSpecialKey(code, mods) }
+                            )
+
+                            FullPcKeyboardDeck(
+                                activePage = keyboardPage,
+                                useWideTenColLayout = useWideTenColLayout,
+                                isShiftOnce = isShiftOnce,
+                                isCapsLock = isCapsLock,
+                                ctrlState = ctrlState,
+                                altState = altState,
+                                winState = winState,
+                                showFunctionRow = showFunctionRow,
+                                onSelectPage = { keyboardPage = it },
+                                onTapShift = {
+                                    if (isCapsLock) {
+                                        isCapsLock = false
+                                        isShiftOnce = false
+                                    } else if (isShiftOnce) {
+                                        isCapsLock = true
+                                    } else {
+                                        isShiftOnce = true
+                                    }
+                                },
+                                onTapCtrl = { ctrlState = ctrlState.nextTap() },
+                                onTapAlt = { altState = altState.nextTap() },
+                                onTapWin = { winState = winState.nextTap() },
+                                onCharKey = { sendCharKey(it) },
+                                onSpecialKey = { code, mods -> sendSpecialKey(code, mods) }
+                            )
+                        }
+
+                        RemoteControlTab.NUMPAD -> {
+                            StandaloneNumpadDeck(
+                                recentTape = numpadTape,
+                                onClearTape = { numpadTape = "" },
+                                onPasteClipboardToPc = ::pasteClipboardToPc,
+                                onCharKey = { sendCharKey(it, trackInNumpadTape = true) },
+                                onStringKeys = { str ->
+                                    numpadTape = (numpadTape + str).takeLast(24)
+                                    sendTextString(str)
+                                },
+                                onSpecialKey = { code, mods -> sendSpecialKey(code, mods, trackNumpadTape = true) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f)
+                            )
+                        }
+
+                        RemoteControlTab.GAMEPAD -> {
+                            RemoteGamePadDeck(
+                                hidManager = hidManager,
+                                isGyroAimEnabled = isGameGyroAimEnabled,
+                                isLandscapeLocked = isGameLandscapeLocked,
+                                onToggleGyroAim = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    if (!airMouseController.isGyroSupported) {
+                                        Toast.makeText(context, "Bu cihazda jiroskop sensörü yok", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        isGameGyroAimEnabled = !isGameGyroAimEnabled
+                                        if (isGameGyroAimEnabled) {
+                                            airMouseController.recalibrate()
+                                        }
+                                    }
+                                },
+                                onToggleLandscape = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    isGameLandscapeLocked = !isGameLandscapeLocked
+                                },
+                                onDisconnectedTap = ::notifyDisconnected,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f)
+                            )
+                        }
+                    }
                 }
             }
+        }
+    }
 
-            // Row 3: [⇧] z x c v b n m ö ç [⌫]
+    if (showGestureGuide) {
+        TouchpadGestureGuideDialog(onDismiss = { showGestureGuide = false })
+    }
+}
+
+/**
+ * Single-row, zero-duplication Cockpit HUD Top Bar:
+ * [QR] [PC Bağla / Connected PC Orb] [🔒] [🔊/🎮] [⚙] [?]
+ * PC Bluetooth is the centerpiece; QR Scanner is 1 tap away as a clean side feature.
+ */
+@Composable
+private fun RemoteSlimHudTopBar(
+    connectionStatus: HidConnectionStatus,
+    connectedDeviceName: String?,
+    modeAccent: Color,
+    isLockScreenEnabled: Boolean,
+    isVolumeControlActive: Boolean,
+    isGameMode: Boolean,
+    showDiagnostics: Boolean,
+    onOpenQrScanner: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenBluetoothSheet: () -> Unit,
+    onToggleLockScreen: () -> Unit,
+    onToggleVolumeKeys: () -> Unit,
+    onToggleDiagnostics: () -> Unit,
+    onOpenGestureGuide: () -> Unit
+) {
+    val isConnected = connectionStatus == HidConnectionStatus.CONNECTED
+    val pulseTransition = rememberInfiniteTransition(label = "bt_orb_pulse")
+    val orbAlpha by pulseTransition.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1050),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "bt_orb_alpha"
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .height(46.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        // Side Feature: 1-Tap QR Scanner Launch
+        HudQuickToggleButton(
+            icon = Icons.Default.QrCodeScanner,
+            contentDescription = "QR Okuyucu",
+            isActive = false,
+            activeColor = NeonCyan,
+            onClick = onOpenQrScanner,
+            modifier = Modifier.testTag("remote_qr_scanner_btn")
+        )
+
+        // Glowing Bluetooth PC Connection Pill (Zero duplicate second banner!)
+        val pillAccent = if (isConnected) NeonCyan else AmberGold
+        Surface(
+            shape = RoundedCornerShape(22.dp),
+            color = if (isConnected) Color(0xFF0E1C2E) else Color(0xFF251C08),
+            border = BorderStroke(
+                width = if (isConnected) 1.dp else 1.2.dp,
+                color = pillAccent.copy(alpha = if (isConnected) 0.6f else 0.85f)
+            ),
+            modifier = Modifier
+                .weight(1f)
+                .height(40.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .clickable(onClick = onOpenBluetoothSheet)
+                .testTag("remote_bt_status_btn")
+        ) {
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    .fillMaxSize()
+                    .padding(horizontal = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
             ) {
-                KeyCapButton(
-                    label = if (isCapsLock) "⇪" else "⇧",
-                    bgColor = when {
-                        isCapsLock -> NeonCyan
-                        isShiftOnce -> Color(0xFF183A38)
-                        else -> Color(0xFF131C2D)
-                    },
-                    fgColor = when {
-                        isCapsLock -> Color(0xFF042F2E)
-                        isShiftOnce -> NeonCyan
-                        else -> Color(0xFFCBD5E1)
-                    },
-                    onClick = onTapShift,
+                Box(
                     modifier = Modifier
-                        .weight(1.35f)
-                        .fillMaxHeight()
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(pillAccent.copy(alpha = orbAlpha))
                 )
-                listOf('z', 'x', 'c', 'v', 'b', 'n', 'm', 'ö', 'ç').forEach { ch ->
-                    val label = if (isUpper) ch.toString().uppercase(trLocale) else ch.toString()
-                    KeyCapButton(
-                        label = label,
-                        onClick = { onCharKey(ch) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                    )
-                }
-                KeyCapButton(
-                    label = "⌫",
-                    bgColor = Color(0xFF131C2D),
-                    fgColor = Color(0xFFCBD5E1),
-                    onClick = { onSpecialKey(BluetoothHidManager.KEY_BACKSPACE, 0) },
-                    modifier = Modifier
-                        .weight(1.35f)
-                        .fillMaxHeight()
+                Text(
+                    text = when (connectionStatus) {
+                        HidConnectionStatus.CONNECTED -> connectedDeviceName ?: "Bilgisayar"
+                        HidConnectionStatus.CONNECTING -> "Bağlanıyor..."
+                        else -> "PC Bağla"
+                    },
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (isConnected) Color.White else AmberGold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Default.Bluetooth,
+                    contentDescription = "Bluetooth Bağlantısı",
+                    tint = pillAccent,
+                    modifier = Modifier.size(15.dp)
                 )
             }
+        }
+
+        // Lock-Screen + Keep-Awake Toggle
+        HudQuickToggleButton(
+            icon = if (isLockScreenEnabled) Icons.Default.LockOpen else Icons.Default.Lock,
+            contentDescription = if (isLockScreenEnabled) "Kilit Ekranında Aktif" else "Kilit Ekranı Modu Kapalı",
+            isActive = isLockScreenEnabled,
+            activeColor = NeonCyan,
+            onClick = onToggleLockScreen,
+            modifier = Modifier.testTag("remote_lockscreen_toggle_btn")
+        )
+
+        // Hardware Volume Keys -> PC Volume / Game Trigger Toggle
+        HudQuickToggleButton(
+            icon = if (isGameMode && isVolumeControlActive) Icons.Default.SportsEsports else Icons.AutoMirrored.Filled.VolumeUp,
+            contentDescription = if (isGameMode) "Ses Tuşları Oyun Tetiği" else "Ses Tuşları PC Sesi",
+            isActive = isVolumeControlActive,
+            activeColor = if (isGameMode) AccentCoral else AmberGold,
+            onClick = onToggleVolumeKeys,
+            modifier = Modifier.testTag("remote_volume_keys_toggle_btn")
+        )
+
+        // Connected Diagnostics OR Settings
+        if (isConnected) {
+            HudQuickToggleButton(
+                icon = Icons.Default.Tune,
+                contentDescription = "HID Durum ve Yenileme",
+                isActive = showDiagnostics,
+                activeColor = modeAccent,
+                onClick = onToggleDiagnostics,
+                modifier = Modifier.testTag("remote_diagnostics_toggle_btn")
+            )
         } else {
-            // Symbols & Punctuation Rows
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                listOf('1', '2', '3', '4', '5', '6', '7', '8', '9', '0').forEach { sym ->
-                    KeyCapButton(sym.toString(), { onCharKey(sym) }, Modifier.weight(1f).fillMaxHeight())
-                }
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                listOf('-', '/', ':', ';', '(', ')', '&', '@', '"', '=').forEach { sym ->
-                    KeyCapButton(sym.toString(), { onCharKey(sym) }, Modifier.weight(1f).fillMaxHeight())
-                }
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                listOf('_', '+', '*', '%', '?', '!', '\'', '\\').forEach { sym ->
-                    KeyCapButton(sym.toString(), { onCharKey(sym) }, Modifier.weight(1f).fillMaxHeight())
-                }
-                KeyCapButton(
-                    label = "⌫",
-                    bgColor = Color(0xFF131C2D),
-                    fgColor = Color(0xFFCBD5E1),
-                    onClick = { onSpecialKey(BluetoothHidManager.KEY_BACKSPACE, 0) },
-                    modifier = Modifier.weight(1.5f).fillMaxHeight()
-                )
-            }
-        }
-
-        // Modifier + Arrow Row: [Ctrl] [Alt] [⊞ Win] [←] [↑] [↓] [→] [Del]
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(0.95f),
-            horizontalArrangement = Arrangement.spacedBy(3.dp)
-        ) {
-            KeyCapButton(
-                label = "Ctrl",
-                bgColor = if (isCtrlSticky) NeonCyan else Color(0xFF131C2D),
-                fgColor = if (isCtrlSticky) Color(0xFF042F2E) else Color(0xFFCBD5E1),
-                fontSizeSp = 11.5f,
-                onClick = onToggleCtrl,
-                modifier = Modifier.weight(1.1f).fillMaxHeight()
-            )
-            KeyCapButton(
-                label = "Alt",
-                bgColor = if (isAltSticky) NeonCyan else Color(0xFF131C2D),
-                fgColor = if (isAltSticky) Color(0xFF042F2E) else Color(0xFFCBD5E1),
-                fontSizeSp = 11.5f,
-                onClick = onToggleAlt,
-                modifier = Modifier.weight(1.0f).fillMaxHeight()
-            )
-            KeyCapButton(
-                label = "⊞",
-                bgColor = if (isWinSticky) NeonCyan else Color(0xFF131C2D),
-                fgColor = if (isWinSticky) Color(0xFF042F2E) else Color(0xFFCBD5E1),
-                fontSizeSp = 13f,
-                onClick = onToggleWin,
-                modifier = Modifier.weight(0.95f).fillMaxHeight()
-            )
-            KeyCapButton(
-                label = "←",
-                bgColor = Color(0xFF172235),
-                fgColor = Color.White,
-                onClick = { onSpecialKey(BluetoothHidManager.KEY_LEFT, null) },
-                modifier = Modifier.weight(0.95f).fillMaxHeight()
-            )
-            KeyCapButton(
-                label = "↑",
-                bgColor = Color(0xFF172235),
-                fgColor = Color.White,
-                onClick = { onSpecialKey(BluetoothHidManager.KEY_UP, null) },
-                modifier = Modifier.weight(0.95f).fillMaxHeight()
-            )
-            KeyCapButton(
-                label = "↓",
-                bgColor = Color(0xFF172235),
-                fgColor = Color.White,
-                onClick = { onSpecialKey(BluetoothHidManager.KEY_DOWN, null) },
-                modifier = Modifier.weight(0.95f).fillMaxHeight()
-            )
-            KeyCapButton(
-                label = "→",
-                bgColor = Color(0xFF172235),
-                fgColor = Color.White,
-                onClick = { onSpecialKey(BluetoothHidManager.KEY_RIGHT, null) },
-                modifier = Modifier.weight(0.95f).fillMaxHeight()
-            )
-            KeyCapButton(
-                label = "Del",
-                bgColor = Color(0xFF131C2D),
-                fgColor = Color(0xFFEF4444),
-                fontSizeSp = 11f,
-                onClick = { onSpecialKey(BluetoothHidManager.KEY_DELETE, null) },
-                modifier = Modifier.weight(1.0f).fillMaxHeight()
+            HudQuickToggleButton(
+                icon = Icons.Default.Settings,
+                contentDescription = "Ayarlar",
+                isActive = false,
+                activeColor = modeAccent,
+                onClick = onOpenSettings,
+                modifier = Modifier.testTag("remote_settings_btn")
             )
         }
 
-        // Bottom Row: [?123] [⇥] [,] [Boşluk] [.] [↵]
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(3.dp)
-        ) {
-            KeyCapButton(
-                label = if (isSymbolsPage) "ABC" else "?123",
-                bgColor = Color(0xFF131C2D),
-                fgColor = Color(0xFFCBD5E1),
-                fontSizeSp = 12f,
-                onClick = onToggleSymbols,
-                modifier = Modifier.weight(1.35f).fillMaxHeight()
-            )
-            KeyCapButton(
-                label = "⇥",
-                bgColor = Color(0xFF131C2D),
-                fgColor = Color(0xFFCBD5E1),
-                onClick = { onSpecialKey(BluetoothHidManager.KEY_TAB, null) },
-                modifier = Modifier.weight(1.0f).fillMaxHeight()
-            )
-            KeyCapButton(
-                label = ",",
-                onClick = { onCharKey(',') },
-                modifier = Modifier.weight(0.85f).fillMaxHeight()
-            )
-            KeyCapButton(
-                label = "Boşluk",
-                bgColor = Color(0xFF1E293B),
-                fgColor = Color(0xFF94A3B8),
-                fontSizeSp = 12f,
-                onClick = { onCharKey(' ') },
-                modifier = Modifier.weight(3.2f).fillMaxHeight()
-            )
-            KeyCapButton(
-                label = ".",
-                onClick = { onCharKey('.') },
-                modifier = Modifier.weight(0.85f).fillMaxHeight()
-            )
-            KeyCapButton(
-                label = "↵",
-                bgColor = NeonCyan,
-                fgColor = Color(0xFF00382E),
-                fontSizeSp = 16f,
-                onClick = { onSpecialKey(BluetoothHidManager.KEY_ENTER, null) },
-                modifier = Modifier.weight(1.5f).fillMaxHeight()
-            )
-        }
+        // Single Gesture & Shortcuts Guide icon
+        HudQuickToggleButton(
+            icon = Icons.Default.HelpOutline,
+            contentDescription = "Hareket Rehberi",
+            isActive = false,
+            activeColor = modeAccent,
+            onClick = onOpenGestureGuide,
+            modifier = Modifier.testTag("remote_help_guide_btn")
+        )
     }
 }
 
 @Composable
-private fun KeyCapButton(
-    label: String,
+private fun HudQuickToggleButton(
+    icon: ImageVector,
+    contentDescription: String,
+    isActive: Boolean,
+    activeColor: Color,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    bgColor: Color = Color(0xFF1B2436),
-    fgColor: Color = Color(0xFFF8FAFC),
-    fontSizeSp: Float = 14.5f
+    modifier: Modifier = Modifier
 ) {
-    val interaction = remember { MutableInteractionSource() }
-    val isPressed by interaction.collectIsPressedAsState()
-
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = if (isPressed) Color(0xFF334155) else bgColor,
+    val bg by animateColorAsState(
+        targetValue = if (isActive) activeColor.copy(alpha = 0.2f) else Color(0xFF121C2F),
+        label = "hud_toggle_bg"
+    )
+    val border by animateColorAsState(
+        targetValue = if (isActive) activeColor.copy(alpha = 0.85f) else ObsidianBorder,
+        label = "hud_toggle_border"
+    )
+    Box(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .size(39.dp)
+            .clip(CircleShape)
+            .background(bg)
+            .border(1.dp, border, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
     ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 2.dp)) {
-            Text(
-                text = label,
-                fontSize = fontSizeSp.sp,
-                fontWeight = FontWeight.Bold,
-                color = fgColor,
-                maxLines = 1
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (isActive) activeColor else Color(0xFF94A3B8),
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+/**
+ * Swipe-to-Rotate ("Döndür") Floating Glassmorphic Bottom 4-Mode Dock:
+ * - Swipe left/right anywhere along the dock pill to smoothly rotate Kumanda ↔ Klavye ↔ 123 ↔ Oyun!
+ * - Or tap any mode directly, OR tap the circular ⟲ Döndür button on the right to instant-cycle with 1 thumb!
+ */
+@Composable
+private fun SwipeableRotateModeDock(
+    selectedTab: RemoteControlTab,
+    onSelectTab: (RemoteControlTab) -> Unit,
+    onRotateStep: (Int) -> Unit
+) {
+    val density = LocalDensity.current
+    val swipeThresholdPx = with(density) { 42.dp.toPx() }
+    val latestOnRotate by rememberUpdatedState(onRotateStep)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        ObsidianDeep.copy(alpha = 0.94f),
+                        ObsidianDeep
+                    )
+                )
             )
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = ObsidianSurface.copy(alpha = 0.96f),
+            border = BorderStroke(1.dp, ObsidianBorder),
+            shadowElevation = 10.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .pointerInput(swipeThresholdPx) {
+                    var dragAccum = 0f
+                    var triggered = false
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            dragAccum = 0f
+                            triggered = false
+                        },
+                        onDragEnd = {
+                            dragAccum = 0f
+                            triggered = false
+                        },
+                        onDragCancel = {
+                            dragAccum = 0f
+                            triggered = false
+                        }
+                    ) { change, dragAmount ->
+                        change.consume()
+                        if (triggered) return@detectHorizontalDragGestures
+                        dragAccum += dragAmount
+                        if (dragAccum >= swipeThresholdPx) {
+                            triggered = true
+                            latestOnRotate(1)
+                        } else if (dragAccum <= -swipeThresholdPx) {
+                            triggered = true
+                            latestOnRotate(-1)
+                        }
+                    }
+                }
+                .testTag("remote_swipe_mode_dock")
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RemoteControlTab.entries.forEach { tab ->
+                    val isSelected = selectedTab == tab
+                    val itemBg by animateColorAsState(
+                        targetValue = if (isSelected) tab.accent.copy(alpha = 0.18f) else Color.Transparent,
+                        animationSpec = spring(),
+                        label = "dock_bg_${tab.name}"
+                    )
+                    val itemBorder by animateColorAsState(
+                        targetValue = if (isSelected) tab.accent.copy(alpha = 0.78f) else Color.Transparent,
+                        animationSpec = spring(),
+                        label = "dock_border_${tab.name}"
+                    )
+                    val iconScale by animateFloatAsState(
+                        targetValue = if (isSelected) 1.12f else 1f,
+                        animationSpec = spring(dampingRatio = 0.6f, stiffness = 500f),
+                        label = "dock_scale_${tab.name}"
+                    )
+
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(50.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(itemBg)
+                            .border(1.dp, itemBorder, RoundedCornerShape(18.dp))
+                            .clickable { onSelectTab(tab) }
+                            .testTag("remote_tab_${tab.name.lowercase(Locale.ROOT)}")
+                    ) {
+                        Icon(
+                            imageVector = tab.icon,
+                            contentDescription = tab.title,
+                            tint = if (isSelected) tab.accent else Color(0xFF8396B2),
+                            modifier = Modifier
+                                .size(19.dp)
+                                .scale(iconScale)
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = tab.title,
+                            fontSize = 10.sp,
+                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                            color = if (isSelected) tab.accent else Color(0xFF94A3B8),
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                // 1-Tap Tactile "Döndür" (Mode Cycle) Thumb Button
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(CircleShape)
+                        .background(selectedTab.accent.copy(alpha = 0.16f))
+                        .border(1.dp, selectedTab.accent.copy(alpha = 0.65f), CircleShape)
+                        .clickable { onRotateStep(1) }
+                        .testTag("remote_rotate_mode_btn"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Autorenew,
+                        contentDescription = "Modu Döndür",
+                        tint = selectedTab.accent,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
         }
     }
 }

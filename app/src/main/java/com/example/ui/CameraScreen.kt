@@ -87,6 +87,9 @@ fun CameraScreen(
     onOpenRemoteControl: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    androidx.activity.compose.BackHandler {
+        onOpenRemoteControl()
+    }
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
