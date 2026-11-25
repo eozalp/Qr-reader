@@ -214,7 +214,7 @@ fun GlobalVariablesCard(
                                     OutlinedTextField(
                                         value = newName,
                                         onValueChange = { next ->
-                                            newName = next.filter { it.isLetterOrDigit() || it == '_' }.lowercase()
+                                            newName = next.filter { it.isLetterOrDigit() || it == '_' }.lowercase(java.util.Locale.ROOT)
                                         },
                                         label = { Text("Ad (@ olmadan)") },
                                         placeholder = { Text("örn. euro") },

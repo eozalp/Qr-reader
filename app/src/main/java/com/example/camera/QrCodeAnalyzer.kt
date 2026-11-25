@@ -21,8 +21,45 @@ class QrCodeAnalyzer(
     private val onBarcodesDetected: (List<RawDetectedCode>) -> Unit
 ) : ImageAnalysis.Analyzer {
 
+    private class ManagedScanner(val scanner: BarcodeScanner) {
+        private val inFlight = java.util.concurrent.atomic.AtomicInteger(0)
+        private val closeRequested = AtomicBoolean(false)
+        private val closed = AtomicBoolean(false)
+
+        fun tryAcquire(): Boolean {
+            if (closeRequested.get()) return false
+            inFlight.incrementAndGet()
+            if (closeRequested.get()) {
+                release()
+                return false
+            }
+            return true
+        }
+
+        fun release() {
+            val remaining = inFlight.decrementAndGet()
+            if (remaining <= 0 && closeRequested.get()) {
+                closeNow()
+            }
+        }
+
+        fun requestClose() {
+            closeRequested.set(true)
+            if (inFlight.get() <= 0) {
+                closeNow()
+            }
+        }
+
+        private fun closeNow() {
+            if (closed.compareAndSet(false, true)) {
+                runCatching { scanner.close() }
+                    .onFailure { AppDebugLogger.w("CAM-QR", "Scanner kapatma uyarısı", it) }
+            }
+        }
+    }
+
     @Volatile
-    private var currentScanner: BarcodeScanner = createScanner(listOf(Barcode.FORMAT_ALL_FORMATS))
+    private var currentScanner: ManagedScanner = ManagedScanner(createScanner(listOf(Barcode.FORMAT_ALL_FORMATS)))
 
     @Volatile
     private var activeFormats: List<Int> = listOf(Barcode.FORMAT_ALL_FORMATS)
@@ -53,8 +90,7 @@ class QrCodeAnalyzer(
 
     fun close() {
         isClosed.set(true)
-        runCatching { currentScanner.close() }
-            .onFailure { AppDebugLogger.w("CAM-QR", "Scanner kapatma uyarısı", it) }
+        currentScanner.requestClose()
     }
 
     fun updateBarcodeFormats(
@@ -64,12 +100,11 @@ class QrCodeAnalyzer(
     ) {
         val effective = BarcodeCatalog.resolveEffectiveFormats(preset, customFormats)
         enableInvertedDetection = enableInverted
-        if (effective != activeFormats) {
+        if (effective != activeFormats && !isClosed.get()) {
             activeFormats = effective
             val oldScanner = currentScanner
-            currentScanner = createScanner(effective)
-            runCatching { oldScanner.close() }
-                .onFailure { AppDebugLogger.w("CAM-QR", "Eski scanner kapatma uyarısı", it) }
+            currentScanner = ManagedScanner(createScanner(effective))
+            oldScanner.requestClose()
         }
     }
 
@@ -104,6 +139,12 @@ class QrCodeAnalyzer(
         }
         lastAnalyzedTimeMs = currentTime
 
+        val managed = currentScanner
+        if (!managed.tryAcquire()) {
+            imageProxy.close()
+            return
+        }
+
         val rotationDegrees = imageProxy.imageInfo.rotationDegrees
         val image = InputImage.fromMediaImage(mediaImage, rotationDegrees)
 
@@ -117,8 +158,9 @@ class QrCodeAnalyzer(
         val shouldCheckInverted = enableInvertedDetection && (frameCounter % invertedFrequency == 0)
 
         var handedOffToInverted = false
-        currentScanner.process(image)
+        managed.scanner.process(image)
             .addOnSuccessListener { barcodes ->
+                if (isClosed.get()) return@addOnSuccessListener
                 if (barcodes.isNotEmpty()) {
                     val detectedList = mutableListOf<RawDetectedCode>()
                     for (barcode in barcodes) {
@@ -153,9 +195,12 @@ class QrCodeAnalyzer(
                 }
             }
             .addOnFailureListener { err ->
-                AppDebugLogger.w("CAM-QR", "ML Kit barkod tarama hatası", err)
+                if (!isClosed.get()) {
+                    AppDebugLogger.w("CAM-QR", "ML Kit barkod tarama hatası", err)
+                }
             }
             .addOnCompleteListener {
+                managed.release()
                 if (!handedOffToInverted) {
                     imageProxy.close()
                 }
@@ -176,6 +221,11 @@ class QrCodeAnalyzer(
             return false
         }
         val mediaImage = imageProxy.image ?: run {
+            isProcessingInverted.set(false)
+            return false
+        }
+        val managed = currentScanner
+        if (!managed.tryAcquire()) {
             isProcessingInverted.set(false)
             return false
         }
@@ -215,8 +265,9 @@ class QrCodeAnalyzer(
                 InputImage.IMAGE_FORMAT_NV21
             )
 
-            currentScanner.process(invertedImage)
+            managed.scanner.process(invertedImage)
                 .addOnSuccessListener { barcodes ->
+                    if (isClosed.get()) return@addOnSuccessListener
                     val detectedList = mutableListOf<RawDetectedCode>()
                     for (barcode in barcodes) {
                         val rawVal = barcode.rawValue ?: continue
@@ -241,12 +292,14 @@ class QrCodeAnalyzer(
                     }
                 }
                 .addOnCompleteListener {
+                    managed.release()
                     isProcessingInverted.set(false)
                     imageProxy.close()
                 }
             return true
         } catch (e: Exception) {
             AppDebugLogger.w("CAM-QR", "Ters renk kare işleme hatası", e)
+            managed.release()
             isProcessingInverted.set(false)
             imageProxy.close()
             return true

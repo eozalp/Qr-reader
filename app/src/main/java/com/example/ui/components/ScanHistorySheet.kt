@@ -221,22 +221,40 @@ fun ScanHistorySheet(
                             coroutineScope.launch {
                                 try {
                                     var sentRows = 0
+                                    var aborted = false
                                     for (row in cartItems) {
+                                        if (!hidManager.isHidHostConnected()) {
+                                            aborted = true
+                                            break
+                                        }
                                         val cols = ScanCartAggregator.buildExcelColumns(row)
                                         for (colIdx in cols.indices) {
                                             val endKey = if (colIdx < cols.lastIndex) KeyboardEndingKey.TAB else KeyboardEndingKey.ENTER
-                                            hidManager.sendToComputer(
+                                            val ok = hidManager.sendToComputer(
                                                 textToSend = cols[colIdx],
                                                 endingKey = endKey,
                                                 typingDelayMs = keyboardConfig.typingDelayMs,
                                                 convertTurkishChars = keyboardConfig.convertTurkishChars,
                                                 keyboardLayout = keyboardConfig.keyboardLayout
                                             )
+                                            if (!ok) {
+                                                aborted = true
+                                                break
+                                            }
                                             delay(35L)
                                         }
+                                        if (aborted) break
                                         sentRows++
                                     }
-                                    Toast.makeText(context, "$sentRows satır PC Excel'e aktarıldı!", Toast.LENGTH_SHORT).show()
+                                    if (aborted) {
+                                        Toast.makeText(
+                                            context,
+                                            "PC Bluetooth bağlantısı kesildi ($sentRows/${cartItems.size} satır gönderildi)",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    } else {
+                                        Toast.makeText(context, "$sentRows satır PC Excel'e aktarıldı!", Toast.LENGTH_SHORT).show()
+                                    }
                                 } catch (err: Exception) {
                                     AppDebugLogger.e("HISTORY", "Toplu Excel BT gönderim hatası", err)
                                     Toast.makeText(context, "PC aktarımı kesildi: ${err.message}", Toast.LENGTH_LONG).show()

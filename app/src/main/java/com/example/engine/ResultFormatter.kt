@@ -126,11 +126,8 @@ object ResultFormatter {
         if (value.isNaN()) return "NaN"
         if (value.isInfinite()) return if (value > 0) "+Infinity" else "-Infinity"
 
-        val isNegative = value < 0
-        val absValue = abs(value)
-
-        val roundedBigDecimal: BigDecimal = try {
-            val bd = BigDecimal.valueOf(absValue)
+        val signedRounded: BigDecimal = try {
+            val bd = BigDecimal.valueOf(value)
             when (roundingMode) {
                 AppRoundingMode.NO_ROUNDING -> bd.setScale(precision, RoundingMode.HALF_UP)
                 AppRoundingMode.ROUND_HALF_UP -> bd.setScale(precision, RoundingMode.HALF_UP)
@@ -141,10 +138,11 @@ object ResultFormatter {
                 AppRoundingMode.TRUNCATE -> bd.setScale(precision, RoundingMode.DOWN)
             }
         } catch (_: Exception) {
-            BigDecimal.valueOf(absValue).setScale(precision, RoundingMode.HALF_UP)
+            BigDecimal.valueOf(value).setScale(precision, RoundingMode.HALF_UP)
         }
 
-        val plainStr = roundedBigDecimal.toPlainString()
+        val isActuallyNegative = signedRounded.signum() < 0
+        val plainStr = signedRounded.abs().toPlainString()
         val parts = plainStr.split('.')
         var integerPart = parts[0]
         val fractionalPart = if (parts.size > 1) parts[1] else ""
@@ -170,8 +168,8 @@ object ResultFormatter {
             groupedIntegerPart
         }
 
-        // Negative sign & Prefix/Postfix
-        return if (isNegative && absValue > 1e-12) {
+        // Negative sign & Prefix/Postfix (never renders "-0.00" when rounded value is zero)
+        return if (isActuallyNegative) {
             when (negativeFormat) {
                 "(x)" -> "($prefix$formattedNumber$postfix)"
                 "-prefix" -> "-$prefix$formattedNumber$postfix"

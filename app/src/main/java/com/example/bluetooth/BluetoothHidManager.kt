@@ -83,6 +83,7 @@ data class HidProtocolTelemetry(
     val keyboardReportsFailed: Long = 0L,
     val mouseReportsSent: Long = 0L,
     val mouseReportsFailed: Long = 0L,
+    val hostAckCount: Long = 0L,
     val lastFailureReason: String? = null
 )
 
@@ -744,26 +745,37 @@ class BluetoothHidManager(private val context: Context? = null) {
     @SuppressLint("MissingPermission")
     fun setHidProfileMode(mode: HidProfileMode) {
         if (_hidProfileMode.value == mode) return
+        val previousHostAddress = connectedHostDevice?.address
         _hidProfileMode.value = mode
         prefs?.edit()?.putString(KEY_HID_PROFILE_MODE, mode.name)?.apply()
         compatFallbackTriedForAddress.clear()
-        AppDebugLogger.i("BT-HID", "HID profil modu değiştirildi: ${mode.label}")
-        reregisterHidProfile()
+        AppDebugLogger.i(
+            "BT-HID",
+            "HID profil modu değiştirildi: ${mode.label} (autoReconnect=${previousHostAddress ?: "yok"})"
+        )
+        reregisterHidProfile(reconnectAddress = previousHostAddress)
     }
 
     @SuppressLint("MissingPermission")
-    fun reregisterHidProfile() {
+    fun reregisterHidProfile(reconnectAddress: String? = null) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !hasBluetoothPermissions()) return
-        AppDebugLogger.i("BT-HID", "Kullanıcı tarafından tam HID Proxy + Profil Sıfırlama tetiklendi (mode=${_hidProfileMode.value})")
+        AppDebugLogger.i(
+            "BT-HID",
+            "Kullanıcı tarafından tam HID Proxy + Profil Sıfırlama tetiklendi (mode=${_hidProfileMode.value}, reconnect=${reconnectAddress ?: "yok"})"
+        )
         connectAttemptSeq.incrementAndGet()
         cancelConnectWatchdog()
         cancelRegisterWatchdog()
-        pendingConnectAddress = null
+        pendingConnectAddress = reconnectAddress
         compatFallbackTriedForAddress.clear()
-        _connectionStatus.value = HidConnectionStatus.DISCONNECTED
-        _connectionDiagnostic.value = "Bluetooth HID servisi sıfırlanıyor..."
+        _connectionStatus.value = if (reconnectAddress != null) HidConnectionStatus.CONNECTING else HidConnectionStatus.DISCONNECTED
+        _connectionDiagnostic.value = if (reconnectAddress != null) {
+            "HID profili '${_hidProfileMode.value.label}' olarak yenilenip tekrar bağlanılıyor..."
+        } else {
+            "Bluetooth HID servisi sıfırlanıyor..."
+        }
         controlExecutor.execute {
-            rebindHidProxyInternal()
+            rebindHidProxyInternal(keepPendingAddress = reconnectAddress)
         }
     }
 
@@ -970,7 +982,8 @@ class BluetoothHidManager(private val context: Context? = null) {
                         else -> 8
                     }
                     val safeSize = if (bufferSize > 0) minOf(baseSize, bufferSize) else baseSize
-                    AppDebugLogger.d("BT-HID", "onGetReport type=$type id=$id buf=$bufferSize replySize=$safeSize boot=$isBootProtocolMode")
+                    _telemetry.value = _telemetry.value.copy(hostAckCount = _telemetry.value.hostAckCount + 1L)
+                    AppDebugLogger.i("BT-HID", "onGetReport type=$type id=$id buf=$bufferSize replySize=$safeSize boot=$isBootProtocolMode")
                     runCatching {
                         hidDeviceProfile?.replyReport(device, type, id, ByteArray(safeSize))
                     }.onFailure { err ->
@@ -984,13 +997,33 @@ class BluetoothHidManager(private val context: Context? = null) {
                     protocolNegotiatedForConnection = true
                     isBootProtocolMode = (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE)
                     activeReportId = currentKeyboardReportId()
-                    _telemetry.value = _telemetry.value.copy(isBootMode = isBootProtocolMode)
+                    _telemetry.value = _telemetry.value.copy(
+                        isBootMode = isBootProtocolMode,
+                        hostAckCount = _telemetry.value.hostAckCount + 1L
+                    )
                     AppDebugLogger.i("BT-HID", "onSetProtocol protocol=$protocol (isBootMode=$isBootProtocolMode, reportId=$activeReportId)")
                 }
             }
 
+            @SuppressLint("MissingPermission")
             override fun onSetReport(device: BluetoothDevice?, type: Byte, id: Byte, data: ByteArray?) {
-                AppDebugLogger.d("BT-HID", "onSetReport type=$type id=$id len=${data?.size ?: 0}")
+                val payloadHex = data?.joinToString(" ") { String.format("%02X", it) } ?: ""
+                _telemetry.value = _telemetry.value.copy(hostAckCount = _telemetry.value.hostAckCount + 1L)
+                AppDebugLogger.i("BT-HID", "onSetReport type=$type id=$id len=${data?.size ?: 0} data=[$payloadHex]")
+                if (device != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    // HID 1.1 Control Channel requires HANDSHAKE(SUCCESSFUL) for SET_REPORT (e.g., Windows LED sync)
+                    runCatching {
+                        hidDeviceProfile?.reportError(device, BluetoothHidDevice.ERROR_RSP_SUCCESS)
+                    }.onFailure { err ->
+                        AppDebugLogger.e("BT-HID", "onSetReport ACK (reportError SUCCESS) hatası", err)
+                    }
+                }
+            }
+
+            override fun onInterruptData(device: BluetoothDevice?, reportId: Byte, data: ByteArray?) {
+                val payloadHex = data?.joinToString(" ") { String.format("%02X", it) } ?: ""
+                _telemetry.value = _telemetry.value.copy(hostAckCount = _telemetry.value.hostAckCount + 1L)
+                AppDebugLogger.i("BT-HID", "onInterruptData id=$reportId len=${data?.size ?: 0} data=[$payloadHex]")
             }
 
             override fun onVirtualCableUnplug(device: BluetoothDevice?) {
@@ -1007,6 +1040,10 @@ class BluetoothHidManager(private val context: Context? = null) {
 
     @SuppressLint("MissingPermission")
     private fun onHostConnected(device: BluetoothDevice) {
+        if (connectedHostDevice?.address == device.address && _connectionStatus.value == HidConnectionStatus.CONNECTED) {
+            // Avoid duplicate log/service/state churn when both Callback and Broadcast fire for the same connection
+            return
+        }
         cancelConnectWatchdog()
         pendingConnectAddress = null
         compatFallbackTriedForAddress.remove(device.address)
@@ -1017,12 +1054,20 @@ class BluetoothHidManager(private val context: Context? = null) {
             activeReportId = currentKeyboardReportId()
         }
         val name = getDeviceDisplayName(device)
-        AppDebugLogger.i("BT-HID", "Host bağlandı: $name (${device.address}) · ${_telemetry.value.qosLabel} · boot=$isBootProtocolMode · reportId=$activeReportId")
+        AppDebugLogger.i(
+            "BT-HID",
+            "Host bağlandı: $name (${device.address}) · ${_telemetry.value.qosLabel} · mode=${_hidProfileMode.value} · boot=$isBootProtocolMode · reportId=$activeReportId"
+        )
         _connectedDeviceName.value = name
         _connectionStatus.value = HidConnectionStatus.CONNECTED
         _connectionDiagnostic.value = null
         _telemetry.value = _telemetry.value.copy(
             isBootMode = isBootProtocolMode,
+            keyboardReportsSent = 0L,
+            keyboardReportsFailed = 0L,
+            mouseReportsSent = 0L,
+            mouseReportsFailed = 0L,
+            hostAckCount = 0L,
             lastFailureReason = null
         )
         prefs?.edit()?.putString(KEY_LAST_HOST_ADDRESS, device.address)?.apply()
@@ -1041,7 +1086,10 @@ class BluetoothHidManager(private val context: Context? = null) {
         pendingMouseDy.set(0)
         pendingMouseWheel.set(0)
         _connectedDeviceName.value = null
-        _telemetry.value = _telemetry.value.copy(isBootMode = false)
+        _telemetry.value = _telemetry.value.copy(
+            isBootMode = false,
+            hostAckCount = 0L
+        )
         if (stopService) {
             context?.let { BluetoothHidForegroundService.stop(it) }
         }

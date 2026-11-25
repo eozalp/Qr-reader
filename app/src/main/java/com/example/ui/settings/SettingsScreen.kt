@@ -217,7 +217,7 @@ fun SettingsScreen(
                                 .heightIn(min = 48.dp)
                                 .clip(RoundedCornerShape(24.dp))
                                 .clickable { selectedTab = tab }
-                                .testTag("tab_${tab.name.lowercase()}")
+                                .testTag("tab_${tab.name.lowercase(java.util.Locale.ROOT)}")
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),

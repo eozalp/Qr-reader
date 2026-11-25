@@ -13,8 +13,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 import java.util.UUID
 
 private val Context.dataStore by preferencesDataStore(name = "qr_calculator_prefs")
@@ -22,6 +25,9 @@ private val Context.dataStore by preferencesDataStore(name = "qr_calculator_pref
 class ProfileRepository(private val context: Context) {
 
     private val scope = CoroutineScope(Dispatchers.IO + AppDebugLogger.coroutineHandler("DATA-PROFILE"))
+    private val ioMutex = Mutex()
+    @Volatile
+    private var initialLoadComplete = false
 
     private val KEY_PROFILES = stringPreferencesKey("saved_profiles_json")
     private val KEY_ACTIVE_ID = stringPreferencesKey("active_profile_id")
@@ -36,13 +42,17 @@ class ProfileRepository(private val context: Context) {
     private val _globalVariables = MutableStateFlow(createDefaultGlobalVariables())
     val globalVariables: StateFlow<List<GlobalVariable>> = _globalVariables.asStateFlow()
 
-    init {
-        scope.launch {
-            reloadFromDisk()
-        }
+    private val initialLoadJob = scope.launch {
+        reloadFromDisk()
     }
 
     suspend fun reloadFromDisk() {
+        ioMutex.withLock {
+            loadFromDiskLocked()
+        }
+    }
+
+    private suspend fun loadFromDiskLocked() {
         runCatching {
             val prefs = context.dataStore.data.first()
             val jsonStr = prefs[KEY_PROFILES]
@@ -64,6 +74,7 @@ class ProfileRepository(private val context: Context) {
             if (!globalsJson.isNullOrBlank()) {
                 _globalVariables.value = parseGlobalsJson(globalsJson)
             }
+            initialLoadComplete = true
         }.onFailure { err ->
             AppDebugLogger.e("DATA-PROFILE", "Profiller diskten yüklenemedi", err)
             if (_profiles.value.isEmpty()) {
@@ -71,6 +82,7 @@ class ProfileRepository(private val context: Context) {
                 _profiles.value = defaults
                 _activeProfile.value = defaults.first()
             }
+            initialLoadComplete = true
         }
     }
 
@@ -117,6 +129,26 @@ class ProfileRepository(private val context: Context) {
     }
 
     fun saveProfile(profile: QrProfile) {
+        if (!initialLoadComplete) {
+            // Defer merge until initial disk load completes so saved profiles are never overwritten
+            if (_activeProfile.value.id == profile.id) {
+                _activeProfile.value = profile
+            }
+            scope.launch {
+                initialLoadJob.join()
+                ioMutex.withLock {
+                    val currentList = _profiles.value.toMutableList()
+                    val index = currentList.indexOfFirst { it.id == profile.id }
+                    if (index != -1) currentList[index] = profile else currentList.add(profile)
+                    _profiles.value = currentList
+                    if (_activeProfile.value.id == profile.id) {
+                        _activeProfile.value = profile
+                    }
+                    persistProfilesLocked(currentList, null)
+                }
+            }
+            return
+        }
         val currentList = _profiles.value.toMutableList()
         val index = currentList.indexOfFirst { it.id == profile.id }
         if (index != -1) {
@@ -148,7 +180,7 @@ class ProfileRepository(private val context: Context) {
             overlay = OverlayAppearance(
                 displayMode = OverlayDisplayMode.EXCEL_TABLE,
                 tableConfig = ExcelTableConfig(
-                    headerTitle = name.ifBlank { "YENİ PROFİL" }.uppercase(),
+                    headerTitle = name.ifBlank { "YENİ PROFİL" }.uppercase(Locale("tr", "TR")),
                     items = emptyList() // Auto-synced directly from user's visible variables!
                 )
             ),
@@ -262,18 +294,25 @@ class ProfileRepository(private val context: Context) {
 
     private fun persistProfiles(list: List<QrProfile>, newActiveId: String? = null) {
         scope.launch {
-            runCatching {
-                context.dataStore.edit { prefs ->
-                    val array = JSONArray()
-                    list.forEach { array.put(it.toJson()) }
-                    prefs[KEY_PROFILES] = array.toString()
-                    if (newActiveId != null) {
-                        prefs[KEY_ACTIVE_ID] = newActiveId
-                    }
-                }
-            }.onFailure { err ->
-                AppDebugLogger.e("DATA-PROFILE", "Profiller diske kaydedilemedi", err)
+            initialLoadJob.join()
+            ioMutex.withLock {
+                persistProfilesLocked(list, newActiveId)
             }
+        }
+    }
+
+    private suspend fun persistProfilesLocked(list: List<QrProfile>, newActiveId: String?) {
+        runCatching {
+            context.dataStore.edit { prefs ->
+                val array = JSONArray()
+                list.forEach { array.put(it.toJson()) }
+                prefs[KEY_PROFILES] = array.toString()
+                if (newActiveId != null) {
+                    prefs[KEY_ACTIVE_ID] = newActiveId
+                }
+            }
+        }.onFailure { err ->
+            AppDebugLogger.e("DATA-PROFILE", "Profiller diske kaydedilemedi", err)
         }
     }
 
@@ -300,6 +339,15 @@ class ProfileRepository(private val context: Context) {
     }
 
     companion object {
+        @Volatile
+        private var instance: ProfileRepository? = null
+
+        fun getInstance(context: Context): ProfileRepository {
+            return instance ?: synchronized(this) {
+                instance ?: ProfileRepository(context.applicationContext).also { instance = it }
+            }
+        }
+
         fun createDefaultGlobalVariables(): List<GlobalVariable> = listOf(
             GlobalVariable(id = "global_kdv", name = "kdv", value = "20", dataType = FieldDataType.DOUBLE, description = "Genel KDV Oranı (%)"),
             GlobalVariable(id = "global_benzin", name = "benzin_lt", value = "44.50", dataType = FieldDataType.DOUBLE, description = "Benzin Litre Fiyatı (₺)"),

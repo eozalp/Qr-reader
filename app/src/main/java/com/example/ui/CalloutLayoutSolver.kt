@@ -37,6 +37,13 @@ data class SolvedCalloutPosition(
 object CalloutLayoutSolver {
 
     /**
+     * Coerces [value] into [minVal]..[maxVal], safely centering when card exceeds viewport bounds.
+     */
+    private fun safeCoerce(value: Float, minVal: Float, maxVal: Float): Float {
+        return if (minVal <= maxVal) value.coerceIn(minVal, maxVal) else (minVal + maxVal) * 0.5f
+    }
+
+    /**
      * Solves non-overlapping layout positions for all active tracked QR codes on screen.
      */
     fun solve(
@@ -71,8 +78,8 @@ object CalloutLayoutSolver {
                     var targetY = baseY + offsetYPx
 
                     if (config.autoAvoidEdges) {
-                        targetX = targetX.coerceIn(margin + cardW / 2f, screenWidthPx - margin - cardW / 2f)
-                        targetY = targetY.coerceIn(topSafe + cardH / 2f, screenHeightPx - bottomSafe - cardH / 2f)
+                        targetX = safeCoerce(targetX, margin + cardW / 2f, screenWidthPx - margin - cardW / 2f)
+                        targetY = safeCoerce(targetY, topSafe + cardH / 2f, screenHeightPx - bottomSafe - cardH / 2f)
                     }
 
                     val (barcX, barcY) = findClosestPointOnRect(item.currentBox, targetX, targetY)
@@ -103,22 +110,23 @@ object CalloutLayoutSolver {
                 val rightQrs = sorted.size - leftQrs
                 val dockRight = leftQrs >= rightQrs
 
-                val targetX = if (dockRight) {
+                val rawTargetX = if (dockRight) {
                     screenWidthPx - margin - cardW / 2f
                 } else {
                     margin + cardW / 2f
                 }
+                val targetX = safeCoerce(rawTargetX, margin + cardW / 2f, screenWidthPx - margin - cardW / 2f)
 
                 val availableHeight = (screenHeightPx - bottomSafe) - topSafe
                 val totalCardsH = sorted.size * cardH
                 val spacing = if (sorted.size > 1) {
-                    ((availableHeight - totalCardsH) / (sorted.size - 1)).coerceIn(8f, with(density) { 32.dp.toPx() })
+                    safeCoerce((availableHeight - totalCardsH) / (sorted.size - 1), 8f, with(density) { 32.dp.toPx() })
                 } else 0f
 
                 val startY = topSafe + cardH / 2f + ((availableHeight - (sorted.size * cardH + (sorted.size - 1) * spacing)) / 2f).coerceAtLeast(0f)
 
                 return sorted.mapIndexed { index, item ->
-                    val targetY = (startY + index * (cardH + spacing)).coerceIn(topSafe + cardH / 2f, screenHeightPx - bottomSafe - cardH / 2f)
+                    val targetY = safeCoerce(startY + index * (cardH + spacing), topSafe + cardH / 2f, screenHeightPx - bottomSafe - cardH / 2f)
 
                     val (barcX, barcY) = findClosestPointOnRect(item.currentBox, targetX, targetY)
                     val cardRect = RectF(targetX - cardW / 2f, targetY - cardH / 2f, targetX + cardW / 2f, targetY + cardH / 2f)
@@ -143,16 +151,17 @@ object CalloutLayoutSolver {
                 // Initialize target centers around their respective QR codes
                 val centers = items.map { item ->
                     val (baseX, baseY) = computeAnchorCenter(item.currentBox, config.anchorPosition)
-                    val naturalX = (baseX + offsetXPx).coerceIn(margin + cardW / 2f, screenWidthPx - margin - cardW / 2f)
+                    val naturalX = safeCoerce(baseX + offsetXPx, margin + cardW / 2f, screenWidthPx - margin - cardW / 2f)
 
                     // If placed above or below, place with enough clearance
-                    val naturalY = if (item.currentBox.centerY() > screenHeightPx * 0.55f) {
+                    val rawNaturalY = if (item.currentBox.centerY() > screenHeightPx * 0.55f) {
                         // QR is in lower screen half -> place box above barcode
                         (item.currentBox.top - cardH / 2f - with(density) { 36.dp.toPx() })
                     } else {
                         // QR is in upper screen half -> place box below barcode
                         (item.currentBox.bottom + cardH / 2f + with(density) { 36.dp.toPx() })
-                    }.coerceIn(topSafe + cardH / 2f, screenHeightPx - bottomSafe - cardH / 2f)
+                    }
+                    val naturalY = safeCoerce(rawNaturalY, topSafe + cardH / 2f, screenHeightPx - bottomSafe - cardH / 2f)
 
                     PointF(naturalX, naturalY)
                 }.toMutableList()
@@ -206,8 +215,8 @@ object CalloutLayoutSolver {
 
                         // Re-clamp all centers to screen boundaries after each iteration
                         for (pt in centers) {
-                            pt.x = pt.x.coerceIn(margin + cardW / 2f, screenWidthPx - margin - cardW / 2f)
-                            pt.y = pt.y.coerceIn(topSafe + cardH / 2f, screenHeightPx - bottomSafe - cardH / 2f)
+                            pt.x = safeCoerce(pt.x, margin + cardW / 2f, screenWidthPx - margin - cardW / 2f)
+                            pt.y = safeCoerce(pt.y, topSafe + cardH / 2f, screenHeightPx - bottomSafe - cardH / 2f)
                         }
                     }
                 }
@@ -255,11 +264,13 @@ object CalloutLayoutSolver {
      * Finds the closest point on a rectangle's boundary to an external point (tx, ty).
      */
     fun findClosestPointOnRect(rect: RectF, tx: Float, ty: Float): Pair<Float, Float> {
-        if (rect.width() <= 0f || rect.height() <= 0f) return Pair(rect.left, rect.top)
+        if (rect.width() <= 0f || rect.height() <= 0f || rect.left > rect.right || rect.top > rect.bottom) {
+            return Pair(rect.left, rect.top)
+        }
 
         // Clamp to rectangle interior
-        val clampedX = tx.coerceIn(rect.left, rect.right)
-        val clampedY = ty.coerceIn(rect.top, rect.bottom)
+        val clampedX = safeCoerce(tx, rect.left, rect.right)
+        val clampedY = safeCoerce(ty, rect.top, rect.bottom)
 
         // If inside the rectangle, snap to the nearest boundary edge
         if (clampedX > rect.left && clampedX < rect.right && clampedY > rect.top && clampedY < rect.bottom) {

@@ -47,10 +47,10 @@ private fun buildSmartSampleBarcode(rules: QrParsingRules): String {
         QrParsingMode.KEY_VALUE -> {
             val sep = rules.keyValueSeparator.ifEmpty { "=" }
             scanned.joinToString(delim) { v ->
-                val key = v.extractionKey.ifBlank { v.name.uppercase() }
+                val key = v.extractionKey.ifBlank { v.name.uppercase(java.util.Locale.ROOT) }
                 val sample = v.defaultValue.ifBlank {
                     when (v.dataType) {
-                        FieldDataType.STRING -> v.name.uppercase()
+                        FieldDataType.STRING -> v.name.uppercase(java.util.Locale.ROOT)
                         FieldDataType.DATE -> "20261101"
                         FieldDataType.BOOLEAN -> "1"
                         else -> "10"
@@ -66,7 +66,7 @@ private fun buildSmartSampleBarcode(rules: QrParsingRules): String {
             scanned.sortedBy { it.position }.joinToString(delim) { v ->
                 v.defaultValue.ifBlank {
                     when (v.dataType) {
-                        FieldDataType.STRING -> v.name.uppercase()
+                        FieldDataType.STRING -> v.name.uppercase(java.util.Locale.ROOT)
                         FieldDataType.DATE -> "20261101"
                         FieldDataType.BOOLEAN -> "1"
                         else -> ((v.position + 1) * 10).toString()
@@ -1423,7 +1423,7 @@ fun AddVariableBottomSheet(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = varName,
-                    onValueChange = { varName = it.filter { c -> c.isLetterOrDigit() || c == '_' }.lowercase() },
+                    onValueChange = { varName = it.filter { c -> c.isLetterOrDigit() || c == '_' }.lowercase(java.util.Locale.ROOT) },
                     label = { Text("Değişken Adı *") },
                     placeholder = { Text("raf, plaka, tutar, durum") },
                     modifier = Modifier.weight(1f).testTag("new_variable_name_input"),

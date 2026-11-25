@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.io.ByteArrayOutputStream
@@ -32,19 +34,20 @@ data class SavedMediaResult(
 class AttachmentRepository(private val context: Context) {
 
     private val scope = CoroutineScope(Dispatchers.IO + AppDebugLogger.coroutineHandler("DATA-ATT"))
+    private val ioMutex = Mutex()
     private val storageFile = File(context.filesDir, "qr_attachments_store.json")
     val mediaDir = File(context.filesDir, "qr_media").apply { if (!exists()) mkdirs() }
 
     private val _attachments = MutableStateFlow<List<QrAttachment>>(emptyList())
     val attachments: StateFlow<List<QrAttachment>> = _attachments.asStateFlow()
 
-    init {
-        scope.launch {
-            loadAttachments()
+    private val initialLoadJob = scope.launch {
+        ioMutex.withLock {
+            loadAttachmentsLocked()
         }
     }
 
-    private suspend fun loadAttachments() = withContext(Dispatchers.IO) {
+    private suspend fun loadAttachmentsLocked() = withContext(Dispatchers.IO) {
         if (!storageFile.exists()) {
             _attachments.value = emptyList()
             return@withContext
@@ -70,12 +73,21 @@ class AttachmentRepository(private val context: Context) {
 
     private fun persistAttachments(list: List<QrAttachment>) {
         scope.launch(Dispatchers.IO) {
-            runCatching {
-                val array = JSONArray()
-                list.forEach { array.put(it.toJson()) }
-                storageFile.writeText(array.toString(), Charsets.UTF_8)
-            }.onFailure { err ->
-                AppDebugLogger.e("DATA-ATT", "Ekler diske yazılamadı", err)
+            initialLoadJob.join()
+            ioMutex.withLock {
+                runCatching {
+                    val array = JSONArray()
+                    list.forEach { array.put(it.toJson()) }
+                    val payload = array.toString()
+                    val tempFile = File(storageFile.parentFile, "${storageFile.name}.tmp")
+                    tempFile.writeText(payload, Charsets.UTF_8)
+                    if (!tempFile.renameTo(storageFile)) {
+                        storageFile.writeText(payload, Charsets.UTF_8)
+                        tempFile.delete()
+                    }
+                }.onFailure { err ->
+                    AppDebugLogger.e("DATA-ATT", "Ekler diske yazılamadı", err)
+                }
             }
         }
     }
@@ -206,8 +218,8 @@ class AttachmentRepository(private val context: Context) {
                     val currentMax = max(decodedBitmap.width, decodedBitmap.height)
                     if (currentMax > maxDim) {
                         val ratio = maxDim.toFloat() / currentMax.toFloat()
-                        val targetW = (decodedBitmap.width * ratio).toInt()
-                        val targetH = (decodedBitmap.height * ratio).toInt()
+                        val targetW = (decodedBitmap.width * ratio).toInt().coerceAtLeast(1)
+                        val targetH = (decodedBitmap.height * ratio).toInt().coerceAtLeast(1)
                         val scaled = Bitmap.createScaledBitmap(decodedBitmap, targetW, targetH, true)
                         if (scaled != decodedBitmap) {
                             decodedBitmap.recycle()
@@ -244,7 +256,8 @@ class AttachmentRepository(private val context: Context) {
         runCatching {
             val destFile = File(mediaDir, "att_vid_${UUID.randomUUID()}.mp4")
             var size = 0L
-            context.contentResolver.openInputStream(sourceUri)?.use { input: InputStream ->
+            val inputStream = context.contentResolver.openInputStream(sourceUri) ?: return@runCatching null
+            inputStream.use { input: InputStream ->
                 FileOutputStream(destFile).use { output ->
                     val buffer = ByteArray(16384)
                     var read: Int
@@ -253,6 +266,10 @@ class AttachmentRepository(private val context: Context) {
                         size += read
                     }
                 }
+            }
+            if (size <= 0L) {
+                destFile.delete()
+                return@runCatching null
             }
             SavedMediaResult(
                 filePath = destFile.absolutePath,
@@ -324,6 +341,15 @@ class AttachmentRepository(private val context: Context) {
     }
 
     companion object {
+        @Volatile
+        private var instance: AttachmentRepository? = null
+
+        fun getInstance(context: Context): AttachmentRepository {
+            return instance ?: synchronized(this) {
+                instance ?: AttachmentRepository(context.applicationContext).also { instance = it }
+            }
+        }
+
         fun formatFileSize(bytes: Long): String {
             if (bytes <= 0) return "0 B"
             if (bytes < 1024) return "$bytes B"

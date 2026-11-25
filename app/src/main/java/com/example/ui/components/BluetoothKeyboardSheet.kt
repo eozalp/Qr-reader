@@ -1052,19 +1052,25 @@ private fun ConnectionStatusCard(
             }
 
             if (status == HidConnectionStatus.CONNECTED) {
+                val totalTx = telemetry.keyboardReportsSent + telemetry.mouseReportsSent
+                val possibleWindowsCacheMismatch = totalTx >= 6L && telemetry.hostAckCount == 0L
                 Spacer(modifier = Modifier.height(8.dp))
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = Color(0xFF0A141E),
                     border = androidx.compose.foundation.BorderStroke(
                         1.dp,
-                        if (telemetry.lastFailureReason != null) Color(0xFFEF4444).copy(alpha = 0.7f) else Color(0xFF1E3A3A)
+                        when {
+                            telemetry.lastFailureReason != null -> Color(0xFFEF4444).copy(alpha = 0.7f)
+                            possibleWindowsCacheMismatch -> AmberGold.copy(alpha = 0.75f)
+                            else -> Color(0xFF1E3A3A)
+                        }
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
                         modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                        verticalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1072,24 +1078,35 @@ private fun ConnectionStatusCard(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "HID: ${if (telemetry.isBootMode) "Boot Modu" else "Report Modu"} · ${telemetry.qosLabel}",
+                                text = "HID: ${if (telemetry.isBootMode) "Boot" else "Report"} · ${telemetry.qosLabel}",
                                 fontSize = 10.5.sp,
                                 color = NeonCyan,
                                 fontWeight = FontWeight.SemiBold,
                                 modifier = Modifier.weight(1f)
                             )
-                            OutlinedButton(
-                                onClick = onReregisterHid,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                                modifier = Modifier
-                                    .height(30.dp)
-                                    .testTag("sheet_hid_reregister_btn")
-                            ) {
-                                Text("HID Yenile", fontSize = 10.sp, color = NeonCyan, fontWeight = FontWeight.Bold)
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                OutlinedButton(
+                                    onClick = onCopyDebugLog,
+                                    contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp),
+                                    modifier = Modifier
+                                        .height(30.dp)
+                                        .testTag("sheet_bt_copy_log_connected_btn")
+                                ) {
+                                    Text("Log", fontSize = 10.sp, color = AmberGold, fontWeight = FontWeight.Bold)
+                                }
+                                OutlinedButton(
+                                    onClick = onReregisterHid,
+                                    contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp),
+                                    modifier = Modifier
+                                        .height(30.dp)
+                                        .testTag("sheet_hid_reregister_btn")
+                                ) {
+                                    Text("HID Yenile", fontSize = 10.sp, color = NeonCyan, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                         Text(
-                            text = "Klavye TX: ${telemetry.keyboardReportsSent} (${telemetry.keyboardReportsFailed} hata) · Mouse TX: ${telemetry.mouseReportsSent} (${telemetry.mouseReportsFailed} hata)",
+                            text = "Klavye TX: ${telemetry.keyboardReportsSent} (${telemetry.keyboardReportsFailed} hata) · Mouse TX: ${telemetry.mouseReportsSent} (${telemetry.mouseReportsFailed} hata) · PC ACK: ${telemetry.hostAckCount}",
                             fontSize = 10.sp,
                             color = Color(0xFF94A3B8),
                             fontFamily = FontFamily.Monospace
@@ -1102,11 +1119,67 @@ private fun ConnectionStatusCard(
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
-                        Text(
-                            text = "Mouse çalışmıyorsa PC Bluetooth ayarlarından cihazı 'Kaldır' deyip telefonla yeniden eşleştirin.",
-                            fontSize = 10.sp,
-                            color = Color(0xFF94A3B8)
-                        )
+                        if (possibleWindowsCacheMismatch) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = AmberGold.copy(alpha = 0.14f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, AmberGold.copy(alpha = 0.55f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("sheet_hid_cache_warning")
+                            ) {
+                                Text(
+                                    text = "⚠ PC paketlere yanıt vermiyor (ACK=0). Windows eski eşleştirmeden kalan HID tanımını (id=0) önbellekte tutuyor olabilir. Hızlı test için aşağıdan 'Saf Klavye (id=0)' deneyin; Kombo (Klavye+Fare) için PC Bluetooth'tan telefonu 'Kaldır' deyip ALVETAK açıkken yeniden eşleştirin.",
+                                    fontSize = 10.sp,
+                                    lineHeight = 13.5.sp,
+                                    color = AmberGold,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.padding(8.dp)
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = "Mouse/klavye çalışmıyorsa aşağıdan 'Saf Klavye (id=0)' deneyin veya PC Bluetooth'tan cihazı 'Kaldır' deyip ALVETAK açıkken yeniden eşleştirin.",
+                                fontSize = 10.sp,
+                                color = Color(0xFF94A3B8)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Show HID Profile Mode Selector in CONNECTED, CONNECTING, and DISCONNECTED states so user can switch instantly
+            if (status == HidConnectionStatus.CONNECTED || status == HidConnectionStatus.DISCONNECTED || status == HidConnectionStatus.CONNECTING) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    HidProfileMode.entries.forEach { mode ->
+                        val selected = hidProfileMode == mode
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (selected) NeonCyan.copy(alpha = 0.18f) else Color(0xFF0B111E),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (selected) NeonCyan else Color(0xFF334155)
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onSelectProfileMode(mode) }
+                                .testTag("sheet_hid_mode_${mode.name.lowercase(java.util.Locale.ROOT)}")
+                        ) {
+                            Text(
+                                text = if (mode == HidProfileMode.COMBO) "Kombo (Klavye+Fare)" else "Saf Klavye (id=0)",
+                                fontSize = 10.5.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (selected) NeonCyan else Color(0xFF94A3B8),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -1135,39 +1208,6 @@ private fun ConnectionStatusCard(
             }
 
             if (status == HidConnectionStatus.DISCONNECTED || status == HidConnectionStatus.CONNECTING) {
-                Spacer(modifier = Modifier.height(8.dp))
-                // HID Profile Compatibility Mode Selector (Combo vs Simple Keyboard for Linux/BlueZ)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    HidProfileMode.entries.forEach { mode ->
-                        val selected = hidProfileMode == mode
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (selected) NeonCyan.copy(alpha = 0.18f) else Color(0xFF0B111E),
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (selected) NeonCyan else Color(0xFF334155)
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onSelectProfileMode(mode) }
-                                .testTag("sheet_hid_mode_${mode.name.lowercase()}")
-                        ) {
-                            Text(
-                                text = if (mode == HidProfileMode.COMBO) "Kombo (Klavye+Fare)" else "Saf Klavye (Linux)",
-                                fontSize = 10.5.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (selected) NeonCyan else Color(0xFF94A3B8),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp)
-                            )
-                        }
-                    }
-                }
                 Spacer(modifier = Modifier.height(6.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),

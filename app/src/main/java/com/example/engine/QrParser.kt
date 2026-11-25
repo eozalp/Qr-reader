@@ -10,6 +10,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 
@@ -131,7 +132,11 @@ object QrParser {
         // 1. Process manual / constant variables (not extracted from barcode tokens)
         val manualVars = rules.variables.filter { it.isManual && !it.isComputed }
         for (varDef in manualVars) {
-            val valueToUse = varDef.defaultValue.ifBlank { "0" }
+            val valueToUse = if (varDef.dataType == FieldDataType.STRING) {
+                varDef.defaultValue
+            } else {
+                varDef.defaultValue.ifBlank { "0" }
+            }
             var normalizedNumStr = valueToUse
             if (rules.decimalSeparator == ",") {
                 normalizedNumStr = normalizedNumStr.replace(',', '.')
@@ -193,10 +198,10 @@ object QrParser {
                     if (varDef.position in tokens.indices) tokens[varDef.position] else null
                 }
                 QrParsingMode.KEY_VALUE -> {
-                    val primaryKey = varDef.extractionKey.trim().ifBlank { varDef.name }.lowercase()
-                    val aliasKey = varDef.alias.trim().lowercase()
+                    val primaryKey = varDef.extractionKey.trim().ifBlank { varDef.name }.lowercase(Locale.ROOT)
+                    val aliasKey = varDef.alias.trim().lowercase(Locale.ROOT)
                     keyValueMap[primaryKey]
-                        ?: keyValueMap[varDef.name.lowercase()]
+                        ?: keyValueMap[varDef.name.lowercase(Locale.ROOT)]
                         ?: if (aliasKey.isNotEmpty()) keyValueMap[aliasKey] else null
                 }
                 QrParsingMode.FIXED_WIDTH -> {
@@ -301,7 +306,8 @@ object QrParser {
         val remainingComputed = rules.variables.filter { it.isComputed }.toMutableList()
         var progress = true
         var passes = 0
-        while (remainingComputed.isNotEmpty() && progress && passes < 10) {
+        val maxPasses = maxOf(10, rules.variables.size + 1)
+        while (remainingComputed.isNotEmpty() && progress && passes < maxPasses) {
             passes++
             progress = false
             val iterator = remainingComputed.iterator()
@@ -425,12 +431,13 @@ object QrParser {
         }
         val result = mutableMapOf<String, String>()
         for (entry in entries) {
-            val sepIdx = entry.indexOf(kvSep).takeIf { it > 0 }
-                ?: entry.indexOf('=').takeIf { it > 0 }
-                ?: entry.indexOf(':').takeIf { it > 0 }
+            val sepPair: Pair<Int, Int> = entry.indexOf(kvSep).takeIf { it > 0 }?.let { it to kvSep.length }
+                ?: entry.indexOf('=').takeIf { it > 0 }?.let { it to 1 }
+                ?: entry.indexOf(':').takeIf { it > 0 }?.let { it to 1 }
                 ?: continue
-            val k = entry.substring(0, sepIdx).trim().lowercase()
-            val vRaw = entry.substring(sepIdx + 1)
+            val (sepIdx, sepLen) = sepPair
+            val k = entry.substring(0, sepIdx).trim().lowercase(Locale.ROOT)
+            val vRaw = entry.substring(sepIdx + sepLen)
             val v = if (trimWhitespace) vRaw.trim() else vRaw
             if (k.isNotEmpty()) {
                 result[k] = v
@@ -557,9 +564,9 @@ object QrParser {
     }
 
     private fun parseBoolean(raw: String): Boolean? {
-        return when (raw.trim().lowercase()) {
+        return when (raw.trim().lowercase(Locale.ROOT)) {
             "1", "true", "evet", "yes", "on", "var", "ok", "dogru", "doğru" -> true
-            "0", "false", "hayir", "hayır", "no", "off", "yok", "yanlis", "yanlış" -> false
+            "0", "false", "hayir", "hayır", "no", "off", "yok", "yanlis", "yanlış", "yanlıs" -> false
             else -> null
         }
     }
@@ -610,8 +617,21 @@ object QrParser {
                 runCatching {
                     val b64 = trimmed.removePrefix("ARQR:GZ:")
                     val compressedBytes = base64DecodeUrlSafe(b64)
-                    GZIPInputStream(ByteArrayInputStream(compressedBytes)).bufferedReader(Charsets.UTF_8).use {
-                        it.readText()
+                    val maxDecompressedBytes = 512 * 1024 // 512 KB cap prevents GZIP zip-bomb OOM
+                    GZIPInputStream(ByteArrayInputStream(compressedBytes)).use { gzip ->
+                        val out = ByteArrayOutputStream()
+                        val buf = ByteArray(4096)
+                        var total = 0
+                        while (true) {
+                            val read = gzip.read(buf)
+                            if (read <= 0) break
+                            total += read
+                            if (total > maxDecompressedBytes) {
+                                throw IllegalStateException("Compressed QR profile exceeds 512 KB limit")
+                            }
+                            out.write(buf, 0, read)
+                        }
+                        out.toString(Charsets.UTF_8.name())
                     }
                 }.getOrNull()
             }

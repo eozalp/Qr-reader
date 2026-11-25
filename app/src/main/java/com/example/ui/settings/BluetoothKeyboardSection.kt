@@ -219,19 +219,25 @@ fun BluetoothKeyboardSection(
                     }
 
                     if (connectionStatus == HidConnectionStatus.CONNECTED) {
+                        val totalTx = telemetry.keyboardReportsSent + telemetry.mouseReportsSent
+                        val possibleWindowsCacheMismatch = totalTx >= 6L && telemetry.hostAckCount == 0L
                         Spacer(modifier = Modifier.height(10.dp))
                         Surface(
                             shape = RoundedCornerShape(10.dp),
                             color = Color(0xFF0A1622),
                             border = androidx.compose.foundation.BorderStroke(
                                 1.dp,
-                                if (telemetry.lastFailureReason != null) Color(0xFFEF4444).copy(alpha = 0.7f) else Color(0xFF1E3A3A)
+                                when {
+                                    telemetry.lastFailureReason != null -> Color(0xFFEF4444).copy(alpha = 0.7f)
+                                    possibleWindowsCacheMismatch -> AmberGold.copy(alpha = 0.75f)
+                                    else -> Color(0xFF1E3A3A)
+                                }
                             ),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(
                                 modifier = Modifier.padding(10.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                verticalArrangement = Arrangement.spacedBy(5.dp)
                             ) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -239,24 +245,45 @@ fun BluetoothKeyboardSection(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = "HID Modu: ${if (telemetry.isBootMode) "Boot Modu" else "Report Modu"} · ${telemetry.qosLabel}",
+                                        text = "HID: ${if (telemetry.isBootMode) "Boot" else "Report"} · ${telemetry.qosLabel}",
                                         fontSize = 10.5.sp,
                                         color = NeonCyan,
                                         fontWeight = FontWeight.SemiBold,
                                         modifier = Modifier.weight(1f)
                                     )
-                                    OutlinedButton(
-                                        onClick = { manager.reregisterHidProfile() },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                                        modifier = Modifier
-                                            .height(30.dp)
-                                            .testTag("settings_hid_reregister_btn")
-                                    ) {
-                                        Text("HID Yenile", fontSize = 10.sp, color = NeonCyan, fontWeight = FontWeight.Bold)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                val report = AppDebugLogger.buildShareableReport(
+                                                    hidStatus = connectionStatus.label,
+                                                    connectedHost = connectedDeviceName,
+                                                    hidTelemetry = telemetry,
+                                                    pairedCount = pairedDevices.size,
+                                                    entries = AppDebugLogger.logs.value
+                                                )
+                                                clipboard.setText(AnnotatedString(report))
+                                                Toast.makeText(context, "BT Debug raporu kopyalandı", Toast.LENGTH_SHORT).show()
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp),
+                                            modifier = Modifier
+                                                .height(30.dp)
+                                                .testTag("settings_bt_copy_log_connected_btn")
+                                        ) {
+                                            Text("Log", fontSize = 10.sp, color = AmberGold, fontWeight = FontWeight.Bold)
+                                        }
+                                        OutlinedButton(
+                                            onClick = { manager.reregisterHidProfile() },
+                                            contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp),
+                                            modifier = Modifier
+                                                .height(30.dp)
+                                                .testTag("settings_hid_reregister_btn")
+                                        ) {
+                                            Text("HID Yenile", fontSize = 10.sp, color = NeonCyan, fontWeight = FontWeight.Bold)
+                                        }
                                     }
                                 }
                                 Text(
-                                    text = "Klavye TX: ${telemetry.keyboardReportsSent} (Hata: ${telemetry.keyboardReportsFailed}) · Mouse TX: ${telemetry.mouseReportsSent} (Hata: ${telemetry.mouseReportsFailed})",
+                                    text = "Klavye TX: ${telemetry.keyboardReportsSent} (Hata: ${telemetry.keyboardReportsFailed}) · Mouse TX: ${telemetry.mouseReportsSent} (Hata: ${telemetry.mouseReportsFailed}) · PC ACK: ${telemetry.hostAckCount}",
                                     fontSize = 10.5.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontFamily = FontFamily.Monospace
@@ -269,18 +296,38 @@ fun BluetoothKeyboardSection(
                                         fontWeight = FontWeight.SemiBold
                                     )
                                 }
-                                Text(
-                                    text = "Mouse/medya tuşları yanıt vermiyorsa PC Bluetooth'tan cihazı 'Kaldır' deyip bir kez yeniden eşleştirin.",
-                                    fontSize = 10.sp,
-                                    color = Color(0xFF94A3B8)
-                                )
+                                if (possibleWindowsCacheMismatch) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = AmberGold.copy(alpha = 0.14f),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, AmberGold.copy(alpha = 0.55f)),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("settings_hid_cache_warning")
+                                    ) {
+                                        Text(
+                                            text = "⚠ PC paketlere yanıt vermiyor (ACK=0). Windows eski eşleştirmeden kalan HID tanımını (id=0) önbellekte tutuyor olabilir. Hızlı test için aşağıdan 'Saf Klavye (id=0)' deneyin; Kombo (Klavye+Fare) için PC Bluetooth'tan telefonu 'Kaldır' deyip ALVETAK açıkken yeniden eşleştirin.",
+                                            fontSize = 10.sp,
+                                            lineHeight = 13.5.sp,
+                                            color = AmberGold,
+                                            fontWeight = FontWeight.Medium,
+                                            modifier = Modifier.padding(8.dp)
+                                        )
+                                    }
+                                } else {
+                                    Text(
+                                        text = "Mouse/klavye çalışmıyorsa aşağıdan 'Saf Klavye (id=0)' deneyin veya PC Bluetooth'tan cihazı 'Kaldır' deyip ALVETAK açıkken yeniden eşleştirin.",
+                                        fontSize = 10.sp,
+                                        color = Color(0xFF94A3B8)
+                                    )
+                                }
                             }
                         }
                     }
 
-                    if (connectionStatus == HidConnectionStatus.DISCONNECTED || connectionStatus == HidConnectionStatus.CONNECTING) {
+                    if (connectionStatus == HidConnectionStatus.CONNECTED || connectionStatus == HidConnectionStatus.DISCONNECTED || connectionStatus == HidConnectionStatus.CONNECTING) {
                         Spacer(modifier = Modifier.height(10.dp))
-                        // HID Profile Compatibility Mode Selector (Combo vs Simple Keyboard for Linux/BlueZ)
+                        // HID Profile Compatibility Mode Selector (always accessible so user can test Saf Klavye id=0 vs Kombo)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -298,10 +345,10 @@ fun BluetoothKeyboardSection(
                                         .weight(1f)
                                         .clip(RoundedCornerShape(8.dp))
                                         .clickable { manager.setHidProfileMode(mode) }
-                                        .testTag("settings_hid_mode_${mode.name.lowercase()}")
+                                        .testTag("settings_hid_mode_${mode.name.lowercase(java.util.Locale.ROOT)}")
                                 ) {
                                     Text(
-                                        text = if (mode == HidProfileMode.COMBO) "Kombo (Klavye+Fare)" else "Saf Klavye (Linux)",
+                                        text = if (mode == HidProfileMode.COMBO) "Kombo (Klavye+Fare)" else "Saf Klavye (id=0)",
                                         fontSize = 11.sp,
                                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                                         color = if (selected) NeonCyan else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -312,6 +359,9 @@ fun BluetoothKeyboardSection(
                                 }
                             }
                         }
+                    }
+
+                    if (connectionStatus == HidConnectionStatus.DISCONNECTED || connectionStatus == HidConnectionStatus.CONNECTING) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),

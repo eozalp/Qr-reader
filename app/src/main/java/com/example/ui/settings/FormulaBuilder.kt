@@ -79,7 +79,7 @@ private class FormulaSyntaxVisualTransformation(
                     match.groups[2] != null -> SpanStyle(color = globalColor, fontWeight = FontWeight.ExtraBold)
                     match.groups[3] != null -> SpanStyle(color = funcColor, fontWeight = FontWeight.Bold)
                     match.groups[4] != null -> {
-                        val word = match.value.lowercase()
+                        val word = match.value.lowercase(java.util.Locale.ROOT)
                         if (word in variableNames || word in setOf("bugun", "today", "bu_yil", "bu_ay", "bu_gun")) {
                             SpanStyle(color = varColor, fontWeight = FontWeight.Bold)
                         } else if (word in setOf("ve", "veya", "degil", "and", "or", "not", "true", "false", "dogru", "yanlis")) {
@@ -176,12 +176,13 @@ fun FormulaBuilderPanel(
     val knownVarNames = remember(variables) {
         buildSet {
             variables.forEach { v ->
-                add(v.name.lowercase())
-                if (v.alias.isNotBlank()) add(v.alias.lowercase())
+                val lowerName = v.name.lowercase(java.util.Locale.ROOT)
+                add(lowerName)
+                if (v.alias.isNotBlank()) add(v.alias.lowercase(java.util.Locale.ROOT))
                 if (v.dataType == FieldDataType.DATE) {
-                    add("${v.name.lowercase()}_gun")
-                    add("${v.name.lowercase()}_ay")
-                    add("${v.name.lowercase()}_yil")
+                    add("${lowerName}_gun")
+                    add("${lowerName}_ay")
+                    add("${lowerName}_yil")
                 }
             }
         }

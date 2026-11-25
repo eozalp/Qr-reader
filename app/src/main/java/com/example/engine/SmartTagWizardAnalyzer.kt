@@ -126,9 +126,19 @@ object SmartTagWizardAnalyzer {
             }
         }
 
+        var computedVarName = "sonuc"
+        if (computedExpr != null) {
+            var suffix = 2
+            while (computedVarName in usedNames) {
+                computedVarName = "sonuc_$suffix"
+                suffix++
+            }
+            usedNames.add(computedVarName)
+        }
+
         val allVariables = if (computedExpr != null) {
             baseVariables + VariableDefinition(
-                name = "sonuc",
+                name = computedVarName,
                 alias = "Sonuç",
                 dataType = FieldDataType.DOUBLE,
                 isComputed = true,
@@ -158,7 +168,7 @@ object SmartTagWizardAnalyzer {
             id = UUID.randomUUID().toString(),
             name = profileName.trim().ifEmpty { "Akıllı Etiket Profili" },
             description = if (computedExpr != null) {
-                "Sihirbazla oluşturuldu (sonuc = $computedExpr)"
+                "Sihirbazla oluşturuldu ($computedVarName = $computedExpr)"
             } else {
                 "Sihirbazla oluşturuldu (${allVariables.size} alan)"
             },

@@ -334,7 +334,7 @@ fun RemoteControlScreen(
                                 .height(48.dp)
                                 .clip(RoundedCornerShape(16.dp))
                                 .clickable { selectedTab = tab }
-                                .testTag("remote_tab_${tab.name.lowercase()}")
+                                .testTag("remote_tab_${tab.name.lowercase(java.util.Locale.ROOT)}")
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,

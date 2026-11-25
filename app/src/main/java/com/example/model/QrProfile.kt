@@ -50,7 +50,7 @@ data class GlobalVariable(
     companion object {
         fun fromJson(json: JSONObject): GlobalVariable {
             return GlobalVariable(
-                id = json.optString("id", UUID.randomUUID().toString()),
+                id = json.optString("id", "").ifBlank { UUID.randomUUID().toString() },
                 name = json.optString("name", "oran"),
                 value = json.optString("value", "0"),
                 dataType = runCatching {
@@ -127,7 +127,7 @@ data class VariableDefinition(
     companion object {
         fun fromJson(json: JSONObject): VariableDefinition {
             return VariableDefinition(
-                id = json.optString("id", UUID.randomUUID().toString()),
+                id = json.optString("id", "").ifBlank { UUID.randomUUID().toString() },
                 position = json.optInt("position", 0),
                 name = json.optString("name", "a"),
                 alias = json.optString("alias", ""),
@@ -147,13 +147,17 @@ data class VariableDefinition(
                 isComputed = json.optBoolean("isComputed", false),
                 computationFormula = json.optString("computationFormula", ""),
                 isManual = json.optBoolean("isManual", false),
-                minValue = if (json.has("minValue")) json.optDouble("minValue") else null,
-                maxValue = if (json.has("maxValue")) json.optDouble("maxValue") else null,
+                minValue = if (json.has("minValue") && !json.isNull("minValue")) {
+                    json.optDouble("minValue", Double.NaN).takeIf { !it.isNaN() }
+                } else null,
+                maxValue = if (json.has("maxValue") && !json.isNull("maxValue")) {
+                    json.optDouble("maxValue", Double.NaN).takeIf { !it.isNaN() }
+                } else null,
                 decimalPlaces = if (json.has("decimalPlaces") && !json.isNull("decimalPlaces")) json.optInt("decimalPlaces") else null,
                 thousandsSeparator = json.optString("thousandsSeparator", "inherit"),
                 decimalSeparator = json.optString("decimalSeparator", "inherit"),
-                roundingMode = if (json.has("roundingMode")) runCatching {
-                    AppRoundingMode.valueOf(json.getString("roundingMode"))
+                roundingMode = if (json.has("roundingMode") && !json.isNull("roundingMode")) runCatching {
+                    AppRoundingMode.valueOf(json.optString("roundingMode", ""))
                 }.getOrNull() else null,
                 isPercentage = json.optBoolean("isPercentage", false),
                 negativeFormat = json.optString("negativeFormat", "inherit")
@@ -443,7 +447,7 @@ data class ExcelTableCellItem(
     companion object {
         fun fromJson(json: JSONObject): ExcelTableCellItem {
             return ExcelTableCellItem(
-                id = json.optString("id", UUID.randomUUID().toString()),
+                id = json.optString("id", "").ifBlank { UUID.randomUUID().toString() },
                 source = runCatching {
                     TableItemSource.valueOf(json.optString("source", TableItemSource.VARIABLE.name))
                 }.getOrDefault(TableItemSource.VARIABLE),
@@ -708,11 +712,9 @@ data class OverlayAppearance(
                 displayMode = runCatching {
                     OverlayDisplayMode.valueOf(json.optString("displayMode", OverlayDisplayMode.EXCEL_TABLE.name))
                 }.getOrDefault(OverlayDisplayMode.EXCEL_TABLE),
-                tableConfig = if (json.has("tableConfig")) {
-                    ExcelTableConfig.fromJson(json.getJSONObject("tableConfig"))
-                } else {
-                    ExcelTableConfig()
-                },
+                tableConfig = json.optJSONObject("tableConfig")?.let {
+                    ExcelTableConfig.fromJson(it)
+                } ?: ExcelTableConfig(),
                 calloutMode = runCatching {
                     CalloutLayoutMode.valueOf(json.optString("calloutMode", CalloutLayoutMode.SMART_ANTI_COLLISION.name))
                 }.getOrDefault(CalloutLayoutMode.SMART_ANTI_COLLISION),
@@ -860,16 +862,16 @@ data class QrProfile(
     companion object {
         fun fromJson(json: JSONObject): QrProfile {
             return QrProfile(
-                id = json.optString("id", UUID.randomUUID().toString()),
+                id = json.optString("id", "").ifBlank { UUID.randomUUID().toString() },
                 name = json.optString("name", "Default Profile"),
                 description = json.optString("description", ""),
                 triggerSignal = json.optString("triggerSignal", ""),
-                parsingRules = if (json.has("parsingRules")) QrParsingRules.fromJson(json.getJSONObject("parsingRules")) else QrParsingRules(),
-                formula = if (json.has("formula")) ArithmeticFormula.fromJson(json.getJSONObject("formula")) else ArithmeticFormula(),
-                formatting = if (json.has("formatting")) ResultFormatting.fromJson(json.getJSONObject("formatting")) else ResultFormatting(),
-                overlay = if (json.has("overlay")) OverlayAppearance.fromJson(json.getJSONObject("overlay")) else OverlayAppearance(),
-                tracking = if (json.has("tracking")) TrackingSettings.fromJson(json.getJSONObject("tracking")) else TrackingSettings(),
-                bluetoothKeyboard = if (json.has("bluetoothKeyboard")) BluetoothKeyboardConfig.fromJson(json.getJSONObject("bluetoothKeyboard")) else BluetoothKeyboardConfig()
+                parsingRules = json.optJSONObject("parsingRules")?.let { QrParsingRules.fromJson(it) } ?: QrParsingRules(),
+                formula = json.optJSONObject("formula")?.let { ArithmeticFormula.fromJson(it) } ?: ArithmeticFormula(),
+                formatting = json.optJSONObject("formatting")?.let { ResultFormatting.fromJson(it) } ?: ResultFormatting(),
+                overlay = json.optJSONObject("overlay")?.let { OverlayAppearance.fromJson(it) } ?: OverlayAppearance(),
+                tracking = json.optJSONObject("tracking")?.let { TrackingSettings.fromJson(it) } ?: TrackingSettings(),
+                bluetoothKeyboard = json.optJSONObject("bluetoothKeyboard")?.let { BluetoothKeyboardConfig.fromJson(it) } ?: BluetoothKeyboardConfig()
             )
         }
     }

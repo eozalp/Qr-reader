@@ -121,7 +121,7 @@ fun OverlayAppearanceSection(
                         .heightIn(min = 44.dp)
                         .clip(RoundedCornerShape(20.dp))
                         .clickable { activeTab = tab }
-                        .testTag("style_tab_${tab.name.lowercase()}")
+                        .testTag("style_tab_${tab.name.lowercase(java.util.Locale.ROOT)}")
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -267,7 +267,7 @@ private fun LiveStylePreviewStage(
                             .height(30.dp)
                             .clip(RoundedCornerShape(10.dp))
                             .clickable { onDisplayModeChange(mode) }
-                            .testTag("preview_mode_${mode.name.lowercase()}")
+                            .testTag("preview_mode_${mode.name.lowercase(java.util.Locale.ROOT)}")
                     ) {
                         Box(
                             modifier = Modifier.padding(horizontal = 10.dp),
@@ -838,7 +838,7 @@ private fun TypographyInspectorPanel(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(14.dp))
                         .clickable { onOverlayChanged(overlay.copy(fontFamily = fontOption)) }
-                        .testTag("font_option_${fontOption.name.lowercase()}")
+                        .testTag("font_option_${fontOption.name.lowercase(java.util.Locale.ROOT)}")
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
@@ -1015,7 +1015,7 @@ private fun FrameAndSizeInspectorPanel(
                                 .weight(1f)
                                 .heightIn(min = 48.dp)
                                 .clickable { onOverlayChanged(overlay.copy(cornerStyle = cStyle)) }
-                                .testTag("corner_style_${cStyle.name.lowercase()}")
+                                .testTag("corner_style_${cStyle.name.lowercase(java.util.Locale.ROOT)}")
                         ) {
                             Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(8.dp)) {
                                 Text(lbl, fontSize = 12.sp, fontWeight = FontWeight.Bold)

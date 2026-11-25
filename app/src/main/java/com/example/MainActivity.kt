@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import com.example.bluetooth.BluetoothHidManager
 import com.example.data.ProfileRepository
@@ -49,14 +50,14 @@ class MainActivity : ComponentActivity() {
             AppDebugLogger.w("APP", "Türkçe yerel ayar uygulanamadı", err)
         }
 
-        profileRepository = ProfileRepository(applicationContext)
-        attachmentRepository = com.example.data.AttachmentRepository(applicationContext)
+        profileRepository = ProfileRepository.getInstance(applicationContext)
+        attachmentRepository = com.example.data.AttachmentRepository.getInstance(applicationContext)
 
         setContent {
             QrLiveCalcTheme {
-                var currentScreen by remember { mutableStateOf(AppScreen.CAMERA) }
-                var remoteReturnScreen by remember { mutableStateOf(AppScreen.CAMERA) }
-                var showRemoteBtSheet by remember { mutableStateOf(false) }
+                var currentScreen by rememberSaveable { mutableStateOf(AppScreen.CAMERA) }
+                var remoteReturnScreen by rememberSaveable { mutableStateOf(AppScreen.CAMERA) }
+                var showRemoteBtSheet by rememberSaveable { mutableStateOf(false) }
 
                 val hidManager = remember { BluetoothHidManager.getInstance(applicationContext) }
                 val activeProfile by profileRepository.activeProfile.collectAsState()
@@ -136,7 +137,8 @@ class MainActivity : ComponentActivity() {
                         currentConfig = activeProfile.bluetoothKeyboard,
                         availableVariables = activeProfile.parsingRules.variables,
                         onConfigChanged = { updatedKb ->
-                            profileRepository.saveProfile(activeProfile.copy(bluetoothKeyboard = updatedKb))
+                            val latest = profileRepository.activeProfile.value
+                            profileRepository.saveProfile(latest.copy(bluetoothKeyboard = updatedKb))
                         },
                         onRequestPermission = requestBluetoothPermissions,
                         onDismiss = { showRemoteBtSheet = false }

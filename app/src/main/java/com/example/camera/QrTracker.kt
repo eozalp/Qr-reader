@@ -28,6 +28,9 @@ class QrTracker {
     private val lock = Any()
     private val activeTracked = mutableListOf<TrackedQr>()
     private val mathEvaluator = MathExpressionEvaluator()
+    private var lastEvalProfile: QrProfile? = null
+    private var lastEvalGlobals: List<GlobalVariable>? = null
+    private var lastEvalEpochDay: Long = Long.MIN_VALUE
 
     /**
      * Clears all currently tracked QR entries safely.
@@ -35,6 +38,9 @@ class QrTracker {
     fun clear() {
         synchronized(lock) {
             activeTracked.clear()
+            lastEvalProfile = null
+            lastEvalGlobals = null
+            lastEvalEpochDay = Long.MIN_VALUE
         }
     }
 
@@ -84,7 +90,12 @@ class QrTracker {
         val timeoutMs = profile.tracking.disappearanceTimeoutMs.coerceAtLeast(100L)
 
         val matchedIds = mutableSetOf<String>()
+        val newlyAddedIds = mutableSetOf<String>()
         val unmatchedDetected = detectedScreenBoxes.toMutableList()
+        val todayEpochDay = java.time.LocalDate.now().toEpochDay()
+        val evalContextChanged = profile != lastEvalProfile ||
+            globalVariables != lastEvalGlobals ||
+            todayEpochDay != lastEvalEpochDay
 
         // 1. Try matching existing tracked items with closest detected code of same content
         for (tracked in activeTracked) {
@@ -137,9 +148,10 @@ class QrTracker {
             )
             activeTracked.add(newTracked)
             matchedIds.add(newTracked.id)
+            newlyAddedIds.add(newTracked.id)
         }
 
-        // 3. For active items not seen in this frame, fade out or remove
+        // 3. For active items not seen in this frame, fade out or remove; recalculate existing items ONLY if context changed
         val iterator = activeTracked.iterator()
         while (iterator.hasNext()) {
             val item = iterator.next()
@@ -152,8 +164,7 @@ class QrTracker {
                     val remainingFraction = 1.0f - (elapsed.toFloat() / timeoutMs)
                     item.alpha = remainingFraction.coerceIn(0f, 1f)
                 }
-            } else {
-                // If profile changed, recalculate result
+            } else if (evalContextChanged && item.id !in newlyAddedIds) {
                 item.result = processQr(
                     item.rawContent,
                     profile,
@@ -163,6 +174,10 @@ class QrTracker {
                 )
             }
         }
+
+        lastEvalProfile = profile
+        lastEvalGlobals = globalVariables
+        lastEvalEpochDay = todayEpochDay
 
         activeTracked.map { it.copy(currentBox = RectF(it.currentBox)) }
     }

@@ -1,9 +1,9 @@
 package com.example.engine
 
 import java.time.LocalDate
-import kotlin.math.*
-
 import java.time.format.DateTimeFormatter
+import java.util.Locale
+import kotlin.math.*
 
 sealed class MathResult {
     data class Success(val value: Double) : MathResult()
@@ -219,7 +219,7 @@ class MathExpressionEvaluator {
                         i++
                     }
                     val raw = expr.substring(start, i)
-                    val lower = raw.lowercase()
+                    val lower = raw.lowercase(Locale.ROOT)
                     when (lower) {
                         "and", "ve" -> tokens.add(Token.Op("&&"))
                         "or", "veya" -> tokens.add(Token.Op("||"))
@@ -454,9 +454,15 @@ class MathExpressionEvaluator {
     private fun asNum(valObj: EvalVal, contextHint: String = "işlem"): Double {
         return when (valObj) {
             is EvalVal.Num -> valObj.v
-            is EvalVal.Str -> valObj.s.toDoubleOrNull()
+            is EvalVal.Str -> valObj.s.replace(',', '.').trim().toDoubleOrNull()
                 ?: throw IllegalArgumentException("'$contextHint' için sayı gerekli, metin bulundu: '${valObj.s}'")
         }
+    }
+
+    private fun safeEpochDate(epochDays: Double, fnName: String): LocalDate {
+        val day = epochDays.toLong()
+        return runCatching { LocalDate.ofEpochDay(day) }
+            .getOrElse { throw IllegalArgumentException("'$fnName': geçersiz tarih değeri ($day)") }
     }
 
     private fun asStr(valObj: EvalVal): String {
@@ -726,19 +732,19 @@ class MathExpressionEvaluator {
             }
             "year", "yil" -> {
                 requireCount(name, args, 1)
-                EvalVal.Num(LocalDate.ofEpochDay(numArg(0).toLong()).year.toDouble())
+                EvalVal.Num(safeEpochDate(numArg(0), name).year.toDouble())
             }
             "month", "ay" -> {
                 requireCount(name, args, 1)
-                EvalVal.Num(LocalDate.ofEpochDay(numArg(0).toLong()).monthValue.toDouble())
+                EvalVal.Num(safeEpochDate(numArg(0), name).monthValue.toDouble())
             }
             "day", "gun" -> {
                 requireCount(name, args, 1)
-                EvalVal.Num(LocalDate.ofEpochDay(numArg(0).toLong()).dayOfMonth.toDouble())
+                EvalVal.Num(safeEpochDate(numArg(0), name).dayOfMonth.toDouble())
             }
             "weekday", "haftanin_gunu" -> {
                 requireCount(name, args, 1)
-                EvalVal.Num(LocalDate.ofEpochDay(numArg(0).toLong()).dayOfWeek.value.toDouble())
+                EvalVal.Num(safeEpochDate(numArg(0), name).dayOfWeek.value.toDouble())
             }
             "gun_farki", "days_between", "days" -> {
                 when (args.size) {
@@ -821,13 +827,15 @@ class MathExpressionEvaluator {
             }
             "add_days", "gun_ekle" -> {
                 requireCount(name, args, 2)
-                val baseDate = LocalDate.ofEpochDay(numArg(0).toLong())
-                val shifted = baseDate.plusDays(numArg(1).toLong())
+                val baseDate = safeEpochDate(numArg(0), name)
+                val delta = numArg(1).toLong()
+                val shifted = runCatching { baseDate.plusDays(delta) }
+                    .getOrElse { throw IllegalArgumentException("'$name': tarih taşması ($delta gün)") }
                 EvalVal.Num(shifted.toEpochDay().toDouble())
             }
             "format_date", "tarih_metin" -> {
                 requireCount(name, args, 1)
-                val date = LocalDate.ofEpochDay(numArg(0).toLong())
+                val date = safeEpochDate(numArg(0), name)
                 EvalVal.Str(date.format(DateTimeFormatter.ofPattern("dd.MM.yyyy")))
             }
             "replace", "degistir" -> {

@@ -51,6 +51,51 @@ data class ImportResult(
  */
 object BackupTransferManager {
 
+    private const val MAX_MANIFEST_BYTES = 10 * 1024 * 1024L // 10 MB
+    private const val MAX_MEDIA_ENTRY_BYTES = 60 * 1024 * 1024L // 60 MB
+
+    /**
+     * Strips directory separators (both '/' and '\') and traversal tokens to prevent Zip Slip.
+     */
+    internal fun sanitizeFileName(rawName: String, fallbackPrefix: String = "media"): String {
+        val base = rawName.substringAfterLast('/').substringAfterLast('\\')
+        val cleaned = base
+            .replace("..", "_")
+            .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            .trim('.', '_')
+            .take(120)
+        return cleaned.ifBlank { "${fallbackPrefix}_${UUID.randomUUID().toString().take(8)}" }
+    }
+
+    /**
+     * Resolves a file inside [parentDir] and enforces canonical containment to block path traversal.
+     */
+    private fun safeChildFile(parentDir: File, fileName: String): File {
+        val safeName = sanitizeFileName(fileName)
+        val child = File(parentDir, safeName)
+        val parentCanonical = parentDir.canonicalPath
+        val childCanonical = child.canonicalPath
+        if (!childCanonical.startsWith(parentCanonical + File.separator)) {
+            throw SecurityException("Blocked path traversal entry: $fileName")
+        }
+        return child
+    }
+
+    private fun copyBounded(input: InputStream, output: OutputStream, maxBytes: Long): Long {
+        val buf = ByteArray(16384)
+        var total = 0L
+        while (true) {
+            val read = input.read(buf)
+            if (read <= 0) break
+            total += read
+            if (total > maxBytes) {
+                throw IllegalStateException("ZIP entry exceeds size cap ($maxBytes bytes)")
+            }
+            output.write(buf, 0, read)
+        }
+        return total
+    }
+
     /**
      * Serializes selected profiles and/or attachments into a JSON bundle.
      */
@@ -129,7 +174,12 @@ object BackupTransferManager {
                     }
                 }
 
-                val packagedAtt = att.copy(images = packagedImages, videos = packagedVideos)
+                val packagedAtt = att.copy(
+                    images = packagedImages,
+                    videos = packagedVideos,
+                    legacyImageUri = null,
+                    legacyVideoUri = null
+                )
                 attArray.put(packagedAtt.toJson())
             }
         }
@@ -235,7 +285,12 @@ object BackupTransferManager {
                     }
                 }
 
-                val packagedAtt = att.copy(images = relativeImages, videos = relativeVideos)
+                val packagedAtt = att.copy(
+                    images = relativeImages,
+                    videos = relativeVideos,
+                    legacyImageUri = null,
+                    legacyVideoUri = null
+                )
                 attArray.put(packagedAtt.toJson())
             }
         }
@@ -283,23 +338,36 @@ object BackupTransferManager {
         var manifestJsonString: String? = null
         var totalMediaBytes = 0L
 
+        var foundPrimaryManifest = false
         ZipInputStream(inputStream.buffered()).use { zis ->
             var entry = zis.nextEntry
             while (entry != null) {
                 val entryName = entry.name
-                if (!entry.isDirectory) {
-                    if (entryName == "data.json" || entryName.endsWith(".json")) {
+                val baseEntry = entryName.substringAfterLast('/').substringAfterLast('\\')
+                val isMacMetadata = entryName.startsWith("__MACOSX/") || baseEntry.startsWith("._")
+                if (!entry.isDirectory && !isMacMetadata) {
+                    val lowerName = entryName.lowercase(java.util.Locale.ROOT)
+                    if (baseEntry.equals("data.json", ignoreCase = true) || (!foundPrimaryManifest && lowerName.endsWith(".json"))) {
                         val byteOut = ByteArrayOutputStream()
-                        zis.copyTo(byteOut)
+                        copyBounded(zis, byteOut, MAX_MANIFEST_BYTES)
                         manifestJsonString = byteOut.toString(Charsets.UTF_8.name())
-                    } else if (entryName.startsWith("media/") || entryName.endsWith(".jpg") || entryName.endsWith(".png") || entryName.endsWith(".mp4") || entryName.endsWith(".webm")) {
-                        val cleanFileName = entryName.substringAfterLast("/")
-                        val tempFile = File(stagingDir, cleanFileName)
+                        if (baseEntry.equals("data.json", ignoreCase = true)) {
+                            foundPrimaryManifest = true
+                        }
+                    } else if (
+                        lowerName.startsWith("media/") ||
+                        lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") ||
+                        lowerName.endsWith(".png") || lowerName.endsWith(".webp") ||
+                        lowerName.endsWith(".mp4") || lowerName.endsWith(".webm")
+                    ) {
+                        val cleanFileName = sanitizeFileName(entryName)
+                        val tempFile = safeChildFile(stagingDir, "${UUID.randomUUID().toString().take(6)}_$cleanFileName")
                         FileOutputStream(tempFile).use { fos ->
-                            zis.copyTo(fos)
+                            copyBounded(zis, fos, MAX_MEDIA_ENTRY_BYTES)
                         }
                         stagedFiles[entryName] = tempFile
                         stagedFiles[cleanFileName] = tempFile
+                        stagedFiles[baseEntry] = tempFile
                         totalMediaBytes += tempFile.length()
                     }
                 }
@@ -328,21 +396,23 @@ object BackupTransferManager {
     fun parseImportAuto(context: Context, uri: Uri): ImportPreviewData {
         return runCatching {
             val stream = context.contentResolver.openInputStream(uri) ?: return ImportPreviewData()
-            val buffered = BufferedInputStream(stream)
-            buffered.mark(1024)
+            stream.use { rawStream ->
+                val buffered = BufferedInputStream(rawStream)
+                buffered.mark(1024)
 
-            val header = ByteArray(4)
-            val bytesRead = buffered.read(header, 0, 4)
-            buffered.reset()
+                val header = ByteArray(4)
+                val bytesRead = buffered.read(header, 0, 4)
+                buffered.reset()
 
-            // Check PK zip signature (0x50, 0x4B, 0x03, 0x04) or (0x50, 0x4B, 0x05, 0x06)
-            val isZip = bytesRead >= 4 && header[0] == 0x50.toByte() && header[1] == 0x4B.toByte()
+                // Check PK zip signature (0x50, 0x4B, 0x03, 0x04) or (0x50, 0x4B, 0x05, 0x06)
+                val isZip = bytesRead >= 4 && header[0] == 0x50.toByte() && header[1] == 0x4B.toByte()
 
-            if (isZip) {
-                parseImportFromZip(buffered, context.cacheDir)
-            } else {
-                val text = buffered.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                parseImportPreview(text)
+                if (isZip) {
+                    parseImportFromZip(buffered, context.cacheDir)
+                } else {
+                    val text = buffered.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                    parseImportPreview(text)
+                }
             }
         }.onFailure { err ->
             AppDebugLogger.e("DATA-BACKUP", "İçe aktarma dosyası okunamadı", err)
@@ -481,10 +551,12 @@ object BackupTransferManager {
                 if (importMedia) {
                     // Extract photos: check staged ZIP files first, then Base64
                     for (imgKey in att.allImages) {
-                        val stagedFile = preview.stagedMediaFiles[imgKey] ?: preview.stagedMediaFiles[imgKey.substringAfterLast("/")]
+                        val stagedFile = preview.stagedMediaFiles[imgKey]
+                            ?: preview.stagedMediaFiles[imgKey.substringAfterLast("/").substringAfterLast("\\")]
+                            ?: preview.stagedMediaFiles[sanitizeFileName(imgKey)]
                         if (stagedFile != null && stagedFile.exists()) {
-                            val dest = File(mediaDir, "zip_${System.currentTimeMillis()}_${stagedFile.name}")
                             runCatching {
+                                val dest = safeChildFile(mediaDir, "zip_${System.currentTimeMillis()}_${sanitizeFileName(stagedFile.name, "img")}")
                                 stagedFile.copyTo(dest, overwrite = true)
                                 resolvedImages.add(dest.absolutePath)
                                 mediaRestored++
@@ -495,9 +567,9 @@ object BackupTransferManager {
                         } else {
                             val b64 = preview.mediaMap[imgKey]
                             if (b64 != null) {
-                                val cleanName = imgKey.substringAfterLast("/")
-                                val file = File(mediaDir, "imp_${System.currentTimeMillis()}_$cleanName")
                                 runCatching {
+                                    val cleanName = sanitizeFileName(imgKey, "img")
+                                    val file = safeChildFile(mediaDir, "imp_${System.currentTimeMillis()}_$cleanName")
                                     file.writeBytes(Base64.decode(b64, Base64.DEFAULT))
                                     resolvedImages.add(file.absolutePath)
                                     mediaRestored++
@@ -513,10 +585,12 @@ object BackupTransferManager {
 
                     // Extract videos: check staged ZIP files first, then Base64
                     for (vidKey in att.allVideos) {
-                        val stagedFile = preview.stagedMediaFiles[vidKey] ?: preview.stagedMediaFiles[vidKey.substringAfterLast("/")]
+                        val stagedFile = preview.stagedMediaFiles[vidKey]
+                            ?: preview.stagedMediaFiles[vidKey.substringAfterLast("/").substringAfterLast("\\")]
+                            ?: preview.stagedMediaFiles[sanitizeFileName(vidKey)]
                         if (stagedFile != null && stagedFile.exists()) {
-                            val dest = File(mediaDir, "zip_${System.currentTimeMillis()}_${stagedFile.name}")
                             runCatching {
+                                val dest = safeChildFile(mediaDir, "zip_${System.currentTimeMillis()}_${sanitizeFileName(stagedFile.name, "vid")}")
                                 stagedFile.copyTo(dest, overwrite = true)
                                 resolvedVideos.add(dest.absolutePath)
                                 mediaRestored++
@@ -527,9 +601,9 @@ object BackupTransferManager {
                         } else {
                             val b64 = preview.mediaMap[vidKey]
                             if (b64 != null) {
-                                val cleanName = vidKey.substringAfterLast("/")
-                                val file = File(mediaDir, "imp_${System.currentTimeMillis()}_$cleanName")
                                 runCatching {
+                                    val cleanName = sanitizeFileName(vidKey, "vid")
+                                    val file = safeChildFile(mediaDir, "imp_${System.currentTimeMillis()}_$cleanName")
                                     file.writeBytes(Base64.decode(b64, Base64.DEFAULT))
                                     resolvedVideos.add(file.absolutePath)
                                     mediaRestored++
@@ -545,7 +619,12 @@ object BackupTransferManager {
                 }
 
                 val finalAtt = if (importMedia) {
-                    att.copy(images = resolvedImages, videos = resolvedVideos)
+                    att.copy(
+                        images = resolvedImages,
+                        videos = resolvedVideos,
+                        legacyImageUri = null,
+                        legacyVideoUri = null
+                    )
                 } else {
                     att.copy(images = emptyList(), videos = emptyList(), legacyImageUri = null, legacyVideoUri = null)
                 }

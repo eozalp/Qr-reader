@@ -190,6 +190,7 @@ object AppDebugLogger {
                 sb.appendLine("QoS: ${hidTelemetry.qosLabel}")
                 sb.appendLine("Klavye TX: ${hidTelemetry.keyboardReportsSent} (Hata: ${hidTelemetry.keyboardReportsFailed})")
                 sb.appendLine("Mouse TX: ${hidTelemetry.mouseReportsSent} (Hata: ${hidTelemetry.mouseReportsFailed})")
+                sb.appendLine("PC Yanıt (ACK): ${hidTelemetry.hostAckCount}")
                 if (!hidTelemetry.lastFailureReason.isNullOrBlank()) {
                     sb.appendLine("Son HID Hatası: ${hidTelemetry.lastFailureReason}")
                 }

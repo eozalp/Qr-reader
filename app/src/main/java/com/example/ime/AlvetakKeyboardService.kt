@@ -200,7 +200,7 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         AppDebugLogger.i("IME", "AlvetakKeyboardService onCreate")
         lifecycleRegistry = LifecycleRegistry(this)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
-        profileRepository = ProfileRepository(applicationContext)
+        profileRepository = ProfileRepository.getInstance(applicationContext)
         hidManager = BluetoothHidManager.getInstance(applicationContext)
         airMouseController = AirMouseController(applicationContext) { dx, dy ->
             if (hidManager.isHidHostConnected()) {
@@ -937,11 +937,19 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
                         MotionEvent.ACTION_MOVE -> {
                             val dy = ev.y - scrollLastY
                             scrollLastY = ev.y
-                            scrollAccum -= dy / dp(12)
+                            scrollAccum -= dy / dp(12).coerceAtLeast(1)
                             val steps = scrollAccum.toInt()
                             if (steps != 0) {
                                 scrollAccum -= steps
-                                hidManager.sendMouseMove(0, 0, wheel = steps.coerceIn(-12, 12))
+                                if (hidManager.isHidHostConnected()) {
+                                    hidManager.sendMouseMove(0, 0, wheel = steps.coerceIn(-12, 12))
+                                } else {
+                                    val nowMs = System.currentTimeMillis()
+                                    if (nowMs - lastDisconnectedTouchToastMs > 2500L) {
+                                        lastDisconnectedTouchToastMs = nowMs
+                                        showStatusToast("PC Bluetooth bağlı değil")
+                                    }
+                                }
                             }
                             true
                         }
@@ -2006,7 +2014,9 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         val pv = previewView ?: return
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
-            if (scanMode != ScanInputMode.BARCODE) return@addListener
+            if (scanMode != ScanInputMode.BARCODE || !lifecycleRegistry.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                return@addListener
+            }
             try {
                 val provider = providerFuture.get()
                 cameraProvider = provider
@@ -2104,8 +2114,13 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
 
         // Release barcodes that left camera view for > 1.2s
         val gone = activeInFrameRaw.filter { it !in visibleRaws && (now - (lastSeenMs[it] ?: 0L)) > 1200L }
-        activeInFrameRaw.removeAll(gone.toSet())
-        dismissedUntilGone.removeAll(gone.toSet())
+        val goneSet = gone.toSet()
+        activeInFrameRaw.removeAll(goneSet)
+        dismissedUntilGone.removeAll(goneSet)
+        goneSet.forEach { lastSeenMs.remove(it) }
+        if (lastSeenMs.size > 256) {
+            lastSeenMs.entries.removeIf { it.key !in visibleRaws && (now - it.value) > 10_000L }
+        }
 
         val firstCode = detected.firstOrNull() ?: return
         val raw = firstCode.rawValue
@@ -2120,7 +2135,13 @@ class AlvetakKeyboardService : InputMethodService(), LifecycleOwner {
         val activeProfile = profileRepository.activeProfile.value
         updateModeChipLabel(activeProfile)
 
-        val parsed = qrTracker.processQr(raw, activeProfile, firstCode.format, firstCode.formatName)
+        val parsed = qrTracker.processQr(
+            rawText = raw,
+            profile = activeProfile,
+            format = firstCode.format,
+            formatName = firstCode.formatName,
+            globalVariables = profileRepository.globalVariables.value
+        )
         val effectiveConfig = activeProfile.bluetoothKeyboard.copy(
             sendTarget = currentSendTargetOverride ?: activeProfile.bluetoothKeyboard.sendTarget
         )

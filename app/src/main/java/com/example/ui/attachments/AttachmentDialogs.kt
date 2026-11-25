@@ -79,11 +79,12 @@ fun EmbeddedVideoPlayer(
         AndroidView(
             factory = { ctx ->
                 VideoView(ctx).apply {
-                    val uri = if (videoPath.startsWith("http")) {
+                    val uri = if (videoPath.startsWith("http") || videoPath.startsWith("content://")) {
                         Uri.parse(videoPath)
                     } else {
                         Uri.fromFile(File(videoPath))
                     }
+                    tag = videoPath
                     setVideoURI(uri)
                     setOnPreparedListener { mp ->
                         isPrepared = true
@@ -91,6 +92,7 @@ fun EmbeddedVideoPlayer(
                     }
                     setOnErrorListener { _, _, _ ->
                         isPrepared = false
+                        isPlaying = false
                         true
                     }
                     videoViewRef = this
@@ -98,6 +100,18 @@ fun EmbeddedVideoPlayer(
             },
             update = { view ->
                 videoViewRef = view
+                if (view.tag != videoPath) {
+                    view.stopPlayback()
+                    isPlaying = false
+                    isPrepared = false
+                    val uri = if (videoPath.startsWith("http") || videoPath.startsWith("content://")) {
+                        Uri.parse(videoPath)
+                    } else {
+                        Uri.fromFile(File(videoPath))
+                    }
+                    view.tag = videoPath
+                    view.setVideoURI(uri)
+                }
             },
             modifier = Modifier.fillMaxSize()
         )
@@ -153,12 +167,19 @@ fun AttachmentDetailDialog(
     onEdit: (QrAttachment) -> Unit
 ) {
     val context = LocalContext.current
-    var selectedImageIndex by remember { mutableIntStateOf(0) }
-    var selectedVideoIndex by remember { mutableIntStateOf(0) }
-    var isFullScreenPhoto by remember { mutableStateOf(false) }
+    var selectedImageIndex by remember(attachment.id) { mutableIntStateOf(0) }
+    var selectedVideoIndex by remember(attachment.id) { mutableIntStateOf(0) }
+    var isFullScreenPhoto by remember(attachment.id) { mutableStateOf(false) }
 
     val images = attachment.allImages
     val videos = attachment.allVideos
+
+    if (images.isNotEmpty() && selectedImageIndex >= images.size) {
+        selectedImageIndex = images.lastIndex
+    }
+    if (videos.isNotEmpty() && selectedVideoIndex >= videos.size) {
+        selectedVideoIndex = videos.lastIndex
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -454,14 +475,20 @@ fun EditAttachmentDialog(
         if (uris.isNotEmpty()) {
             isOptimizingMedia = true
             coroutineScope.launch {
+                var savedCount = 0
                 for (uri in uris) {
                     val result = attachmentRepository.saveImageLocally(uri, selectedQuality)
                     if (result != null) {
                         imageList = imageList + result.filePath
+                        savedCount++
                     }
                 }
                 isOptimizingMedia = false
-                Toast.makeText(context, "${uris.size} photos optimized & attached!", Toast.LENGTH_SHORT).show()
+                if (savedCount > 0) {
+                    Toast.makeText(context, "$savedCount/${uris.size} fotoğraf optimize edildi ve eklendi!", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Seçilen fotoğraflar işlenemedi", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -830,6 +857,8 @@ fun EditAttachmentDialog(
                             notes = notes.trim(),
                             images = imageList,
                             videos = videoList,
+                            legacyImageUri = null,
+                            legacyVideoUri = null,
                             customFields = customFields,
                             showInOverlay = showInOverlay,
                             showInTable = showInTable
@@ -1363,30 +1392,34 @@ fun LinkedAttachmentsSheet(
                     // Primary Action: Share via Apps using a single ZIP (with media + JSON) or JSON
                     Button(
                         onClick = {
-                            if (exportWithMedia && targetAttachments.any { it.allImages.isNotEmpty() || it.allVideos.isNotEmpty() }) {
-                                val zipFile = BackupTransferManager.createExportZipFile(
-                                    context = context,
-                                    profiles = emptyList(),
-                                    attachments = targetAttachments,
-                                    includeMedia = true,
-                                    filePrefix = "qr_attachments_bundle"
-                                )
-                                val shareIntent = BackupTransferManager.getShareIntentForZip(
-                                    context = context,
-                                    zipFile = zipFile,
-                                    subject = "QR Attachments Archive (with Media)"
-                                )
-                                context.startActivity(Intent.createChooser(shareIntent, "Share Attachments ZIP via"))
-                            } else {
-                                val json = generatePayload()
-                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(Intent.EXTRA_SUBJECT, "QR Attachments Export")
-                                    putExtra(Intent.EXTRA_TEXT, json)
+                            runCatching {
+                                if (exportWithMedia && targetAttachments.any { it.allImages.isNotEmpty() || it.allVideos.isNotEmpty() }) {
+                                    val zipFile = BackupTransferManager.createExportZipFile(
+                                        context = context,
+                                        profiles = emptyList(),
+                                        attachments = targetAttachments,
+                                        includeMedia = true,
+                                        filePrefix = "qr_attachments_bundle"
+                                    )
+                                    val shareIntent = BackupTransferManager.getShareIntentForZip(
+                                        context = context,
+                                        zipFile = zipFile,
+                                        subject = "QR Attachments Archive (with Media)"
+                                    )
+                                    context.startActivity(Intent.createChooser(shareIntent, "Share Attachments ZIP via"))
+                                } else {
+                                    val json = generatePayload()
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_SUBJECT, "QR Attachments Export")
+                                        putExtra(Intent.EXTRA_TEXT, json)
+                                    }
+                                    context.startActivity(Intent.createChooser(shareIntent, "Share Attachments via"))
                                 }
-                                context.startActivity(Intent.createChooser(shareIntent, "Share Attachments via"))
+                                showExportDialog = false
+                            }.onFailure { err ->
+                                Toast.makeText(context, "Paylaşım başlatılamadı: ${err.message}", Toast.LENGTH_LONG).show()
                             }
-                            showExportDialog = false
                         },
                         modifier = Modifier.fillMaxWidth(),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),

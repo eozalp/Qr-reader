@@ -725,8 +725,12 @@ fun QrTrackingHudElement(
         val estHalfW = with(density) { (overlayConfig.customWidth / 2f).dp.toPx() }
         val estHalfH = with(density) { (overlayConfig.customHeight / 2f).dp.toPx() }
 
-        finalTargetX = finalTargetX.coerceIn(margin + estHalfW, screenWidthPx - margin - estHalfW)
-        finalTargetY = finalTargetY.coerceIn(margin + estHalfH, screenHeightPx - margin - estHalfH)
+        val minX = margin + estHalfW
+        val maxX = screenWidthPx - margin - estHalfW
+        val minY = margin + estHalfH
+        val maxY = screenHeightPx - margin - estHalfH
+        finalTargetX = if (minX <= maxX) finalTargetX.coerceIn(minX, maxX) else screenWidthPx * 0.5f
+        finalTargetY = if (minY <= maxY) finalTargetY.coerceIn(minY, maxY) else screenHeightPx * 0.5f
     }
 
     Box(
@@ -2273,7 +2277,7 @@ fun parseHexColor(hex: String): Color {
 }
 
 fun getIconForName(name: String): ImageVector? {
-    return when (name.lowercase()) {
+    return when (name.lowercase(java.util.Locale.ROOT)) {
         "calculator" -> Icons.Default.Calculate
         "tag" -> Icons.Default.LocalOffer
         "qr" -> Icons.Default.QrCode

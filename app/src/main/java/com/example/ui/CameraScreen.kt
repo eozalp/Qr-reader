@@ -497,6 +497,9 @@ fun CameraScreen(
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
+            if (lifecycleOwner.lifecycle.currentState == androidx.lifecycle.Lifecycle.State.DESTROYED) {
+                return@addListener
+            }
             try {
                 val cameraProvider = cameraProviderFuture.get()
                 cameraProvider.unbindAll()
