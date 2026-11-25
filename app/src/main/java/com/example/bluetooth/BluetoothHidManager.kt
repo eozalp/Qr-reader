@@ -150,6 +150,9 @@ class BluetoothHidManager(private val context: Context? = null) {
     @Volatile
     private var activeRegisterWatchdog: ScheduledFuture<*>? = null
     @Volatile
+    private var activeKeepAliveTask: ScheduledFuture<*>? = null
+    private val keepAliveLoggedOnce = AtomicBoolean(false)
+    @Volatile
     private var connectedAtMs: Long = 0L
     @Volatile
     private var lastReportSentAtMs: Long = 0L
@@ -459,6 +462,62 @@ class BluetoothHidManager(private val context: Context? = null) {
     private fun cancelRegisterWatchdog() {
         activeRegisterWatchdog?.cancel(false)
         activeRegisterWatchdog = null
+    }
+
+    private fun cancelKeepAliveHeartbeat() {
+        activeKeepAliveTask?.cancel(false)
+        activeKeepAliveTask = null
+    }
+
+    /**
+     * Sends a harmless all-zero keyboard HID report every ~25s while idle so Linux BlueZ
+     * (`IdleTimeout`) and Bluetooth Classic Sniff/Link Supervision never drop an idle connection
+     * after a few minutes of inactivity.
+     */
+    @SuppressLint("MissingPermission")
+    private fun startKeepAliveHeartbeat() {
+        cancelKeepAliveHeartbeat()
+        keepAliveLoggedOnce.set(false)
+        activeKeepAliveTask = controlExecutor.scheduleWithFixedDelay({
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return@scheduleWithFixedDelay
+            val hid = hidDeviceProfile ?: return@scheduleWithFixedDelay
+            val dev = connectedHostDevice ?: return@scheduleWithFixedDelay
+            if (_connectionStatus.value != HidConnectionStatus.CONNECTED) return@scheduleWithFixedDelay
+
+            val idleMs = System.currentTimeMillis() - lastReportSentAtMs
+            if (idleMs < 24_000L || _isTransmitting.value || sendMutex.isLocked) {
+                return@scheduleWithFixedDelay
+            }
+
+            val hasHeldKeys = synchronized(liveHeldKeysLock) {
+                liveHeldKeys.isNotEmpty() || liveHeldModifiers != 0.toByte()
+            }
+            if (hasHeldKeys || activeMouseButtons != 0) return@scheduleWithFixedDelay
+
+            hidTxExecutor.execute {
+                val activeHid = hidDeviceProfile ?: return@execute
+                val activeDev = connectedHostDevice ?: return@execute
+                if (activeDev.address != dev.address || _connectionStatus.value != HidConnectionStatus.CONNECTED) return@execute
+                if (_isTransmitting.value || sendMutex.isLocked) return@execute
+                val ok = sendRawHidReport(activeHid, activeDev, activeReportId, newZeroReport())
+                if (ok) {
+                    lastReportSentAtMs = System.currentTimeMillis()
+                    if (keepAliveLoggedOnce.compareAndSet(false, true)) {
+                        AppDebugLogger.d("BT-HID", "Boşta HID keep-alive nabzı aktif (${activeDev.address}, 25sn aralık)")
+                    }
+                } else {
+                    AppDebugLogger.w("BT-HID", "HID keep-alive gönderilemedi (${activeDev.address}); bağlantı doğrulanıyor")
+                    controlExecutor.execute {
+                        if (!syncHidConnectionFromProxy("keepalive_probe")) {
+                            clearConnectionState(stopService = false)
+                            _connectionStatus.value = HidConnectionStatus.DISCONNECTED
+                            _connectionDiagnostic.value = "Bilgisayar bağlantısı boşta zaman aşımına uğradı. Tekrar bağlanabilirsiniz."
+                            refreshPairedDevices()
+                        }
+                    }
+                }
+            }
+        }, 25L, 25L, TimeUnit.SECONDS)
     }
 
     fun onForegroundServiceStoppedByUser() {
@@ -944,11 +1003,20 @@ class BluetoothHidManager(private val context: Context? = null) {
                                 val lastDev = if (!lastAddr.isNullOrBlank()) {
                                     runCatching { bluetoothAdapter?.bondedDevices?.firstOrNull { it.address == lastAddr } }.getOrNull()
                                 } else null
-                                // Only auto-reconnect if that host is ACTUALLY reachable/ACL-connected right now!
-                                // Otherwise don't hijack the UI into CONNECTING for an absent PC.
+                                // Only auto-reconnect if that host is ACTUALLY reachable/ACL-connected right now,
+                                // and wait 1.2s first so an incoming PC-initiated connect isn't blocked by L2CAP glare!
                                 if (lastDev != null && isDeviceSystemConnected(lastDev)) {
-                                    AppDebugLogger.i("BT-HID", "Önceki host Android'de aktif bağlı; otomatik HID bağlanılıyor: ${lastDev.address}")
-                                    connectToDevice(lastDev.address, isAutoReconnect = true)
+                                    val targetAddr = lastDev.address
+                                    AppDebugLogger.i("BT-HID", "Önceki host Android'de aktif bağlı; 1.2sn içinde HID kontrol edilip otomatik bağlanılacak: $targetAddr")
+                                    controlExecutor.schedule({
+                                        if (connectedHostDevice == null &&
+                                            pendingConnectAddress == null &&
+                                            _connectionStatus.value == HidConnectionStatus.DISCONNECTED &&
+                                            !syncHidConnectionFromProxy("delayed_auto_reconnect")
+                                        ) {
+                                            connectToDevice(targetAddr, isAutoReconnect = true)
+                                        }
+                                    }, 1200L, TimeUnit.MILLISECONDS)
                                 } else {
                                     refreshPairedDevices()
                                 }
@@ -1051,13 +1119,13 @@ class BluetoothHidManager(private val context: Context? = null) {
                             // Transition FGS to standby rather than killing it so HID SDP stays alive for re-pairing!
                             clearConnectionState(stopService = false)
                             _connectionStatus.value = HidConnectionStatus.DISCONNECTED
-                            if (state == BluetoothProfile.STATE_DISCONNECTED) {
+                            if (state == BluetoothProfile.STATE_DISCONNECTED && (wasConnectedToThis || wasConnectingToThis)) {
                                 val devName = getDeviceDisplayName(device)
                                 val sysAcl = if (device != null) isDeviceSystemConnected(device) else false
                                 _connectionDiagnostic.value = if (wasConnectingToThis && sysAcl) {
-                                    "Android '$devName' ile bağlı ama PC/Linux eski eşleşmede HID (Klavye/Fare) kaydı olmadığı için reddetti. HID yayını artık arka planda korunuyor — PC/Linux Bluetooth'tan telefonu 1 kez 'Kaldır' yapıp yeniden eşleştirin."
+                                    "Android '$devName' ile bağlı ama PC/Linux HID (Klavye/Fare) kanalını reddetti. PC/Linux Bluetooth menüsünden telefona 'Bağlan' deyin; devam ederse kaldırıp yeniden eşleştirin."
                                 } else if (wasConnectingToThis) {
-                                    "'$devName' Bluetooth yanıtı vermedi (ACL kapalı). PC Bluetooth'unun açık olduğundan emin olun; gerekirse PC'den telefona 'Bağlan' deyin veya kaldırıp yeniden eşleştirin."
+                                    "'$devName' Bluetooth yanıtı vermedi (ACL kapalı). PC Bluetooth'unun açık olduğundan emin olun; gerekirse PC'den telefona 'Bağlan' deyin."
                                 } else {
                                     "Bağlantı kesildi ($devName)."
                                 }
@@ -1149,6 +1217,7 @@ class BluetoothHidManager(private val context: Context? = null) {
             compatFallbackTriedForAddress.remove(device.address)
             connectedHostDevice = device
             connectedAtMs = System.currentTimeMillis()
+            lastReportSentAtMs = connectedAtMs
             if (!protocolNegotiatedForConnection) {
                 isBootProtocolMode = false
                 activeReportId = currentKeyboardReportId()
@@ -1173,10 +1242,12 @@ class BluetoothHidManager(private val context: Context? = null) {
         )
         prefs?.edit()?.putString(KEY_LAST_HOST_ADDRESS, device.address)?.apply()
         context?.let { BluetoothHidForegroundService.startOrUpdate(it, name, isConnected = true) }
+        startKeepAliveHeartbeat()
         refreshPairedDevices()
     }
 
     private fun clearConnectionState(stopService: Boolean) {
+        cancelKeepAliveHeartbeat()
         connectedHostDevice = null
         connectedAtMs = 0L
         protocolNegotiatedForConnection = false
@@ -1379,13 +1450,14 @@ class BluetoothHidManager(private val context: Context? = null) {
                         return@scheduleAtFixedRate
                     }
 
-                    // 3) Hard 10s timeout -> auto-fallback to Compatibility QoS once if on custom QoS, else cleanly exit!
-                    if (elapsedMs >= 10000L) {
+                    // 3) Hard timeout (4.5s for background auto-reconnect so it never blocks PC-initiated connect; 12s for manual tap)
+                    val hardTimeoutMs = if (isAutoReconnect) 4500L else 12000L
+                    if (elapsedMs >= hardTimeoutMs) {
                         val isAclConnected = isDeviceSystemConnected(device)
                         if (!isAutoReconnect && qosTierIndex == 1 && compatFallbackTriedForAddress.add(address)) {
                             AppDebugLogger.w(
                                 "BT-HID",
-                                "10s zaman aşımı (tier=$qosTierIndex, dev=$address); Standart Uyumlu QoS ile otomatik yeniden deneniyor"
+                                "${hardTimeoutMs / 1000}s zaman aşımı (tier=$qosTierIndex, dev=$address); Standart Uyumlu QoS ile otomatik yeniden deneniyor"
                             )
                             runCatching { currentProxy.disconnect(device) }
                             cancelConnectWatchdog()
@@ -1396,7 +1468,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                         }
                         AppDebugLogger.e(
                             "BT-HID",
-                            "Bağlantı zaman aşımı (10s): dev=$address ($name) type=$deviceTypeLabel polledHidState=$polledState bond=$bondState aclConnected=$isAclConnected reg=$isAppRegistered mode=${_hidProfileMode.value} tier=$qosTierIndex"
+                            "Bağlantı zaman aşımı (${hardTimeoutMs / 1000}s, auto=$isAutoReconnect): dev=$address ($name) type=$deviceTypeLabel polledHidState=$polledState bond=$bondState aclConnected=$isAclConnected reg=$isAppRegistered mode=${_hidProfileMode.value} tier=$qosTierIndex"
                         )
                         runCatching { currentProxy.disconnect(device) }
                         cancelConnectWatchdog()
@@ -1405,10 +1477,12 @@ class BluetoothHidManager(private val context: Context? = null) {
                             null
                         } else if (deviceType == BluetoothDevice.DEVICE_TYPE_LE) {
                             "'$name' yalnızca BLE (Low Energy) eşleşmiş. HID Klavye için Classic Bluetooth gerekir — cihazı kaldırıp yeniden eşleştirin."
+                        } else if (isAclConnected && polledState == BluetoothProfile.STATE_CONNECTING) {
+                            "Android '$name' ile bağlı ama bilgisayar gelen HID isteğini onaylamadı (12sn). Çözüm: PC/Linux Bluetooth menüsünden telefona 'Bağlan' deyin (Linux'ta 1 kez 'bluetoothctl trust <telefon_MAC>' yapın)."
                         } else if (isAclConnected) {
-                            "Android '$name' cihazına bağlı ancak bilgisayar HID (Klavye/Fare) kanalını açmadı. 'Saf Klavye (Linux)' modunu deneyin veya PC/Linux Bluetooth'tan telefonu 'Kaldır' yapıp ALVETAK açıkken yeniden eşleştirin."
+                            "Android '$name' cihazına bağlı ancak bilgisayar HID (Klavye/Fare) kanalını açmadı. PC/Linux Bluetooth menüsünden telefona 'Bağlan' deyin veya kaldırıp yeniden eşleştirin."
                         } else {
-                            "'$name' cihazı 10 sn içinde HID bağlantısını kabul etmedi. PC Bluetooth açıkken tekrar deneyin veya 'HID Sıfırla'ya basın."
+                            "'$name' cihazı 12 sn içinde HID bağlantısını kabul etmedi. PC Bluetooth açıkken tekrar deneyin veya PC'den telefona 'Bağlan' deyin."
                         }
                     }
                 }, 450L, 450L, TimeUnit.MILLISECONDS)
