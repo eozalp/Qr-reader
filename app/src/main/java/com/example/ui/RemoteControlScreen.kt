@@ -72,6 +72,7 @@ import com.example.ui.remote.GyroCalibrationDrawer
 import com.example.ui.remote.KeyboardDeckPage
 import com.example.ui.remote.MediaRemoteDeckCard
 import com.example.ui.remote.ModifierLatchState
+import com.example.ui.remote.OledAodRemoteOverlay
 import com.example.ui.remote.PcShortcutsRibbon
 import com.example.ui.remote.PrecisionTouchpadWithScroll
 import com.example.ui.remote.QuickTextAndClipboardBar
@@ -132,6 +133,7 @@ fun RemoteControlScreen(
     onOpenQrScanner: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onLockScreenConfigChanged: (lockScreenEnabled: Boolean, keepAwake: Boolean) -> Unit = { _, _ -> },
+    onAodModeChanged: (aodEnabled: Boolean, roomBrightBoost: Boolean) -> Unit = { _, _ -> },
     onLandscapeModeChanged: (landscapeEnabled: Boolean) -> Unit = {},
     onRegisterVolumeKeyHandler: (((keyCode: Int, isDown: Boolean) -> Boolean)?) -> Unit = {},
     modifier: Modifier = Modifier
@@ -226,6 +228,8 @@ fun RemoteControlScreen(
     }
     var isGameGyroAimEnabled by remember { mutableStateOf(false) }
     var isGameLandscapeLocked by remember { mutableStateOf(false) }
+    var isOledAodMode by rememberSaveable { mutableStateOf(false) }
+    var isAodRoomBright by rememberSaveable { mutableStateOf(false) }
 
     // Keyboard & Numpad states
     var keyboardPage by remember { mutableStateOf(KeyboardDeckPage.ALPHA) }
@@ -263,22 +267,28 @@ fun RemoteControlScreen(
         airMouseController.sensitivity = airSensitivity
     }
 
-    val shouldRunAirMouse = isLifecycleResumed && when (selectedTab) {
+    val shouldRunAirMouse = isLifecycleResumed && !isOledAodMode && when (selectedTab) {
         RemoteControlTab.KUMANDA -> isAirMouseContinuous || isAirHoldPressed
         RemoteControlTab.GAMEPAD -> isGameGyroAimEnabled
         else -> false
     }
 
-    val effectiveKeepAwake = isLockScreenEnabled &&
-        connectionStatus == HidConnectionStatus.CONNECTED &&
-        (isKeepAwakeHot || shouldRunAirMouse || selectedTab == RemoteControlTab.GAMEPAD)
+    val effectiveKeepAwake = isOledAodMode || (
+        isLockScreenEnabled &&
+            connectionStatus == HidConnectionStatus.CONNECTED &&
+            (isKeepAwakeHot || shouldRunAirMouse || selectedTab == RemoteControlTab.GAMEPAD)
+        )
 
-    LaunchedEffect(isLockScreenEnabled, effectiveKeepAwake) {
-        onLockScreenConfigChanged(isLockScreenEnabled, effectiveKeepAwake)
+    LaunchedEffect(isLockScreenEnabled, isOledAodMode, effectiveKeepAwake) {
+        onLockScreenConfigChanged(isLockScreenEnabled || isOledAodMode, effectiveKeepAwake)
     }
 
-    LaunchedEffect(isGameLandscapeLocked, selectedTab) {
-        onLandscapeModeChanged(selectedTab == RemoteControlTab.GAMEPAD && isGameLandscapeLocked)
+    LaunchedEffect(isOledAodMode, isAodRoomBright) {
+        onAodModeChanged(isOledAodMode, isAodRoomBright)
+    }
+
+    LaunchedEffect(isGameLandscapeLocked, selectedTab, isOledAodMode) {
+        onLandscapeModeChanged(!isOledAodMode && selectedTab == RemoteControlTab.GAMEPAD && isGameLandscapeLocked)
     }
 
     LaunchedEffect(selectedTab) {
@@ -315,12 +325,12 @@ fun RemoteControlScreen(
         }
     }
 
-    // Route physical Volume keys -> PC Volume OR Game Mode L1/R1 Fire & Aim triggers!
-    DisposableEffect(selectedTab, isVolumeKeysPcEnabled, isGameVolumeTriggersEnabled) {
+    // Route physical Volume keys -> PC Volume (always in OLED AOD!) OR Game Mode L1/R1 Fire & Aim triggers!
+    DisposableEffect(selectedTab, isVolumeKeysPcEnabled, isGameVolumeTriggersEnabled, isOledAodMode) {
         val handler: (Int, Boolean) -> Boolean = handler@{ keyCode, isDown ->
             if (!hidManager.isHidHostConnected()) return@handler false
 
-            if (selectedTab == RemoteControlTab.GAMEPAD && isGameVolumeTriggersEnabled) {
+            if (!isOledAodMode && selectedTab == RemoteControlTab.GAMEPAD && isGameVolumeTriggersEnabled) {
                 when (keyCode) {
                     KeyEvent.KEYCODE_VOLUME_UP -> {
                         hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, isDown)
@@ -331,7 +341,7 @@ fun RemoteControlScreen(
                         return@handler true
                     }
                 }
-            } else if (isVolumeKeysPcEnabled) {
+            } else if (isOledAodMode || isVolumeKeysPcEnabled) {
                 when (keyCode) {
                     KeyEvent.KEYCODE_VOLUME_UP -> {
                         if (isDown) {
@@ -363,6 +373,7 @@ fun RemoteControlScreen(
         hidManager.refreshState()
         onDispose {
             onRegisterVolumeKeyHandler(null)
+            onAodModeChanged(false, false)
             onLockScreenConfigChanged(false, false)
             onLandscapeModeChanged(false)
             hidKeyQueue.close()
@@ -513,10 +524,11 @@ fun RemoteControlScreen(
     val isConnected = connectionStatus == HidConnectionStatus.CONNECTED
     val hasFailure = hasTelemetryFailure
 
-    Scaffold(
-        modifier = modifier
-            .fillMaxSize()
-            .background(ObsidianDeep)
+    Box(modifier = modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(ObsidianDeep)
             .drawWithCache {
                 val glowBrush = Brush.radialGradient(
                     colors = listOf(modeAccent.copy(alpha = 0.14f), ObsidianDeep),
@@ -580,6 +592,10 @@ fun RemoteControlScreen(
                     }
                 },
                 onToggleDiagnostics = { showDiagnosticsBar = !showDiagnosticsBar },
+                onEnterOledAodMode = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    isOledAodMode = true
+                },
                 onOpenGestureGuide = { showGestureGuide = true }
             )
         },
@@ -965,8 +981,41 @@ fun RemoteControlScreen(
         }
     }
 
-    if (showGestureGuide) {
+    if (showGestureGuide && !isOledAodMode) {
         TouchpadGestureGuideDialog(onDismiss = { showGestureGuide = false })
+    }
+
+    AnimatedVisibility(
+        visible = isOledAodMode,
+        enter = fadeIn(tween(220)),
+        exit = fadeOut(tween(180))
+    ) {
+        OledAodRemoteOverlay(
+            hidManager = hidManager,
+            connectionStatus = connectionStatus,
+            connectedDeviceName = connectedDeviceName,
+            touchpadSpeed = if (isPrecisionMode) 0.45f else touchpadSpeed,
+            naturalScroll = naturalScroll,
+            isRoomBrightBoost = isAodRoomBright,
+            onToggleBrightnessBoost = { isAodRoomBright = !isAodRoomBright },
+            onConsumerControl = { usage ->
+                if (!hidManager.isHidHostConnected()) {
+                    notifyDisconnected()
+                    return@OledAodRemoteOverlay
+                }
+                coroutineScope.launch { hidManager.sendConsumerControl(usage) }
+            },
+            onZoomWheel = ::handleZoomWheel,
+            onThreeFingerSwipe = ::handleThreeFingerSwipe,
+            onFullscreenToggle = { sendSpecialKey(BluetoothHidManager.KEY_F, 0) },
+            onOpenBluetoothSheet = onOpenBluetoothSheet,
+            onDisconnectedTap = ::notifyDisconnected,
+            onExitAodMode = {
+                markActiveInteraction()
+                isOledAodMode = false
+            }
+        )
+    }
     }
 }
 
@@ -1101,6 +1150,7 @@ private fun RemoteSlimHudTopBar(
     onToggleLockScreen: () -> Unit,
     onToggleVolumeKeys: () -> Unit,
     onToggleDiagnostics: () -> Unit,
+    onEnterOledAodMode: () -> Unit,
     onOpenGestureGuide: () -> Unit
 ) {
     val isConnected = connectionStatus == HidConnectionStatus.CONNECTED
@@ -1109,10 +1159,10 @@ private fun RemoteSlimHudTopBar(
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .padding(horizontal = 10.dp, vertical = 4.dp)
-            .height(46.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .height(48.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         // Side Feature: 1-Tap QR Scanner Launch
         HudQuickToggleButton(
@@ -1193,6 +1243,16 @@ private fun RemoteSlimHudTopBar(
             modifier = Modifier.testTag("remote_volume_keys_toggle_btn")
         )
 
+        // OLED Always-On Remote Mode (True-Black Dimmed Blind Touchpad + Media)
+        HudQuickToggleButton(
+            icon = Icons.Default.Bedtime,
+            contentDescription = "OLED AOD Kumanda Modu",
+            isActive = false,
+            activeColor = NeonCyan,
+            onClick = onEnterOledAodMode,
+            modifier = Modifier.testTag("remote_oled_aod_btn")
+        )
+
         // Connected Diagnostics OR Settings
         if (isConnected) {
             HudQuickToggleButton(
@@ -1245,7 +1305,7 @@ private fun HudQuickToggleButton(
     )
     Box(
         modifier = modifier
-            .size(39.dp)
+            .size(36.dp)
             .clip(CircleShape)
             .background(bg)
             .border(1.dp, border, CircleShape)
@@ -1256,7 +1316,7 @@ private fun HudQuickToggleButton(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = if (isActive) activeColor else Color(0xFF94A3B8),
-            modifier = Modifier.size(18.dp)
+            modifier = Modifier.size(17.dp)
         )
     }
 }

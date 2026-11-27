@@ -558,4 +558,16 @@ class BluetoothHidPayloadTest {
         val hidManager = BluetoothHidManager()
         assertFalse(hidManager.hasTelemetryFailure.value)
     }
+
+    @Test
+    fun testOledBurnInShiftStaysBoundedAndCyclesCleanly() {
+        val uniquePositions = mutableSetOf<Pair<Int, Int>>()
+        for (minute in 0..25) {
+            val (dx, dy) = com.example.ui.remote.OledBurnInShift.offsetDpForMinute(minute)
+            assertTrue("X shift must stay within ±14dp, got $dx", dx in -14..14)
+            assertTrue("Y shift must stay within ±10dp, got $dy", dy in -10..10)
+            uniquePositions.add(dx to dy)
+        }
+        assertTrue("Anti-burn-in shift should visit multiple distinct coordinates", uniquePositions.size >= 8)
+    }
 }

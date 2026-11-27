@@ -17,6 +17,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.example.bluetooth.BluetoothHidManager
 import com.example.data.ProfileRepository
 import com.example.debug.AppDebugLogger
@@ -77,9 +80,10 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Always clear lock-screen bypass, keep-screen-on, orientation lock & volume intercept outside Remote
+                // Always clear lock-screen bypass, keep-screen-on, AOD dim, orientation lock & volume intercept outside Remote
                 LaunchedEffect(currentScreen) {
                     if (currentScreen != AppScreen.REMOTE) {
+                        applyAodDisplayMode(enabled = false, roomBrightBoost = false)
                         applyLockScreenMode(enabled = false, keepAwake = false)
                         applyLandscapeMode(enabled = false)
                         volumeKeyHandler = null
@@ -132,6 +136,9 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onLockScreenConfigChanged = { lockScreenEnabled, keepAwake ->
                                     applyLockScreenMode(lockScreenEnabled, keepAwake)
+                                },
+                                onAodModeChanged = { aodEnabled, roomBrightBoost ->
+                                    applyAodDisplayMode(aodEnabled, roomBrightBoost)
                                 },
                                 onLandscapeModeChanged = { landscapeEnabled ->
                                     applyLandscapeMode(landscapeEnabled)
@@ -228,6 +235,29 @@ class MainActivity : ComponentActivity() {
             }
         }.onFailure { err ->
             AppDebugLogger.w("APP", "Kilit ekranı pencere bayrakları güncellenemedi", err)
+        }
+    }
+
+    private fun applyAodDisplayMode(enabled: Boolean, roomBrightBoost: Boolean) {
+        runCatching {
+            val attrs = window.attributes
+            attrs.screenBrightness = if (enabled) {
+                if (roomBrightBoost) 0.08f else 0.01f
+            } else {
+                WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            }
+            window.attributes = attrs
+
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            if (enabled) {
+                controller.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                controller.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }.onFailure { err ->
+            AppDebugLogger.w("APP", "OLED AOD ekran modu güncellenemedi", err)
         }
     }
 
