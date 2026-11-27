@@ -22,12 +22,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -247,15 +248,18 @@ fun RemoteGamePadDeck(
                 onClick = onToggleGyroAim
             )
 
-            listOf(
-                "Esc" to BluetoothHidManager.KEY_ESCAPE,
-                "Tab" to BluetoothHidManager.KEY_TAB,
-                "1" to BluetoothHidManager.KEY_1,
-                "2" to BluetoothHidManager.KEY_2,
-                "3" to BluetoothHidManager.KEY_3,
-                "4" to BluetoothHidManager.KEY_4,
-                "M" to BluetoothHidManager.KEY_M
-            ).forEach { (lbl, code) ->
+            val hotbarKeys = remember {
+                listOf(
+                    "Esc" to BluetoothHidManager.KEY_ESCAPE,
+                    "Tab" to BluetoothHidManager.KEY_TAB,
+                    "1" to BluetoothHidManager.KEY_1,
+                    "2" to BluetoothHidManager.KEY_2,
+                    "3" to BluetoothHidManager.KEY_3,
+                    "4" to BluetoothHidManager.KEY_4,
+                    "M" to BluetoothHidManager.KEY_M
+                )
+            }
+            hotbarKeys.forEach { (lbl, code) ->
                 LiveHoldKeyPill(
                     label = lbl,
                     onDownChange = { setActionKey(code, it) }
@@ -611,13 +615,15 @@ private fun FloatingAnalogStickZone(
                 )
             }
 
+            // Layered translucent circles avoid allocating a fresh RadialGradient shader on every 120Hz frame
             drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(activeAccent.copy(alpha = if (isEngaged) 0.48f else 0.16f), Color.Transparent),
-                    center = thumbPos,
-                    radius = 34.dp.toPx()
-                ),
+                color = activeAccent.copy(alpha = if (isEngaged) 0.16f else 0.07f),
                 radius = 34.dp.toPx(),
+                center = thumbPos
+            )
+            drawCircle(
+                color = activeAccent.copy(alpha = if (isEngaged) 0.30f else 0.12f),
+                radius = 26.dp.toPx(),
                 center = thumbPos
             )
             drawCircle(
@@ -686,7 +692,9 @@ private fun FpsAimWithFloatingTriggers(
     val density = LocalDensity.current
     val latestSens by rememberUpdatedState(sensitivity)
     val latestDisconnected by rememberUpdatedState(onDisconnectedTap)
-    var activeTouch by remember { mutableStateOf<Offset?>(null) }
+    // Separate boolean border flag from 120Hz touch Offset so moving aim NEVER recomposes floating triggers!
+    var isAiming by remember { mutableStateOf(false) }
+    val activeTouchState = remember { mutableStateOf<Offset?>(null) }
 
     Box(
         modifier = modifier
@@ -694,9 +702,25 @@ private fun FpsAimWithFloatingTriggers(
             .background(
                 Brush.verticalGradient(listOf(Color(0xFF10192D), Color(0xFF080E1B)))
             )
+            .drawWithCache {
+                val c = Offset(size.width * 0.36f, size.height * 0.5f)
+                val ringR = 24.dp.toPx()
+                val outerGap = 34.dp.toPx()
+                val innerGap = 9.dp.toPx()
+                val strokePx = 1.dp.toPx()
+                val ringStroke = Stroke(strokePx)
+                val crosshairColor = Color(0xFF1E2E4A)
+                onDrawBehind {
+                    drawCircle(color = crosshairColor, radius = ringR, center = c, style = ringStroke)
+                    drawLine(color = crosshairColor, start = Offset(c.x - outerGap, c.y), end = Offset(c.x - innerGap, c.y), strokeWidth = strokePx)
+                    drawLine(color = crosshairColor, start = Offset(c.x + innerGap, c.y), end = Offset(c.x + outerGap, c.y), strokeWidth = strokePx)
+                    drawLine(color = crosshairColor, start = Offset(c.x, c.y - outerGap), end = Offset(c.x, c.y - innerGap), strokeWidth = strokePx)
+                    drawLine(color = crosshairColor, start = Offset(c.x, c.y + innerGap), end = Offset(c.x, c.y + outerGap), strokeWidth = strokePx)
+                }
+            }
             .border(
                 width = 1.2.dp,
-                color = if (activeTouch != null) NeonCyan else Color(0xFF25344E),
+                color = if (isAiming) NeonCyan else Color(0xFF25344E),
                 shape = RoundedCornerShape(22.dp)
             )
             .pointerInput(hidManager) {
@@ -705,7 +729,8 @@ private fun FpsAimWithFloatingTriggers(
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     var lastPos = down.position
-                    activeTouch = down.position
+                    isAiming = true
+                    activeTouchState.value = down.position
                     accumX = 0f
                     accumY = 0f
                     try {
@@ -713,7 +738,7 @@ private fun FpsAimWithFloatingTriggers(
                             val event = awaitPointerEvent()
                             val active = event.changes.firstOrNull { it.pressed } ?: break
                             if (event.type == PointerEventType.Move) {
-                                activeTouch = active.position
+                                activeTouchState.value = active.position
                                 val dx = active.position.x - lastPos.x
                                 val dy = active.position.y - lastPos.y
                                 lastPos = active.position
@@ -735,31 +760,28 @@ private fun FpsAimWithFloatingTriggers(
                             }
                         }
                     } finally {
-                        activeTouch = null
+                        isAiming = false
+                        activeTouchState.value = null
                     }
                 }
             }
             .testTag("game_fps_aim_pad")
     ) {
-        // Background tactical crosshair + live touch glow
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val c = Offset(size.width * 0.36f, size.height * 0.5f)
-            drawCircle(color = Color(0xFF1E2E4A), radius = 24.dp.toPx(), center = c, style = Stroke(1.dp.toPx()))
-            drawLine(color = Color(0xFF1E2E4A), start = Offset(c.x - 34.dp.toPx(), c.y), end = Offset(c.x - 9.dp.toPx(), c.y), strokeWidth = 1.dp.toPx())
-            drawLine(color = Color(0xFF1E2E4A), start = Offset(c.x + 9.dp.toPx(), c.y), end = Offset(c.x + 34.dp.toPx(), c.y), strokeWidth = 1.dp.toPx())
-            drawLine(color = Color(0xFF1E2E4A), start = Offset(c.x, c.y - 34.dp.toPx()), end = Offset(c.x, c.y - 9.dp.toPx()), strokeWidth = 1.dp.toPx())
-            drawLine(color = Color(0xFF1E2E4A), start = Offset(c.x, c.y + 9.dp.toPx()), end = Offset(c.x, c.y + 34.dp.toPx()), strokeWidth = 1.dp.toPx())
-
-            activeTouch?.let { pos ->
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(NeonCyan.copy(alpha = 0.38f), Color.Transparent),
-                        center = pos,
-                        radius = 34.dp.toPx()
-                    ),
-                    radius = 34.dp.toPx(),
-                    center = pos
-                )
+        // Draw-phase-only live aim halo (0 recompositions during 120Hz camera sweeps)
+        if (isAiming) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                activeTouchState.value?.let { pos ->
+                    drawCircle(
+                        color = NeonCyan.copy(alpha = 0.14f),
+                        radius = 34.dp.toPx(),
+                        center = pos
+                    )
+                    drawCircle(
+                        color = NeonCyan.copy(alpha = 0.28f),
+                        radius = 18.dp.toPx(),
+                        center = pos
+                    )
+                }
             }
         }
 
@@ -865,7 +887,10 @@ private fun FloatingRoundTrigger(
 
     val baseModifier = Modifier
         .size(sizeDp.dp)
-        .scale(scale)
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
         .clip(CircleShape)
         .pointerInput(Unit) {
             awaitEachGesture {
@@ -1023,7 +1048,10 @@ private fun TactileGameTrigger(
             color = if (isPressed) accent else accent.copy(alpha = 0.45f)
         ),
         modifier = modifier
-            .scale(scale)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .clip(RoundedCornerShape(16.dp))
             .pointerInput(Unit) {
                 awaitEachGesture {

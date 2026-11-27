@@ -63,6 +63,8 @@ class AirMouseController(
         AppDebugLogger.i("BT-MOUSE", "Air Mouse jiroskop ve 1€ filtresi yeniden kalibre edildi")
     }
 
+    private val stepScratch = FloatArray(4) // [dx, dy, nextAccumX, nextAccumY]
+
     fun start() {
         val sm = sensorManager ?: return
         val gyro = gyroSensor ?: return
@@ -71,15 +73,16 @@ class AirMouseController(
         recalibrate()
         isRunning = true
 
-        val samplingUs = 10_000
+        val gyroSamplingUs = 10_000        // 100Hz crisp angular velocity
+        val gravitySamplingUs = 50_000     // 20Hz palm tilt vector (80% fewer gravity wakeups, zero latency impact)
         runCatching {
-            gravitySensor?.let { sm.registerListener(this, it, samplingUs) }
-            accelSensor?.let { sm.registerListener(this, it, samplingUs) }
-            val registered = sm.registerListener(this, gyro, samplingUs)
+            gravitySensor?.let { sm.registerListener(this, it, gravitySamplingUs) }
+            accelSensor?.let { sm.registerListener(this, it, gravitySamplingUs) }
+            val registered = sm.registerListener(this, gyro, gyroSamplingUs)
             if (!registered) {
                 sm.registerListener(this, gyro, SensorManager.SENSOR_DELAY_GAME)
             }
-            AppDebugLogger.d("BT-MOUSE", "Air Mouse sensörleri başlatıldı (gyro=${gyro.name}, gravity=${gravitySensor != null})")
+            AppDebugLogger.d("BT-MOUSE", "Air Mouse sensörleri başlatıldı (gyro=100Hz, gravity=20Hz, hasGravity=${gravitySensor != null})")
         }.onFailure { err ->
             isRunning = false
             AppDebugLogger.e("BT-MOUSE", "Air Mouse sensör başlatma hatası", err)
@@ -117,11 +120,14 @@ class AirMouseController(
                 }
             }
             Sensor.TYPE_GYROSCOPE -> {
-                val (cleanWx, cleanWy, cleanWz) = biasEstimator.updateAndCompensate(
-                    event.values[0],
-                    event.values[1],
-                    event.values[2]
-                )
+                val rawWx = event.values[0]
+                val rawWy = event.values[1]
+                val rawWz = event.values[2]
+                biasEstimator.updateBias(rawWx, rawWy, rawWz)
+                val cleanWx = rawWx - biasEstimator.biasX
+                val cleanWy = rawWy - biasEstimator.biasY
+                val cleanWz = rawWz - biasEstimator.biasZ
+
                 if (!isRunning || isClutchPaused) {
                     lastGyroTimestampNs = event.timestamp
                     accumX = 0f
@@ -135,7 +141,7 @@ class AirMouseController(
                 if (prevTs == 0L) return
 
                 val dtSec = ((event.timestamp - prevTs) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
-                val step = AirMouseMath.accumulateStep(
+                AirMouseMath.accumulateStepInto(
                     wx = cleanWx,
                     wy = cleanWy,
                     wz = cleanWz,
@@ -147,12 +153,15 @@ class AirMouseController(
                     prevAccumX = accumX,
                     prevAccumY = accumY,
                     yawFilter = yawFilter,
-                    pitchFilter = pitchFilter
+                    pitchFilter = pitchFilter,
+                    out = stepScratch
                 )
-                accumX = step.nextAccumX
-                accumY = step.nextAccumY
-                if (step.dx != 0 || step.dy != 0) {
-                    onCursorDelta(step.dx, step.dy)
+                val dx = stepScratch[0].toInt()
+                val dy = stepScratch[1].toInt()
+                accumX = stepScratch[2]
+                accumY = stepScratch[3]
+                if (dx != 0 || dy != 0) {
+                    onCursorDelta(dx, dy)
                 }
             }
         }
@@ -232,7 +241,7 @@ class GyroBiasEstimator {
         stationarySamples = 0
     }
 
-    fun updateAndCompensate(wx: Float, wy: Float, wz: Float): Triple<Float, Float, Float> {
+    fun updateBias(wx: Float, wy: Float, wz: Float) {
         val rawMag = sqrt(wx * wx + wy * wy + wz * wz)
         if (rawMag < STILL_THRESHOLD_RAD_S) {
             stationarySamples++
@@ -241,6 +250,10 @@ class GyroBiasEstimator {
             biasY += alpha * (wy - biasY)
             biasZ += alpha * (wz - biasZ)
         }
+    }
+
+    fun updateAndCompensate(wx: Float, wy: Float, wz: Float): Triple<Float, Float, Float> {
+        updateBias(wx, wy, wz)
         return Triple(wx - biasX, wy - biasY, wz - biasZ)
     }
 
@@ -266,7 +279,11 @@ object AirMouseMath {
         return if (mag <= deadzone) 0f else sign(rateRadPerSec) * (mag - deadzone)
     }
 
-    fun accumulateStep(
+    /**
+     * Zero-allocation fast path used at 100Hz in [AirMouseController.onSensorChanged].
+     * Writes `[dx.toFloat(), dy.toFloat(), nextAccumX, nextAccumY]` into [out].
+     */
+    fun accumulateStepInto(
         wx: Float,
         wy: Float,
         wz: Float,
@@ -277,16 +294,25 @@ object AirMouseMath {
         sensitivity: Float,
         prevAccumX: Float,
         prevAccumY: Float,
+        out: FloatArray,
         deadzone: Float = DEFAULT_DEADZONE_RAD_S,
         yawFilter: OneEuroFilter? = null,
         pitchFilter: OneEuroFilter? = null
-    ): AirMouseStepResult {
+    ) {
         val gNorm = sqrt(gx * gx + gy * gy + gz * gz)
-        val (nx, ny, nz) = if (gNorm > 0.5f) {
-            Triple(gx / gNorm, gy / gNorm, gz / gNorm)
+        val nx: Float
+        val ny: Float
+        val nz: Float
+        if (gNorm > 0.5f) {
+            val invNorm = 1f / gNorm
+            nx = gx * invNorm
+            ny = gy * invNorm
+            nz = gz * invNorm
         } else {
             // Default natural ~35° palm hold if gravity hasn't converged yet
-            Triple(0f, 0.57f, 0.82f)
+            nx = 0f
+            ny = 0.57f
+            nz = 0.82f
         }
 
         // World-vertical yaw projection: panning right -> negative angular velocity around +g -> +dx
@@ -307,11 +333,49 @@ object AirMouseMath {
         val dx = totalX.toInt().coerceIn(-127, 127)
         val dy = totalY.toInt().coerceIn(-127, 127)
 
+        out[0] = dx.toFloat()
+        out[1] = dy.toFloat()
+        out[2] = totalX - dx
+        out[3] = totalY - dy
+    }
+
+    fun accumulateStep(
+        wx: Float,
+        wy: Float,
+        wz: Float,
+        gx: Float,
+        gy: Float,
+        gz: Float,
+        dtSec: Float,
+        sensitivity: Float,
+        prevAccumX: Float,
+        prevAccumY: Float,
+        deadzone: Float = DEFAULT_DEADZONE_RAD_S,
+        yawFilter: OneEuroFilter? = null,
+        pitchFilter: OneEuroFilter? = null
+    ): AirMouseStepResult {
+        val scratch = FloatArray(4)
+        accumulateStepInto(
+            wx = wx,
+            wy = wy,
+            wz = wz,
+            gx = gx,
+            gy = gy,
+            gz = gz,
+            dtSec = dtSec,
+            sensitivity = sensitivity,
+            prevAccumX = prevAccumX,
+            prevAccumY = prevAccumY,
+            out = scratch,
+            deadzone = deadzone,
+            yawFilter = yawFilter,
+            pitchFilter = pitchFilter
+        )
         return AirMouseStepResult(
-            dx = dx,
-            dy = dy,
-            nextAccumX = totalX - dx,
-            nextAccumY = totalY - dy
+            dx = scratch[0].toInt(),
+            dy = scratch[1].toInt(),
+            nextAccumX = scratch[2],
+            nextAccumY = scratch[3]
         )
     }
 }

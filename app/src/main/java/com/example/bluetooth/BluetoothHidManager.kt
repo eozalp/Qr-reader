@@ -194,6 +194,47 @@ class BluetoothHidManager(private val context: Context? = null) {
     private val _telemetry = MutableStateFlow(HidProtocolTelemetry())
     val telemetry: StateFlow<HidProtocolTelemetry> = _telemetry.asStateFlow()
 
+    private val _hasTelemetryFailure = MutableStateFlow(false)
+    val hasTelemetryFailure: StateFlow<Boolean> = _hasTelemetryFailure.asStateFlow()
+
+    // High-frequency atomic counters prevent 125Hz mouse/keyboard TX from spamming StateFlow/Compose recompositions
+    private val kbSentAtomic = AtomicLong(0L)
+    private val kbFailedAtomic = AtomicLong(0L)
+    private val mouseSentAtomic = AtomicLong(0L)
+    private val mouseFailedAtomic = AtomicLong(0L)
+    private val hostAckAtomic = AtomicLong(0L)
+    private val lastTelemetryEmitMs = AtomicLong(0L)
+    @Volatile
+    private var telemetryQosLabel: String = "Henüz kayıtlı değil"
+    @Volatile
+    private var telemetryLastFailure: String? = null
+
+    private fun publishTelemetry(force: Boolean) {
+        val now = System.currentTimeMillis()
+        if (!force) {
+            val prevEmit = lastTelemetryEmitMs.get()
+            if ((now - prevEmit) < TELEMETRY_THROTTLE_MS) return
+            if (!lastTelemetryEmitMs.compareAndSet(prevEmit, now)) return
+        } else {
+            lastTelemetryEmitMs.set(now)
+        }
+        val failure = telemetryLastFailure
+        val hasErr = !failure.isNullOrBlank()
+        if (_hasTelemetryFailure.value != hasErr) {
+            _hasTelemetryFailure.value = hasErr
+        }
+        _telemetry.value = HidProtocolTelemetry(
+            isBootMode = isBootProtocolMode,
+            qosLabel = telemetryQosLabel,
+            keyboardReportsSent = kbSentAtomic.get(),
+            keyboardReportsFailed = kbFailedAtomic.get(),
+            mouseReportsSent = mouseSentAtomic.get(),
+            mouseReportsFailed = mouseFailedAtomic.get(),
+            hostAckCount = hostAckAtomic.get(),
+            lastFailureReason = failure
+        )
+    }
+
     private fun loadSavedProfileMode(): HidProfileMode {
         val saved = prefs?.getString(KEY_HID_PROFILE_MODE, null)
         return HidProfileMode.entries.firstOrNull { it.name == saved } ?: HidProfileMode.COMBO
@@ -383,8 +424,8 @@ class BluetoothHidManager(private val context: Context? = null) {
      * - `null`: reflection blocked/unavailable on this OS build
      */
     private fun querySystemAclConnected(device: BluetoothDevice): Boolean? {
+        val method = cachedIsConnectedMethod ?: return null
         return runCatching {
-            val method = BluetoothDevice::class.java.getMethod("isConnected")
             method.invoke(device) as? Boolean
         }.getOrNull()
     }
@@ -470,9 +511,9 @@ class BluetoothHidManager(private val context: Context? = null) {
     }
 
     /**
-     * Sends a harmless all-zero keyboard HID report every ~25s while idle so Linux BlueZ
+     * Sends a harmless all-zero keyboard HID report every ~45s while idle so Linux BlueZ
      * (`IdleTimeout`) and Bluetooth Classic Sniff/Link Supervision never drop an idle connection
-     * after a few minutes of inactivity.
+     * after a few minutes of inactivity while keeping idle BT radio wakeups minimal.
      */
     @SuppressLint("MissingPermission")
     private fun startKeepAliveHeartbeat() {
@@ -485,7 +526,7 @@ class BluetoothHidManager(private val context: Context? = null) {
             if (_connectionStatus.value != HidConnectionStatus.CONNECTED) return@scheduleWithFixedDelay
 
             val idleMs = System.currentTimeMillis() - lastReportSentAtMs
-            if (idleMs < 24_000L || _isTransmitting.value || sendMutex.isLocked) {
+            if (idleMs < 44_000L || _isTransmitting.value || sendMutex.isLocked) {
                 return@scheduleWithFixedDelay
             }
 
@@ -499,11 +540,11 @@ class BluetoothHidManager(private val context: Context? = null) {
                 val activeDev = connectedHostDevice ?: return@execute
                 if (activeDev.address != dev.address || _connectionStatus.value != HidConnectionStatus.CONNECTED) return@execute
                 if (_isTransmitting.value || sendMutex.isLocked) return@execute
-                val ok = sendRawHidReport(activeHid, activeDev, activeReportId, newZeroReport())
+                val ok = sendRawHidReport(activeHid, activeDev, activeReportId, ZERO_KEYBOARD_REPORT)
                 if (ok) {
                     lastReportSentAtMs = System.currentTimeMillis()
                     if (keepAliveLoggedOnce.compareAndSet(false, true)) {
-                        AppDebugLogger.d("BT-HID", "Boşta HID keep-alive nabzı aktif (${activeDev.address}, 25sn aralık)")
+                        AppDebugLogger.d("BT-HID", "Boşta HID keep-alive nabzı aktif (${activeDev.address}, 45sn aralık)")
                     }
                 } else {
                     AppDebugLogger.w("BT-HID", "HID keep-alive gönderilemedi (${activeDev.address}); bağlantı doğrulanıyor")
@@ -517,7 +558,7 @@ class BluetoothHidManager(private val context: Context? = null) {
                     }
                 }
             }
-        }, 25L, 25L, TimeUnit.SECONDS)
+        }, 45L, 45L, TimeUnit.SECONDS)
     }
 
     fun onForegroundServiceStoppedByUser() {
@@ -767,7 +808,8 @@ class BluetoothHidManager(private val context: Context? = null) {
                     val (inQos, outQos, tierLabel) = buildQosTier(tier)
                     qosTierIndex = tier
                     val modeTag = if (isSimpleKb) "Saf Klavye · $tierLabel" else tierLabel
-                    _telemetry.value = _telemetry.value.copy(qosLabel = modeTag)
+                    telemetryQosLabel = modeTag
+                    publishTelemetry(force = true)
                     var attemptOk = hid.registerApp(sdp, inQos, outQos, callbackExecutor, hidCallback)
                     AppDebugLogger.i("BT-HID", "registerApp mode=$mode tier=$tier ($modeTag) sonuç=$attemptOk")
                     if (!attemptOk && tier == tierUsed) {
@@ -1146,7 +1188,8 @@ class BluetoothHidManager(private val context: Context? = null) {
                         else -> 8
                     }
                     val safeSize = if (bufferSize > 0) minOf(baseSize, bufferSize) else baseSize
-                    _telemetry.value = _telemetry.value.copy(hostAckCount = _telemetry.value.hostAckCount + 1L)
+                    hostAckAtomic.incrementAndGet()
+                    publishTelemetry(force = true)
                     AppDebugLogger.i("BT-HID", "onGetReport type=$type id=$id buf=$bufferSize replySize=$safeSize boot=$isBootProtocolMode")
                     runCatching {
                         hidDeviceProfile?.replyReport(device, type, id, ByteArray(safeSize))
@@ -1161,10 +1204,8 @@ class BluetoothHidManager(private val context: Context? = null) {
                     protocolNegotiatedForConnection = true
                     isBootProtocolMode = (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE)
                     activeReportId = currentKeyboardReportId()
-                    _telemetry.value = _telemetry.value.copy(
-                        isBootMode = isBootProtocolMode,
-                        hostAckCount = _telemetry.value.hostAckCount + 1L
-                    )
+                    hostAckAtomic.incrementAndGet()
+                    publishTelemetry(force = true)
                     AppDebugLogger.i("BT-HID", "onSetProtocol protocol=$protocol (isBootMode=$isBootProtocolMode, reportId=$activeReportId)")
                 }
             }
@@ -1172,7 +1213,8 @@ class BluetoothHidManager(private val context: Context? = null) {
             @SuppressLint("MissingPermission")
             override fun onSetReport(device: BluetoothDevice?, type: Byte, id: Byte, data: ByteArray?) {
                 val payloadHex = data?.joinToString(" ") { String.format("%02X", it) } ?: ""
-                _telemetry.value = _telemetry.value.copy(hostAckCount = _telemetry.value.hostAckCount + 1L)
+                hostAckAtomic.incrementAndGet()
+                publishTelemetry(force = true)
                 AppDebugLogger.i("BT-HID", "onSetReport type=$type id=$id len=${data?.size ?: 0} data=[$payloadHex]")
                 if (device != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     // HID 1.1 Control Channel requires HANDSHAKE(SUCCESSFUL) for SET_REPORT (e.g., Windows LED sync)
@@ -1186,7 +1228,8 @@ class BluetoothHidManager(private val context: Context? = null) {
 
             override fun onInterruptData(device: BluetoothDevice?, reportId: Byte, data: ByteArray?) {
                 val payloadHex = data?.joinToString(" ") { String.format("%02X", it) } ?: ""
-                _telemetry.value = _telemetry.value.copy(hostAckCount = _telemetry.value.hostAckCount + 1L)
+                hostAckAtomic.incrementAndGet()
+                publishTelemetry(force = true)
                 AppDebugLogger.i("BT-HID", "onInterruptData id=$reportId len=${data?.size ?: 0} data=[$payloadHex]")
             }
 
@@ -1226,19 +1269,17 @@ class BluetoothHidManager(private val context: Context? = null) {
             _connectedDeviceName.value = name
             _connectionStatus.value = HidConnectionStatus.CONNECTED
             _connectionDiagnostic.value = null
-            _telemetry.value = _telemetry.value.copy(
-                isBootMode = isBootProtocolMode,
-                keyboardReportsSent = 0L,
-                keyboardReportsFailed = 0L,
-                mouseReportsSent = 0L,
-                mouseReportsFailed = 0L,
-                hostAckCount = 0L,
-                lastFailureReason = null
-            )
+            kbSentAtomic.set(0L)
+            kbFailedAtomic.set(0L)
+            mouseSentAtomic.set(0L)
+            mouseFailedAtomic.set(0L)
+            hostAckAtomic.set(0L)
+            telemetryLastFailure = null
+            publishTelemetry(force = true)
         }
         AppDebugLogger.i(
             "BT-HID",
-            "Host bağlandı: $name (${device.address}) · ${_telemetry.value.qosLabel} · mode=${_hidProfileMode.value} · boot=$isBootProtocolMode · reportId=$activeReportId"
+            "Host bağlandı: $name (${device.address}) · $telemetryQosLabel · mode=${_hidProfileMode.value} · boot=$isBootProtocolMode · reportId=$activeReportId"
         )
         prefs?.edit()?.putString(KEY_LAST_HOST_ADDRESS, device.address)?.apply()
         context?.let { BluetoothHidForegroundService.startOrUpdate(it, name, isConnected = true) }
@@ -1258,10 +1299,8 @@ class BluetoothHidManager(private val context: Context? = null) {
         pendingMouseDy.set(0)
         pendingMouseWheel.set(0)
         _connectedDeviceName.value = null
-        _telemetry.value = _telemetry.value.copy(
-            isBootMode = false,
-            hostAckCount = 0L
-        )
+        hostAckAtomic.set(0L)
+        publishTelemetry(force = true)
         if (stopService) {
             context?.let { BluetoothHidForegroundService.stop(it) }
         } else if (bluetoothAdapter?.isEnabled == true && !userStoppedStandbyService && hasBluetoothPermissions()) {
@@ -1883,9 +1922,8 @@ class BluetoothHidManager(private val context: Context? = null) {
                 "BT-MOUSE",
                 "$actionLabel engellendi: Saf Klavye (id=0) modunda Mouse/Medya descriptor yok — Kombo moda geçin"
             )
-            _telemetry.value = _telemetry.value.copy(
-                lastFailureReason = "Saf Klavye (id=0) modunda Mouse/Medya kapalı — Kombo moda geçin"
-            )
+            telemetryLastFailure = "Saf Klavye (id=0) modunda Mouse/Medya kapalı — Kombo moda geçin"
+            publishTelemetry(force = true)
         }
     }
 
@@ -2055,8 +2093,8 @@ class BluetoothHidManager(private val context: Context? = null) {
             val dev = connectedHostDevice ?: return@execute
             if (sendRawHidReport(hid, dev, activeReportId, report)) {
                 lastReportSentAtMs = System.currentTimeMillis()
-                val prev = _telemetry.value
-                _telemetry.value = prev.copy(keyboardReportsSent = prev.keyboardReportsSent + 1L)
+                val sent = kbSentAtomic.incrementAndGet()
+                publishTelemetry(force = sent == 1L)
             }
         }
     }
@@ -2139,27 +2177,26 @@ class BluetoothHidManager(private val context: Context? = null) {
                     if (step.nextRemW != 0) pendingMouseWheel.addAndGet(step.nextRemW)
                     lastMouseReportAtMs = System.currentTimeMillis()
                     lastReportSentAtMs = lastMouseReportAtMs
-                    val prev = _telemetry.value
-                    if (prev.mouseReportsSent == 0L) {
+                    val sentCount = mouseSentAtomic.incrementAndGet()
+                    if (sentCount == 1L) {
                         AppDebugLogger.i("BT-MOUSE", "İlk Mouse hareket raporu iletildi (id=$REPORT_ID_MOUSE len=${report.size} boot=$isBootProtocolMode)")
                     }
-                    _telemetry.value = prev.copy(
-                        mouseReportsSent = prev.mouseReportsSent + 1L,
-                        lastFailureReason = if (prev.lastFailureReason?.contains("Mouse") == true) null else prev.lastFailureReason
-                    )
+                    val clearedError = telemetryLastFailure?.contains("Mouse") == true
+                    if (clearedError) {
+                        telemetryLastFailure = null
+                    }
+                    publishTelemetry(force = sentCount == 1L || clearedError)
                 } else {
                     consecutiveFailures++
-                    val prev = _telemetry.value
                     if (consecutiveFailures == 1) {
                         AppDebugLogger.e(
                             "BT-MOUSE",
                             "Mouse raporu reddedildi (sendReport=false, id=$REPORT_ID_MOUSE len=${report.size} boot=$isBootProtocolMode host=${dev.address})"
                         )
                     }
-                    _telemetry.value = prev.copy(
-                        mouseReportsFailed = prev.mouseReportsFailed + 1L,
-                        lastFailureReason = "Mouse raporu reddedildi — PC Bluetooth'tan cihazı kaldırıp yeniden eşleştirin"
-                    )
+                    mouseFailedAtomic.incrementAndGet()
+                    telemetryLastFailure = "Mouse raporu reddedildi — PC Bluetooth'tan cihazı kaldırıp yeniden eşleştirin"
+                    publishTelemetry(force = true)
                     if (consecutiveFailures >= 3) {
                         // Drop stale backlog rather than spinning endlessly on a rejected Report ID 2
                         break
@@ -2244,20 +2281,20 @@ class BluetoothHidManager(private val context: Context? = null) {
     }
 
     private fun recordMouseButtonResult(ok: Boolean) {
-        val prev = _telemetry.value
         if (ok) {
             lastMouseReportAtMs = System.currentTimeMillis()
             lastReportSentAtMs = lastMouseReportAtMs
-            _telemetry.value = prev.copy(
-                mouseReportsSent = prev.mouseReportsSent + 1L,
-                lastFailureReason = if (prev.lastFailureReason?.contains("Mouse") == true) null else prev.lastFailureReason
-            )
+            val sentCount = mouseSentAtomic.incrementAndGet()
+            val clearedError = telemetryLastFailure?.contains("Mouse") == true
+            if (clearedError) {
+                telemetryLastFailure = null
+            }
+            publishTelemetry(force = sentCount == 1L || clearedError)
         } else {
             AppDebugLogger.e("BT-MOUSE", "Mouse tıklama raporu reddedildi (id=$REPORT_ID_MOUSE boot=$isBootProtocolMode)")
-            _telemetry.value = prev.copy(
-                mouseReportsFailed = prev.mouseReportsFailed + 1L,
-                lastFailureReason = "Mouse tıklama reddedildi — PC'den cihazı kaldırıp yeniden eşleştirin"
-            )
+            mouseFailedAtomic.incrementAndGet()
+            telemetryLastFailure = "Mouse tıklama reddedildi — PC'den cihazı kaldırıp yeniden eşleştirin"
+            publishTelemetry(force = true)
         }
     }
 
@@ -2383,21 +2420,20 @@ class BluetoothHidManager(private val context: Context? = null) {
             if (connectedHostDevice?.address != device.address) return false
             if (sendRawHidReport(hid, device, reportId, report)) {
                 lastReportSentAtMs = System.currentTimeMillis()
-                val prev = _telemetry.value
-                _telemetry.value = prev.copy(
-                    keyboardReportsSent = prev.keyboardReportsSent + 1L,
-                    lastFailureReason = if (prev.lastFailureReason?.contains("Klavye") == true) null else prev.lastFailureReason
-                )
+                val sent = kbSentAtomic.incrementAndGet()
+                val clearedError = telemetryLastFailure?.contains("Klavye") == true
+                if (clearedError) {
+                    telemetryLastFailure = null
+                }
+                publishTelemetry(force = sent == 1L || clearedError)
                 return true
             }
             sleepQuietly(backoffMs * (attempt + 1))
         }
         AppDebugLogger.e("BT-HID", "Klavye HID raporu $maxAttempts denemede iletilemedi (id=$reportId boot=$isBootProtocolMode)")
-        val prev = _telemetry.value
-        _telemetry.value = prev.copy(
-            keyboardReportsFailed = prev.keyboardReportsFailed + 1L,
-            lastFailureReason = "Klavye HID raporu iletilemedi (L2CAP meşgul/kopuk)"
-        )
+        kbFailedAtomic.incrementAndGet()
+        telemetryLastFailure = "Klavye HID raporu iletilemedi (L2CAP meşgul/kopuk)"
+        publishTelemetry(force = true)
         return false
     }
 
@@ -2452,7 +2488,7 @@ class BluetoothHidManager(private val context: Context? = null) {
         }
     }
 
-    private fun newZeroReport(): ByteArray = byteArrayOf(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+    private fun newZeroReport(): ByteArray = ZERO_KEYBOARD_REPORT
 
     private fun addLog(item: KeystrokeLogItem) {
         val current = _recentLogs.value.toMutableList()
@@ -2472,6 +2508,12 @@ class BluetoothHidManager(private val context: Context? = null) {
         private const val PREFS_NAME = "alvetak_bt_prefs"
         private const val KEY_LAST_HOST_ADDRESS = "last_host_address"
         private const val KEY_HID_PROFILE_MODE = "hid_profile_mode"
+        private const val TELEMETRY_THROTTLE_MS = 300L
+
+        private val ZERO_KEYBOARD_REPORT = byteArrayOf(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+        private val cachedIsConnectedMethod by lazy(LazyThreadSafetyMode.PUBLICATION) {
+            runCatching { BluetoothDevice::class.java.getMethod("isConnected") }.getOrNull()
+        }
 
         const val REPORT_ID_KEYBOARD = 1
         const val REPORT_ID_MOUSE = 2

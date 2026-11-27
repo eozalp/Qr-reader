@@ -32,11 +32,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PointMode
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -53,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import com.example.bluetooth.BluetoothHidManager
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.NeonCyan
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import java.util.Locale
 
@@ -371,6 +373,7 @@ fun PrecisionTouchpadWithScroll(
     isAirContinuous: Boolean = false,
     onToggleGyroDrawer: (() -> Unit)? = null,
     compactHint: Boolean = false,
+    onUserInteraction: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
@@ -397,8 +400,12 @@ fun PrecisionTouchpadWithScroll(
     }
 
     var isTapDragging by remember { mutableStateOf(false) }
-    var activeFingerOffsets by remember { mutableStateOf<List<Offset>>(emptyList()) }
-    var cursorTrail by remember { mutableStateOf<List<Offset>>(emptyList()) }
+    // Reusable in-place touch buffers + draw-phase tick: 120Hz finger motion NEVER recomposes the touchpad!
+    val activeFingerList = remember { ArrayList<Offset>(5) }
+    val cursorTrailBuffer = remember { ArrayDeque<Offset>(16) }
+    var activeFingerCount by remember { mutableIntStateOf(0) }
+    val overlayDrawTick = remember { mutableIntStateOf(0) }
+    val timerWakeChannel = remember { Channel<Unit>(Channel.CONFLATED) }
     var padSize by remember { mutableStateOf(IntSize.Zero) }
     var isScrollStripActive by remember { mutableStateOf(false) }
 
@@ -420,6 +427,8 @@ fun PrecisionTouchpadWithScroll(
     val latestOnThreeFingerSwipe by rememberUpdatedState(onThreeFingerSwipe)
     val latestOnDisconnectedTap by rememberUpdatedState(onDisconnectedTap)
     val latestIsDragLocked by rememberUpdatedState(isDragLocked)
+    val latestOnUserInteraction by rememberUpdatedState(onUserInteraction)
+    val latestEffectiveSpeed by rememberUpdatedState(effectiveSpeed)
 
     fun dispatchActions(actions: List<TouchpadAction>) {
         if (actions.isEmpty()) return
@@ -517,8 +526,18 @@ fun PrecisionTouchpadWithScroll(
         }
     }
 
+    // Event-driven touchpad timer: sleeps with ZERO CPU wakeups whenever idle,
+    // and only runs the 24ms tick while a finger is down, a single-tap window is pending, or drag-panning is active!
     LaunchedEffect(gestureEngine) {
         while (true) {
+            val needsTick = activeFingerCount > 0 ||
+                gestureEngine.hasPendingSingleTap() ||
+                gestureEngine.isTapDragging ||
+                isTapDragging
+            if (!needsTick) {
+                timerWakeChannel.receive()
+                continue
+            }
             delay(24L)
             val now = System.currentTimeMillis()
             gestureEngine.flushPendingSingleTapIfExpired(now)?.let { action ->
@@ -529,16 +548,15 @@ fun PrecisionTouchpadWithScroll(
                 dispatchActions(holdActions)
             }
             val dragging = isTapDragging || latestIsDragLocked
-            val fingers = activeFingerOffsets
-            if (dragging && fingers.size == 1 && padSize.width > 0 && padSize.height > 0 && hidManager.isHidHostConnected()) {
-                val pt = fingers[0]
+            if (dragging && activeFingerList.size == 1 && padSize.width > 0 && padSize.height > 0 && hidManager.isHidHostConnected()) {
+                val pt = activeFingerList[0]
                 val (panX, panY) = TouchpadGestureEngine.computeEdgeAutoPanDelta(
                     x = pt.x,
                     y = pt.y,
                     width = padSize.width.toFloat(),
                     height = padSize.height.toFloat(),
                     edgeZonePx = edgePanZonePx,
-                    maxStepPx = (9f * effectiveSpeed.coerceIn(0.6f, 2f)).toInt().coerceAtLeast(4)
+                    maxStepPx = (9f * latestEffectiveSpeed.coerceIn(0.6f, 2f)).toInt().coerceAtLeast(4)
                 )
                 if (panX != 0 || panY != 0) {
                     hidManager.sendMouseMove(panX, panY)
@@ -549,6 +567,7 @@ fun PrecisionTouchpadWithScroll(
 
     DisposableEffect(Unit) {
         onDispose {
+            timerWakeChannel.close()
             val cleanup = gestureEngine.reset()
             if (cleanup.contains(TouchpadAction.TapDragEnd) && !latestIsDragLocked) {
                 hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, false)
@@ -560,8 +579,8 @@ fun PrecisionTouchpadWithScroll(
     val padBorderColor by animateColorAsState(
         targetValue = when {
             anyDragActive -> AmberGold
-            activeFingerOffsets.size >= 3 -> VioletAccent
-            activeFingerOffsets.isNotEmpty() -> NeonCyan.copy(alpha = 0.85f)
+            activeFingerCount >= 3 -> VioletAccent
+            activeFingerCount > 0 -> NeonCyan.copy(alpha = 0.85f)
             else -> BorderSubtle
         },
         label = "touchpad_border"
@@ -649,30 +668,47 @@ fun PrecisionTouchpadWithScroll(
                             else listOf(TouchpadBgTop, TouchpadBgBottom)
                         )
                     )
-                    .drawBehind {
-                        // Subtle tactile architectural dot grid + soft top glass sheen
-                        drawLine(
-                            brush = Brush.horizontalGradient(
-                                listOf(Color.Transparent, Color.White.copy(alpha = 0.08f), Color.Transparent)
-                            ),
-                            start = Offset(24.dp.toPx(), 1.dp.toPx()),
-                            end = Offset(size.width - 24.dp.toPx(), 1.dp.toPx()),
-                            strokeWidth = 1.5.dp.toPx()
+                    .drawWithCache {
+                        // Cache dot-grid geometry & glass sheen once per size change -> single GPU drawPoints batch!
+                        val sheenBrush = Brush.horizontalGradient(
+                            listOf(Color.Transparent, Color.White.copy(alpha = 0.08f), Color.Transparent)
                         )
+                        val sheenInset = 24.dp.toPx()
+                        val sheenY = 1.dp.toPx()
+                        val sheenWidth = 1.5.dp.toPx()
                         val step = 26.dp.toPx()
+                        val dotStrokePx = 2.7.dp.toPx()
+                        val dots = ArrayList<Offset>(256)
+                        var y = step
+                        while (y < size.height - step * 0.5f) {
+                            var x = step
+                            while (x < size.width - step * 0.5f) {
+                                dots.add(Offset(x, y))
+                                x += step
+                            }
+                            y += step
+                        }
                         val dotColor = if (anyDragActive) {
                             AmberGold.copy(alpha = 0.16f)
                         } else {
                             Color(0xFF425982).copy(alpha = 0.24f)
                         }
-                        var y = step
-                        while (y < size.height - step * 0.5f) {
-                            var x = step
-                            while (x < size.width - step * 0.5f) {
-                                drawCircle(color = dotColor, radius = 1.35.dp.toPx(), center = Offset(x, y))
-                                x += step
+                        onDrawBehind {
+                            drawLine(
+                                brush = sheenBrush,
+                                start = Offset(sheenInset, sheenY),
+                                end = Offset(size.width - sheenInset, sheenY),
+                                strokeWidth = sheenWidth
+                            )
+                            if (dots.isNotEmpty()) {
+                                drawPoints(
+                                    points = dots,
+                                    pointMode = PointMode.Points,
+                                    color = dotColor,
+                                    strokeWidth = dotStrokePx,
+                                    cap = StrokeCap.Round
+                                )
                             }
-                            y += step
                         }
                     }
                     .border(
@@ -681,9 +717,18 @@ fun PrecisionTouchpadWithScroll(
                         shape = RoundedCornerShape(22.dp)
                     )
                     .pointerInput(hidManager, gestureEngine) {
+                        val reusablePoints = ArrayList<TouchpadPoint>(5)
                         awaitEachGesture {
                             val firstDown = awaitFirstDown(requireUnconsumed = false)
-                            activeFingerOffsets = listOf(firstDown.position)
+                            latestOnUserInteraction()
+                            activeFingerList.clear()
+                            activeFingerList.add(firstDown.position)
+                            cursorTrailBuffer.clear()
+                            cursorTrailBuffer.addLast(firstDown.position)
+                            activeFingerCount = 1
+                            overlayDrawTick.intValue++
+                            timerWakeChannel.trySend(Unit)
+
                             val downActions = gestureEngine.onGestureDown(
                                 TouchpadPoint(firstDown.position.x, firstDown.position.y),
                                 System.currentTimeMillis()
@@ -693,38 +738,60 @@ fun PrecisionTouchpadWithScroll(
                             try {
                                 while (true) {
                                     val event = awaitPointerEvent()
-                                    val activeChanges = event.changes.filter { it.pressed }
-                                    activeFingerOffsets = activeChanges.map { it.position }
-                                    if (activeChanges.size == 1 && event.type == PointerEventType.Move) {
-                                        val nextPos = activeChanges[0].position
-                                        cursorTrail = (cursorTrail + nextPos).takeLast(14)
+                                    activeFingerList.clear()
+                                    reusablePoints.clear()
+                                    val changes = event.changes
+                                    for (i in changes.indices) {
+                                        val c = changes[i]
+                                        if (c.pressed) {
+                                            activeFingerList.add(c.position)
+                                            reusablePoints.add(TouchpadPoint(c.position.x, c.position.y))
+                                        }
                                     }
+                                    val count = activeFingerList.size
+                                    if (activeFingerCount != count) {
+                                        activeFingerCount = count
+                                    }
+                                    if (count == 1 && event.type == PointerEventType.Move) {
+                                        val nextPos = activeFingerList[0]
+                                        if (cursorTrailBuffer.size >= 14) {
+                                            cursorTrailBuffer.removeFirst()
+                                        }
+                                        cursorTrailBuffer.addLast(nextPos)
+                                    }
+                                    overlayDrawTick.intValue++
 
-                                    if (activeChanges.isEmpty()) {
+                                    if (count == 0) {
                                         val upActions = gestureEngine.onAllPointersUp(System.currentTimeMillis())
                                         dispatchActions(upActions)
+                                        if (gestureEngine.hasPendingSingleTap()) {
+                                            timerWakeChannel.trySend(Unit)
+                                        }
                                         break
                                     }
 
-                                    val points = activeChanges.map { TouchpadPoint(it.position.x, it.position.y) }
                                     when (event.type) {
                                         PointerEventType.Press -> {
-                                            dispatchActions(gestureEngine.onPointerAdded(points))
+                                            dispatchActions(gestureEngine.onPointerAdded(reusablePoints))
                                         }
                                         PointerEventType.Release -> {
-                                            gestureEngine.onPointerRemoved(points)
+                                            gestureEngine.onPointerRemoved(reusablePoints)
                                         }
                                         PointerEventType.Move -> {
-                                            val moveActions = gestureEngine.onMove(points, System.currentTimeMillis())
+                                            val moveActions = gestureEngine.onMove(reusablePoints, System.currentTimeMillis())
                                             dispatchActions(moveActions)
-                                            activeChanges.forEach { it.consume() }
+                                            for (i in changes.indices) {
+                                                if (changes[i].pressed) changes[i].consume()
+                                            }
                                         }
                                         else -> Unit
                                     }
                                 }
                             } finally {
-                                activeFingerOffsets = emptyList()
-                                cursorTrail = emptyList()
+                                activeFingerList.clear()
+                                cursorTrailBuffer.clear()
+                                activeFingerCount = 0
+                                overlayDrawTick.intValue++
                                 if (gestureEngine.isTapDragging) {
                                     dispatchActions(gestureEngine.reset())
                                 }
@@ -734,48 +801,18 @@ fun PrecisionTouchpadWithScroll(
                     .testTag("remote_touchpad_surface"),
                 contentAlignment = Alignment.Center
             ) {
-                // Live multi-touch contact halos + tapered neon comet trail
-                if (activeFingerOffsets.isNotEmpty() || cursorTrail.size > 1) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val haloColor = when {
-                            anyDragActive -> AmberGold
-                            activeFingerOffsets.size >= 3 -> VioletAccent
-                            else -> NeonCyan
-                        }
-                        if (cursorTrail.size >= 2) {
-                            val total = cursorTrail.size - 1
-                            for (i in 0 until total) {
-                                val fraction = (i + 1).toFloat() / total.toFloat()
-                                drawLine(
-                                    color = haloColor.copy(alpha = fraction * 0.45f),
-                                    start = cursorTrail[i],
-                                    end = cursorTrail[i + 1],
-                                    strokeWidth = (1.5f + fraction * 4.5f).dp.toPx(),
-                                    cap = StrokeCap.Round
-                                )
-                            }
-                        }
-                        activeFingerOffsets.forEach { pos ->
-                            drawCircle(
-                                brush = Brush.radialGradient(
-                                    colors = listOf(haloColor.copy(alpha = 0.34f), Color.Transparent),
-                                    center = pos,
-                                    radius = 44.dp.toPx()
-                                ),
-                                radius = 44.dp.toPx(),
-                                center = pos
-                            )
-                            drawCircle(
-                                color = haloColor.copy(alpha = 0.78f),
-                                radius = 7.5.dp.toPx(),
-                                center = pos
-                            )
-                        }
-                    }
+                // Isolated draw-phase-only Canvas: moving fingers at 120Hz never recomposes PrecisionTouchpadWithScroll!
+                if (activeFingerCount > 0) {
+                    TouchpadLiveOverlayCanvas(
+                        activeFingers = activeFingerList,
+                        cursorTrail = cursorTrailBuffer,
+                        anyDragActive = anyDragActive,
+                        drawTick = overlayDrawTick
+                    )
                 }
 
                 // Subtle idle guidance watermark
-                if (!anyDragActive && activeFingerOffsets.isEmpty()) {
+                if (!anyDragActive && activeFingerCount == 0) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.padding(horizontal = 16.dp)
@@ -876,27 +913,40 @@ fun PrecisionTouchpadWithScroll(
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(18.dp))
                     .background(if (isScrollStripActive) Color(0xFF13263B) else Color(0xFF10192C))
-                    .drawBehind {
+                    .drawWithCache {
                         val ribColor = if (isScrollStripActive) NeonCyan.copy(alpha = 0.4f) else Color(0xFF2B3B58)
                         val startY = size.height * 0.22f
                         val endY = size.height * 0.78f
                         val step = 11.dp.toPx()
+                        val ribStroke = 1.6.dp.toPx()
+                        val x1 = size.width * 0.28f
+                        val x2 = size.width * 0.72f
+                        val yCoords = ArrayList<Float>(32)
                         var y = startY
                         while (y <= endY) {
-                            drawLine(
-                                color = ribColor,
-                                start = Offset(size.width * 0.28f, y),
-                                end = Offset(size.width * 0.72f, y),
-                                strokeWidth = 1.6.dp.toPx()
-                            )
+                            yCoords.add(y)
                             y += step
+                        }
+                        onDrawBehind {
+                            for (i in yCoords.indices) {
+                                val ry = yCoords[i]
+                                drawLine(
+                                    color = ribColor,
+                                    start = Offset(x1, ry),
+                                    end = Offset(x2, ry),
+                                    strokeWidth = ribStroke
+                                )
+                            }
                         }
                     }
                     .border(1.dp, scrollBorder, RoundedCornerShape(18.dp))
                     .pointerInput(hidManager, naturalScroll) {
                         var scrollAccum = 0f
                         detectVerticalDragGestures(
-                            onDragStart = { isScrollStripActive = true },
+                            onDragStart = {
+                                latestOnUserInteraction()
+                                isScrollStripActive = true
+                            },
                             onDragEnd = {
                                 scrollAccum = 0f
                                 isScrollStripActive = false
@@ -944,6 +994,62 @@ fun PrecisionTouchpadWithScroll(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun TouchpadLiveOverlayCanvas(
+    activeFingers: List<Offset>,
+    cursorTrail: ArrayDeque<Offset>,
+    anyDragActive: Boolean,
+    drawTick: IntState
+) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        // Subscribe strictly during draw phase (zero Compose recompositions during 120Hz finger drag!)
+        @Suppress("UNUSED_VARIABLE")
+        val tick = drawTick.intValue
+        val fingerCount = activeFingers.size
+        val haloColor = when {
+            anyDragActive -> AmberGold
+            fingerCount >= 3 -> VioletAccent
+            else -> NeonCyan
+        }
+        val trailSize = cursorTrail.size
+        if (trailSize >= 2) {
+            val total = trailSize - 1
+            for (i in 0 until total) {
+                val fraction = (i + 1).toFloat() / total.toFloat()
+                drawLine(
+                    color = haloColor.copy(alpha = fraction * 0.45f),
+                    start = cursorTrail[i],
+                    end = cursorTrail[i + 1],
+                    strokeWidth = (1.5f + fraction * 4.5f).dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+            }
+        }
+        val outerGlowRadius = 38.dp.toPx()
+        val innerGlowRadius = 22.dp.toPx()
+        val coreRadius = 7.5.dp.toPx()
+        for (i in 0 until fingerCount) {
+            val pos = activeFingers[i]
+            // Layered translucent circles avoid allocating a fresh Shader/RadialGradient object per finger per 120Hz frame
+            drawCircle(
+                color = haloColor.copy(alpha = 0.10f),
+                radius = outerGlowRadius,
+                center = pos
+            )
+            drawCircle(
+                color = haloColor.copy(alpha = 0.22f),
+                radius = innerGlowRadius,
+                center = pos
+            )
+            drawCircle(
+                color = haloColor.copy(alpha = 0.80f),
+                radius = coreRadius,
+                center = pos
+            )
         }
     }
 }

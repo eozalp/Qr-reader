@@ -518,4 +518,44 @@ class BluetoothHidPayloadTest {
         hidManager.setHidProfileMode(com.example.bluetooth.HidProfileMode.COMBO)
         assertTrue("Switching back to COMBO must re-enable Mouse & Media", hidManager.supportsMouseAndMedia())
     }
+
+    @Test
+    fun testZeroAllocAirMouseStepMatchesStandardStep() {
+        val standard = com.example.bluetooth.AirMouseMath.accumulateStep(
+            wx = 0.72f,
+            wy = -0.35f,
+            wz = -1.18f,
+            gx = 0.1f,
+            gy = 5.4f,
+            gz = 8.1f,
+            dtSec = 0.01f,
+            sensitivity = 1.4f,
+            prevAccumX = 0.35f,
+            prevAccumY = -0.22f
+        )
+        val scratch = FloatArray(4)
+        com.example.bluetooth.AirMouseMath.accumulateStepInto(
+            wx = 0.72f,
+            wy = -0.35f,
+            wz = -1.18f,
+            gx = 0.1f,
+            gy = 5.4f,
+            gz = 8.1f,
+            dtSec = 0.01f,
+            sensitivity = 1.4f,
+            prevAccumX = 0.35f,
+            prevAccumY = -0.22f,
+            out = scratch
+        )
+        assertEquals(standard.dx, scratch[0].toInt())
+        assertEquals(standard.dy, scratch[1].toInt())
+        assertEquals(standard.nextAccumX, scratch[2], 1e-6f)
+        assertEquals(standard.nextAccumY, scratch[3], 1e-6f)
+    }
+
+    @Test
+    fun testHasTelemetryFailureStartsFalse() {
+        val hidManager = BluetoothHidManager()
+        assertFalse(hidManager.hasTelemetryFailure.value)
+    }
 }

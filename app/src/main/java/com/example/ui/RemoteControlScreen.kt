@@ -39,11 +39,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -55,6 +56,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.bluetooth.AirMouseController
 import com.example.bluetooth.BluetoothHidManager
 import com.example.bluetooth.HidConnectionStatus
@@ -79,6 +84,7 @@ import com.example.ui.theme.AmberGold
 import com.example.ui.theme.AppMonoFontFamily
 import com.example.ui.theme.NeonCyan
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -137,10 +143,43 @@ fun RemoteControlScreen(
         context.applicationContext.getSharedPreferences(REMOTE_PREFS_NAME, Context.MODE_PRIVATE)
     }
 
-    val connectionStatus by hidManager.connectionStatus.collectAsState()
-    val connectedDeviceName by hidManager.connectedDeviceName.collectAsState()
-    val hidTelemetry by hidManager.telemetry.collectAsState()
-    val hidProfileMode by hidManager.hidProfileMode.collectAsState()
+    val connectionStatus by hidManager.connectionStatus.collectAsStateWithLifecycle()
+    val connectedDeviceName by hidManager.connectedDeviceName.collectAsStateWithLifecycle()
+    val hasTelemetryFailure by hidManager.hasTelemetryFailure.collectAsStateWithLifecycle()
+    val hidProfileMode by hidManager.hidProfileMode.collectAsStateWithLifecycle()
+
+    // Lifecycle awareness: pause gyroscope/gravity sensors immediately on ON_STOP (screen off / pocket / app switch)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isLifecycleResumed by remember { mutableStateOf(true) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> isLifecycleResumed = true
+                Lifecycle.Event.ON_STOP -> isLifecycleResumed = false
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Smart battery-saving keep-awake: holds FLAG_KEEP_SCREEN_ON only while actively interacting (90s idle timeout)
+    // while keeping showWhenLocked active so waking the phone opens straight into the remote!
+    var interactionPulse by remember { mutableIntStateOf(1) }
+    var isKeepAwakeHot by remember { mutableStateOf(true) }
+    fun markActiveInteraction() {
+        isKeepAwakeHot = true
+        interactionPulse++
+    }
+    LaunchedEffect(interactionPulse, connectionStatus) {
+        if (connectionStatus == HidConnectionStatus.CONNECTED) {
+            isKeepAwakeHot = true
+            delay(90_000L)
+            isKeepAwakeHot = false
+        } else {
+            isKeepAwakeHot = false
+        }
+    }
 
     var selectedTabName by rememberSaveable { mutableStateOf(RemoteControlTab.KUMANDA.name) }
     var lastSlideDirection by remember { mutableIntStateOf(1) }
@@ -149,6 +188,7 @@ fun RemoteControlScreen(
     }
 
     fun selectTab(next: RemoteControlTab, directionHint: Int? = null) {
+        markActiveInteraction()
         if (next == selectedTab) return
         lastSlideDirection = directionHint ?: if (next.ordinal > selectedTab.ordinal) 1 else -1
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -223,8 +263,18 @@ fun RemoteControlScreen(
         airMouseController.sensitivity = airSensitivity
     }
 
-    LaunchedEffect(isLockScreenEnabled) {
-        onLockScreenConfigChanged(isLockScreenEnabled, isLockScreenEnabled)
+    val shouldRunAirMouse = isLifecycleResumed && when (selectedTab) {
+        RemoteControlTab.KUMANDA -> isAirMouseContinuous || isAirHoldPressed
+        RemoteControlTab.GAMEPAD -> isGameGyroAimEnabled
+        else -> false
+    }
+
+    val effectiveKeepAwake = isLockScreenEnabled &&
+        connectionStatus == HidConnectionStatus.CONNECTED &&
+        (isKeepAwakeHot || shouldRunAirMouse || selectedTab == RemoteControlTab.GAMEPAD)
+
+    LaunchedEffect(isLockScreenEnabled, effectiveKeepAwake) {
+        onLockScreenConfigChanged(isLockScreenEnabled, effectiveKeepAwake)
     }
 
     LaunchedEffect(isGameLandscapeLocked, selectedTab) {
@@ -242,12 +292,6 @@ fun RemoteControlScreen(
                 hidManager.releaseAllMouseButtons()
             }
         }
-    }
-
-    val shouldRunAirMouse = when (selectedTab) {
-        RemoteControlTab.KUMANDA -> isAirMouseContinuous || isAirHoldPressed
-        RemoteControlTab.GAMEPAD -> isGameGyroAimEnabled
-        else -> false
     }
 
     LaunchedEffect(shouldRunAirMouse, isAirMouseContinuous, isAirHoldPressed, selectedTab) {
@@ -357,6 +401,7 @@ fun RemoteControlScreen(
     val trLocale = remember { Locale.forLanguageTag("tr-TR") }
 
     fun sendCharKey(baseChar: Char, trackInNumpadTape: Boolean = false) {
+        markActiveInteraction()
         if (!hidManager.isHidHostConnected()) {
             notifyDisconnected()
             return
@@ -416,6 +461,7 @@ fun RemoteControlScreen(
     }
 
     fun sendSpecialKey(keyCode: Byte, forceMods: Byte? = null, trackNumpadTape: Boolean = false) {
+        markActiveInteraction()
         if (!hidManager.isHidHostConnected()) {
             notifyDisconnected()
             return
@@ -465,20 +511,21 @@ fun RemoteControlScreen(
     )
 
     val isConnected = connectionStatus == HidConnectionStatus.CONNECTED
-    val hasFailure = !hidTelemetry.lastFailureReason.isNullOrBlank()
+    val hasFailure = hasTelemetryFailure
 
     Scaffold(
         modifier = modifier
             .fillMaxSize()
             .background(ObsidianDeep)
-            .drawBehind {
-                drawRect(
-                    brush = Brush.radialGradient(
-                        colors = listOf(modeAccent.copy(alpha = 0.14f), ObsidianDeep),
-                        center = Offset(size.width * 0.5f, 0f),
-                        radius = size.maxDimension * 0.62f
-                    )
+            .drawWithCache {
+                val glowBrush = Brush.radialGradient(
+                    colors = listOf(modeAccent.copy(alpha = 0.14f), ObsidianDeep),
+                    center = Offset(size.width * 0.5f, 0f),
+                    radius = size.maxDimension * 0.62f
                 )
+                onDrawBehind {
+                    drawRect(brush = glowBrush)
+                }
             },
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -499,12 +546,13 @@ fun RemoteControlScreen(
                 onOpenSettings = onOpenSettings,
                 onOpenBluetoothSheet = onOpenBluetoothSheet,
                 onToggleLockScreen = {
+                    markActiveInteraction()
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     isLockScreenEnabled = !isLockScreenEnabled
                     remotePrefs.edit().putBoolean(PREF_LOCK_SCREEN_MODE, isLockScreenEnabled).apply()
                     Toast.makeText(
                         context,
-                        if (isLockScreenEnabled) "Kilit ekranında aktif + ekran açık kalır"
+                        if (isLockScreenEnabled) "Kilit ekranında aktif + akıllı ekran koruması"
                         else "Kilit ekranı modu kapatıldı",
                         Toast.LENGTH_SHORT
                     ).show()
@@ -552,79 +600,20 @@ fun RemoteControlScreen(
                 .padding(horizontal = 10.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
-            // Optional HID Diagnostics & Recovery Drawer (ZERO duplicate disconnected banner!)
+            // Optional HID Diagnostics & Recovery Drawer (isolated telemetry collector -> 0 root recompositions!)
             AnimatedVisibility(
                 visible = isConnected && (hasFailure || showDiagnosticsBar),
                 enter = expandVertically(spring()) + fadeIn(),
                 exit = shrinkVertically(spring()) + fadeOut()
             ) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (hasFailure) Color(0xFF2B1115) else Color(0xFF0E1728),
-                    border = BorderStroke(
-                        1.dp,
-                        if (hasFailure) Color(0xFFEF4444).copy(alpha = 0.7f) else Color(0xFF223350)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "${if (hidTelemetry.isBootMode) "Boot" else "Report"} · Klavye ${hidTelemetry.keyboardReportsSent} · Mouse ${hidTelemetry.mouseReportsSent}",
-                                fontSize = 10.sp,
-                                fontFamily = AppMonoFontFamily,
-                                color = if (hasFailure) Color(0xFFFCA5A5) else NeonCyan,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "HID Yenile",
-                                    fontSize = 10.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = NeonCyan,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable { hidManager.reregisterHidProfile() }
-                                        .padding(horizontal = 6.dp, vertical = 3.dp)
-                                        .testTag("remote_hid_reregister_btn")
-                                )
-                                Text(
-                                    text = "BT Ayarları",
-                                    fontSize = 10.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = AmberGold,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable {
-                                            runCatching { context.startActivity(hidManager.openBluetoothSettingsIntent()) }
-                                                .onFailure { AppDebugLogger.e("UI", "BT ayarları açılamadı", it) }
-                                        }
-                                        .padding(horizontal = 6.dp, vertical = 3.dp)
-                                )
-                            }
-                        }
-
-                        if (hasFailure) {
-                            Text(
-                                text = hidTelemetry.lastFailureReason.orEmpty(),
-                                fontSize = 10.sp,
-                                color = Color(0xFFFCA5A5)
-                            )
-                        }
+                HidDiagnosticsCard(
+                    hidManager = hidManager,
+                    hasFailure = hasFailure,
+                    onOpenBluetoothSettings = {
+                        runCatching { context.startActivity(hidManager.openBluetoothSettingsIntent()) }
+                            .onFailure { AppDebugLogger.e("UI", "BT ayarları açılamadı", it) }
                     }
-                }
+                )
             }
 
             // Alert banner when user is on Mouse/Game tab while HID profile is in Keyboard-only (SIMPLE_KEYBOARD) mode
@@ -796,6 +785,7 @@ fun RemoteControlScreen(
                                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                     isGyroDrawerOpen = !isGyroDrawerOpen
                                 },
+                                onUserInteraction = ::markActiveInteraction,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .weight(1f)
@@ -861,6 +851,7 @@ fun RemoteControlScreen(
                                 onDisconnectedTap = ::notifyDisconnected,
                                 showToolbar = false,
                                 compactHint = true,
+                                onUserInteraction = ::markActiveInteraction,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .weight(1f)
@@ -979,6 +970,117 @@ fun RemoteControlScreen(
     }
 }
 
+@Composable
+private fun HidDiagnosticsCard(
+    hidManager: BluetoothHidManager,
+    hasFailure: Boolean,
+    onOpenBluetoothSettings: () -> Unit
+) {
+    val hidTelemetry by hidManager.telemetry.collectAsStateWithLifecycle()
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (hasFailure) Color(0xFF2B1115) else Color(0xFF0E1728),
+        border = BorderStroke(
+            1.dp,
+            if (hasFailure) Color(0xFFEF4444).copy(alpha = 0.7f) else Color(0xFF223350)
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "${if (hidTelemetry.isBootMode) "Boot" else "Report"} · Klavye ${hidTelemetry.keyboardReportsSent} · Mouse ${hidTelemetry.mouseReportsSent}",
+                    fontSize = 10.sp,
+                    fontFamily = AppMonoFontFamily,
+                    color = if (hasFailure) Color(0xFFFCA5A5) else NeonCyan,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "HID Yenile",
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = NeonCyan,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { hidManager.reregisterHidProfile() }
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                            .testTag("remote_hid_reregister_btn")
+                    )
+                    Text(
+                        text = "BT Ayarları",
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AmberGold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable(onClick = onOpenBluetoothSettings)
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            if (hasFailure) {
+                Text(
+                    text = hidTelemetry.lastFailureReason.orEmpty(),
+                    fontSize = 10.sp,
+                    color = Color(0xFFFCA5A5)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Battery-friendly status orb: ONLY runs an infinite pulse animation while actively CONNECTING,
+ * using draw-phase [graphicsLayer] alpha (zero recompositions). When idle (CONNECTED/DISCONNECTED),
+ * renders statically so LTPO 120Hz OLED displays immediately step down to 10–24Hz!
+ */
+@Composable
+private fun ConnectionStatusOrb(
+    isConnecting: Boolean,
+    color: Color
+) {
+    if (isConnecting) {
+        val pulseTransition = rememberInfiniteTransition(label = "bt_orb_pulse")
+        val orbAlpha by pulseTransition.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(850),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "bt_orb_alpha"
+        )
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .graphicsLayer { alpha = orbAlpha }
+                .clip(CircleShape)
+                .background(color)
+        )
+    } else {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+    }
+}
+
 /**
  * Single-row, zero-duplication Cockpit HUD Top Bar:
  * [QR] [PC Bağla / Connected PC Orb] [🔒] [🔊/🎮] [⚙] [?]
@@ -1002,16 +1104,6 @@ private fun RemoteSlimHudTopBar(
     onOpenGestureGuide: () -> Unit
 ) {
     val isConnected = connectionStatus == HidConnectionStatus.CONNECTED
-    val pulseTransition = rememberInfiniteTransition(label = "bt_orb_pulse")
-    val orbAlpha by pulseTransition.animateFloat(
-        initialValue = 0.45f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1050),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "bt_orb_alpha"
-    )
 
     Row(
         modifier = Modifier
@@ -1055,11 +1147,9 @@ private fun RemoteSlimHudTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(pillAccent.copy(alpha = orbAlpha))
+                ConnectionStatusOrb(
+                    isConnecting = connectionStatus == HidConnectionStatus.CONNECTING,
+                    color = pillAccent
                 )
                 Text(
                     text = when (connectionStatus) {

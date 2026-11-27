@@ -16,6 +16,7 @@ import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -58,6 +59,12 @@ object AppDebugLogger {
     private val initialized = AtomicBoolean(false)
     private val handlerInstalled = AtomicBoolean(false)
     private val entriesBuffer = ArrayDeque<DebugLogEntry>(MAX_BUFFER_ENTRIES)
+    private val persistExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "AlvetakLogPersist").apply {
+            priority = Thread.MIN_PRIORITY
+            isDaemon = true
+        }
+    }
 
     @Volatile
     private var appContext: Context? = null
@@ -293,9 +300,12 @@ object AppDebugLogger {
         }
         mirrorToLogcat(level, tag, fullMessage, throwable)
 
-        if (level.severity >= DebugLogLevel.ERROR.severity) {
-            runCatching {
-                prefs?.edit()?.putString(KEY_PERSISTED_ERRORS, serializeErrorEntries(snapshot))?.apply()
+        if (level.severity >= DebugLogLevel.ERROR.severity && prefs != null) {
+            val targetPrefs = prefs
+            persistExecutor.execute {
+                runCatching {
+                    targetPrefs?.edit()?.putString(KEY_PERSISTED_ERRORS, serializeErrorEntries(snapshot))?.apply()
+                }
             }
         }
     }

@@ -17,6 +17,10 @@ import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.debug.AppDebugLogger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -31,6 +35,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class BluetoothHidForegroundService : Service() {
 
     private var foregroundPromotedInInstance = false
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -57,7 +62,7 @@ class BluetoothHidForegroundService : Service() {
 
         when (intent?.action) {
             ACTION_MEDIA_PLAY_PAUSE -> {
-                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                serviceScope.launch {
                     runCatching {
                         BluetoothHidManager.getInstance(applicationContext)
                             .sendConsumerControl(BluetoothHidManager.CONSUMER_PLAY_PAUSE)
@@ -66,7 +71,7 @@ class BluetoothHidForegroundService : Service() {
                 return START_STICKY
             }
             ACTION_MEDIA_MUTE -> {
-                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                serviceScope.launch {
                     runCatching {
                         BluetoothHidManager.getInstance(applicationContext)
                             .sendConsumerControl(BluetoothHidManager.CONSUMER_MUTE)
@@ -99,6 +104,7 @@ class BluetoothHidForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        serviceScope.cancel()
         isForegroundActive.set(false)
         isServiceAlive.set(false)
         foregroundPromotedInInstance = false
@@ -143,8 +149,8 @@ class BluetoothHidForegroundService : Service() {
     }
 
     private fun buildNotification(hostName: String, isConnected: Boolean): Notification {
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && channelCreated.compareAndSet(false, true)) {
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Bluetooth PC Kumanda & Klavye",
@@ -225,6 +231,7 @@ class BluetoothHidForegroundService : Service() {
         private val isServiceAlive = AtomicBoolean(false)
         private val isForegroundActive = AtomicBoolean(false)
         private val stopRequestedBeforeStart = AtomicBoolean(false)
+        private val channelCreated = AtomicBoolean(false)
         @Volatile
         private var lastRequestedHostName: String = "Bilgisayar"
         @Volatile
