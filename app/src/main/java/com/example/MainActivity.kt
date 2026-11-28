@@ -217,7 +217,16 @@ class MainActivity : ComponentActivity() {
         return super.dispatchKeyEvent(event)
     }
 
+    private var isLockScreenApplied: Boolean? = null
+    private var isKeepAwakeApplied: Boolean? = null
+    private var isAodDisplayApplied: Boolean = false
+    private var isAodRoomBrightApplied: Boolean = false
+    private var isLandscapeApplied: Boolean = false
+
     private fun applyLockScreenMode(enabled: Boolean, keepAwake: Boolean) {
+        if (isLockScreenApplied == enabled && isKeepAwakeApplied == keepAwake) return
+        isLockScreenApplied = enabled
+        isKeepAwakeApplied = keepAwake
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
                 setShowWhenLocked(enabled)
@@ -239,6 +248,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyAodDisplayMode(enabled: Boolean, roomBrightBoost: Boolean) {
+        if (isAodDisplayApplied == enabled && (!enabled || isAodRoomBrightApplied == roomBrightBoost)) return
+        isAodDisplayApplied = enabled
+        isAodRoomBrightApplied = enabled && roomBrightBoost
         runCatching {
             val attrs = window.attributes
             attrs.screenBrightness = if (enabled) {
@@ -262,6 +274,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyLandscapeMode(enabled: Boolean) {
+        if (isLandscapeApplied == enabled) return
+        isLandscapeApplied = enabled
         runCatching {
             requestedOrientation = if (enabled) {
                 ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE

@@ -54,7 +54,6 @@ import androidx.compose.ui.unit.sp
 import com.example.bluetooth.BluetoothHidManager
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.NeonCyan
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import java.util.Locale
 
@@ -405,7 +404,7 @@ fun PrecisionTouchpadWithScroll(
     val cursorTrailBuffer = remember { ArrayDeque<Offset>(16) }
     var activeFingerCount by remember { mutableIntStateOf(0) }
     val overlayDrawTick = remember { mutableIntStateOf(0) }
-    val timerWakeChannel = remember { Channel<Unit>(Channel.CONFLATED) }
+    var pendingTapWakeTick by remember { mutableIntStateOf(0) }
     var padSize by remember { mutableStateOf(IntSize.Zero) }
     var isScrollStripActive by remember { mutableStateOf(false) }
 
@@ -526,19 +525,16 @@ fun PrecisionTouchpadWithScroll(
         }
     }
 
-    // Event-driven touchpad timer: sleeps with ZERO CPU wakeups whenever idle,
-    // and only runs the 24ms tick while a finger is down, a single-tap window is pending, or drag-panning is active!
-    LaunchedEffect(gestureEngine) {
-        while (true) {
-            val needsTick = activeFingerCount > 0 ||
-                gestureEngine.hasPendingSingleTap() ||
-                gestureEngine.isTapDragging ||
-                isTapDragging
-            if (!needsTick) {
-                val wakeResult = timerWakeChannel.receiveCatching()
-                if (wakeResult.isClosed) break
-                continue
-            }
+    // Pure state-driven touchpad timer: exits immediately (ZERO coroutines / ZERO channels / ZERO CPU wakeups) when idle,
+    // and only ticks every 24ms while a finger is down, a single-tap window is pending, or tap-drag is active.
+    val hasActiveTouch = activeFingerCount > 0
+    LaunchedEffect(gestureEngine, hasActiveTouch, isTapDragging, pendingTapWakeTick) {
+        while (
+            activeFingerCount > 0 ||
+            isTapDragging ||
+            gestureEngine.isTapDragging ||
+            gestureEngine.hasPendingSingleTap()
+        ) {
             delay(24L)
             val now = System.currentTimeMillis()
             gestureEngine.flushPendingSingleTapIfExpired(now)?.let { action ->
@@ -568,7 +564,6 @@ fun PrecisionTouchpadWithScroll(
 
     DisposableEffect(Unit) {
         onDispose {
-            timerWakeChannel.close()
             val cleanup = gestureEngine.reset()
             if (cleanup.contains(TouchpadAction.TapDragEnd) && !latestIsDragLocked) {
                 hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, false)
@@ -670,11 +665,14 @@ fun PrecisionTouchpadWithScroll(
                         )
                     )
                     .drawWithCache {
+                        if (size.width <= 1f || size.height <= 1f) {
+                            return@drawWithCache onDrawBehind {}
+                        }
                         // Cache dot-grid geometry & glass sheen once per size change -> single GPU drawPoints batch!
                         val sheenBrush = Brush.horizontalGradient(
                             listOf(Color.Transparent, Color.White.copy(alpha = 0.08f), Color.Transparent)
                         )
-                        val sheenInset = 24.dp.toPx()
+                        val sheenInset = 24.dp.toPx().coerceAtMost(size.width * 0.4f)
                         val sheenY = 1.dp.toPx()
                         val sheenWidth = 1.5.dp.toPx()
                         val step = 26.dp.toPx()
@@ -728,7 +726,6 @@ fun PrecisionTouchpadWithScroll(
                             cursorTrailBuffer.addLast(firstDown.position)
                             activeFingerCount = 1
                             overlayDrawTick.intValue++
-                            timerWakeChannel.trySend(Unit)
 
                             val downActions = gestureEngine.onGestureDown(
                                 TouchpadPoint(firstDown.position.x, firstDown.position.y),
@@ -766,7 +763,7 @@ fun PrecisionTouchpadWithScroll(
                                         val upActions = gestureEngine.onAllPointersUp(System.currentTimeMillis())
                                         dispatchActions(upActions)
                                         if (gestureEngine.hasPendingSingleTap()) {
-                                            timerWakeChannel.trySend(Unit)
+                                            pendingTapWakeTick++
                                         }
                                         break
                                     }
@@ -915,6 +912,9 @@ fun PrecisionTouchpadWithScroll(
                     .clip(RoundedCornerShape(18.dp))
                     .background(if (isScrollStripActive) Color(0xFF13263B) else Color(0xFF10192C))
                     .drawWithCache {
+                        if (size.width <= 1f || size.height <= 1f) {
+                            return@drawWithCache onDrawBehind {}
+                        }
                         val ribColor = if (isScrollStripActive) NeonCyan.copy(alpha = 0.4f) else Color(0xFF2B3B58)
                         val startY = size.height * 0.22f
                         val endY = size.height * 0.78f

@@ -59,7 +59,7 @@ class QrCodeAnalyzer(
     }
 
     @Volatile
-    private var currentScanner: ManagedScanner = ManagedScanner(createScanner(listOf(Barcode.FORMAT_ALL_FORMATS)))
+    private var currentScanner: ManagedScanner? = createManagedScannerSafe(listOf(Barcode.FORMAT_ALL_FORMATS))
 
     @Volatile
     private var activeFormats: List<Int> = listOf(Barcode.FORMAT_ALL_FORMATS)
@@ -90,7 +90,7 @@ class QrCodeAnalyzer(
 
     fun close() {
         isClosed.set(true)
-        currentScanner.requestClose()
+        currentScanner?.requestClose()
     }
 
     fun updateBarcodeFormats(
@@ -103,9 +103,17 @@ class QrCodeAnalyzer(
         if (effective != activeFormats && !isClosed.get()) {
             activeFormats = effective
             val oldScanner = currentScanner
-            currentScanner = ManagedScanner(createScanner(effective))
-            oldScanner.requestClose()
+            currentScanner = createManagedScannerSafe(effective)
+            oldScanner?.requestClose()
         }
+    }
+
+    private fun createManagedScannerSafe(formats: List<Int>): ManagedScanner? {
+        return runCatching { ManagedScanner(createScanner(formats)) }
+            .onFailure { err ->
+                AppDebugLogger.e("CAM-QR", "ML Kit barkod tarayıcı başlatılamadı", err)
+            }
+            .getOrNull()
     }
 
     private fun createScanner(formats: List<Int>): BarcodeScanner {
@@ -139,8 +147,10 @@ class QrCodeAnalyzer(
         }
         lastAnalyzedTimeMs = currentTime
 
-        val managed = currentScanner
-        if (!managed.tryAcquire()) {
+        val managed = currentScanner ?: createManagedScannerSafe(activeFormats)?.also {
+            currentScanner = it
+        }
+        if (managed == null || !managed.tryAcquire()) {
             imageProxy.close()
             return
         }
@@ -225,7 +235,7 @@ class QrCodeAnalyzer(
             return false
         }
         val managed = currentScanner
-        if (!managed.tryAcquire()) {
+        if (managed == null || !managed.tryAcquire()) {
             isProcessingInverted.set(false)
             return false
         }

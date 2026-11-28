@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.view.KeyEvent
@@ -59,7 +60,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.bluetooth.AirMouseController
 import com.example.bluetooth.BluetoothHidManager
 import com.example.bluetooth.HidConnectionStatus
@@ -145,10 +145,11 @@ fun RemoteControlScreen(
         context.applicationContext.getSharedPreferences(REMOTE_PREFS_NAME, Context.MODE_PRIVATE)
     }
 
-    val connectionStatus by hidManager.connectionStatus.collectAsStateWithLifecycle()
-    val connectedDeviceName by hidManager.connectedDeviceName.collectAsStateWithLifecycle()
-    val hasTelemetryFailure by hidManager.hasTelemetryFailure.collectAsStateWithLifecycle()
-    val hidProfileMode by hidManager.hidProfileMode.collectAsStateWithLifecycle()
+    val connectionStatus by hidManager.connectionStatus.collectAsState()
+    val connectedDeviceName by hidManager.connectedDeviceName.collectAsState()
+    val hasTelemetryFailure by hidManager.hasTelemetryFailure.collectAsState()
+    val hidProfileMode by hidManager.hidProfileMode.collectAsState()
+    val lastCrashReport by AppDebugLogger.lastCrashReport.collectAsState()
 
     // Lifecycle awareness: pause gyroscope/gravity sensors immediately on ON_STOP (screen off / pocket / app switch)
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -530,10 +531,13 @@ fun RemoteControlScreen(
                 .fillMaxSize()
                 .background(ObsidianDeep)
             .drawWithCache {
+                if (size.width <= 1f || size.height <= 1f) {
+                    return@drawWithCache onDrawBehind {}
+                }
                 val glowBrush = Brush.radialGradient(
                     colors = listOf(modeAccent.copy(alpha = 0.14f), ObsidianDeep),
                     center = Offset(size.width * 0.5f, 0f),
-                    radius = size.maxDimension * 0.62f
+                    radius = (size.maxDimension * 0.62f).coerceAtLeast(1f)
                 )
                 onDrawBehind {
                     drawRect(brush = glowBrush)
@@ -616,6 +620,100 @@ fun RemoteControlScreen(
                 .padding(horizontal = 10.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
+            // Instant 1-tap Crash Recovery Banner (only visible if previous session had an uncaught crash)
+            val crashText = lastCrashReport
+            AnimatedVisibility(
+                visible = !crashText.isNullOrBlank(),
+                enter = expandVertically(spring()) + fadeIn(),
+                exit = shrinkVertically(spring()) + fadeOut()
+            ) {
+                val summaryLine = remember(crashText) {
+                    crashText
+                        .orEmpty()
+                        .lineSequence()
+                        .firstOrNull { line ->
+                            line.contains("Exception") || line.contains("Error")
+                        }
+                        ?.trim()
+                        ?: "Önceki oturumda beklenmeyen hata yakalandı"
+                }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFF2B1115),
+                    border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.75f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("remote_crash_recovery_banner")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BugReport,
+                            contentDescription = "Son Çökme Raporu",
+                            tint = Color(0xFFFCA5A5),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Son Çökme Raporu",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFFFCA5A5),
+                                maxLines = 1
+                            )
+                            Text(
+                                text = summaryLine,
+                                fontSize = 10.sp,
+                                fontFamily = AppMonoFontFamily,
+                                color = Color(0xFFFECACA),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFFEF4444),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                    cm?.setPrimaryClip(ClipData.newPlainText("Alvetak Crash Report", crashText.orEmpty()))
+                                    Toast.makeText(context, "Çökme raporu panoya kopyalandı", Toast.LENGTH_SHORT).show()
+                                }
+                                .testTag("remote_crash_copy_btn")
+                        ) {
+                            Text(
+                                text = "Kopyala",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .clickable { AppDebugLogger.clearCrashBanner() }
+                                .testTag("remote_crash_dismiss_btn"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Çökme Raporunu Kapat",
+                                tint = Color(0xFFFCA5A5),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
             // Optional HID Diagnostics & Recovery Drawer (isolated telemetry collector -> 0 root recompositions!)
             AnimatedVisibility(
                 visible = isConnected && (hasFailure || showDiagnosticsBar),
@@ -702,6 +800,7 @@ fun RemoteControlScreen(
             // Smooth Directional Slide+Fade Mode Switcher ("Döndür" transitions!)
             AnimatedContent(
                 targetState = selectedTab,
+                contentKey = { it.name },
                 transitionSpec = {
                     val dir = if (lastSlideDirection >= 0) 1 else -1
                     (slideInHorizontally(animationSpec = tween(220)) { width -> dir * (width / 5) } + fadeIn(tween(180)))
@@ -1025,7 +1124,7 @@ private fun HidDiagnosticsCard(
     hasFailure: Boolean,
     onOpenBluetoothSettings: () -> Unit
 ) {
-    val hidTelemetry by hidManager.telemetry.collectAsStateWithLifecycle()
+    val hidTelemetry by hidManager.telemetry.collectAsState()
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = if (hasFailure) Color(0xFF2B1115) else Color(0xFF0E1728),

@@ -703,6 +703,9 @@ private fun FpsAimWithFloatingTriggers(
                 Brush.verticalGradient(listOf(Color(0xFF10192D), Color(0xFF080E1B)))
             )
             .drawWithCache {
+                if (size.width <= 1f || size.height <= 1f) {
+                    return@drawWithCache onDrawBehind {}
+                }
                 val c = Offset(size.width * 0.36f, size.height * 0.5f)
                 val ringR = 24.dp.toPx()
                 val outerGap = 34.dp.toPx()

@@ -43,7 +43,6 @@ import com.example.bluetooth.HidConnectionStatus
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.AppMonoFontFamily
 import com.example.ui.theme.NeonCyan
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -155,7 +154,7 @@ fun OledAodRemoteOverlay(
     var activeFingerCount by remember { mutableIntStateOf(0) }
     var isTapDragging by remember { mutableStateOf(false) }
     val overlayDrawTick = remember { mutableIntStateOf(0) }
-    val timerWakeChannel = remember { Channel<Unit>(Channel.CONFLATED) }
+    var pendingTapWakeTick by remember { mutableIntStateOf(0) }
 
     var faintStatusToast by remember { mutableStateOf<String?>(null) }
     var toastSeq by remember { mutableIntStateOf(0) }
@@ -271,15 +270,15 @@ fun OledAodRemoteOverlay(
         }
     }
 
-    // Event-driven zero-CPU idle timer loop for single-tap flush & tap-drag hold confirmation
-    LaunchedEffect(gestureEngine) {
-        while (true) {
-            val needsTick = activeFingerCount > 0 || gestureEngine.hasPendingSingleTap() || gestureEngine.isTapDragging
-            if (!needsTick) {
-                val wakeResult = timerWakeChannel.receiveCatching()
-                if (wakeResult.isClosed) break
-                continue
-            }
+    // Pure state-driven zero-CPU idle timer loop for single-tap flush & tap-drag hold confirmation
+    val hasActiveTouch = activeFingerCount > 0
+    LaunchedEffect(gestureEngine, hasActiveTouch, isTapDragging, pendingTapWakeTick) {
+        while (
+            activeFingerCount > 0 ||
+            isTapDragging ||
+            gestureEngine.isTapDragging ||
+            gestureEngine.hasPendingSingleTap()
+        ) {
             delay(24L)
             val now = System.currentTimeMillis()
             gestureEngine.flushPendingSingleTapIfExpired(now)?.let { action ->
@@ -294,7 +293,6 @@ fun OledAodRemoteOverlay(
 
     DisposableEffect(Unit) {
         onDispose {
-            timerWakeChannel.close()
             val cleanup = gestureEngine.reset()
             if (cleanup.contains(TouchpadAction.TapDragEnd)) {
                 hidManager.setMouseButton(BluetoothHidManager.MOUSE_BTN_LEFT, false)
@@ -431,7 +429,6 @@ fun OledAodRemoteOverlay(
                             activeFingerList.add(firstDown.position)
                             activeFingerCount = 1
                             overlayDrawTick.intValue++
-                            timerWakeChannel.trySend(Unit)
 
                             dispatchActions(
                                 gestureEngine.onGestureDown(
@@ -460,7 +457,7 @@ fun OledAodRemoteOverlay(
                                     if (count == 0) {
                                         dispatchActions(gestureEngine.onAllPointersUp(System.currentTimeMillis()))
                                         if (gestureEngine.hasPendingSingleTap()) {
-                                            timerWakeChannel.trySend(Unit)
+                                            pendingTapWakeTick++
                                         }
                                         break
                                     }
