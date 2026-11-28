@@ -276,7 +276,8 @@ fun OledAodRemoteOverlay(
         while (true) {
             val needsTick = activeFingerCount > 0 || gestureEngine.hasPendingSingleTap() || gestureEngine.isTapDragging
             if (!needsTick) {
-                timerWakeChannel.receive()
+                val wakeResult = timerWakeChannel.receiveCatching()
+                if (wakeResult.isClosed) break
                 continue
             }
             delay(24L)

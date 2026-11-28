@@ -535,7 +535,8 @@ fun PrecisionTouchpadWithScroll(
                 gestureEngine.isTapDragging ||
                 isTapDragging
             if (!needsTick) {
-                timerWakeChannel.receive()
+                val wakeResult = timerWakeChannel.receiveCatching()
+                if (wakeResult.isClosed) break
                 continue
             }
             delay(24L)

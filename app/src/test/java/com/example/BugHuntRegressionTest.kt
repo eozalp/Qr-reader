@@ -31,6 +31,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.util.Base64
@@ -317,5 +321,34 @@ class BugHuntRegressionTest {
         val secondStatus = second.first().result.status
         assertTrue(secondStatus is CalculationStatus.Success)
         assertEquals(500.0, (secondStatus as CalculationStatus.Success).resultNumber, 0.0001)
+    }
+
+    @Test
+    fun touchpadTimerWakeChannel_closeDuringIdleReceiveCatchingDoesNotThrow() = runBlocking {
+        val wakeChannel = Channel<Unit>(Channel.CONFLATED)
+        var exitedCleanly = false
+        var uncaught: Throwable? = null
+
+        val job = launch {
+            try {
+                while (true) {
+                    val result = wakeChannel.receiveCatching()
+                    if (result.isClosed) {
+                        exitedCleanly = true
+                        break
+                    }
+                }
+            } catch (t: Throwable) {
+                uncaught = t
+            }
+        }
+
+        // Let the coroutine suspend on receiveCatching(), then close just like DisposableEffect.onDispose
+        yield()
+        wakeChannel.close()
+        job.join()
+
+        assertNull("Closing timerWakeChannel must never throw ClosedReceiveChannelException", uncaught)
+        assertTrue("Timer loop must exit cleanly when channel is closed", exitedCleanly)
     }
 }
